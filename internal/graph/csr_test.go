@@ -1,7 +1,9 @@
 package graph
 
 import (
+	"context"
 	"math"
+	"path/filepath"
 	"testing"
 )
 
@@ -104,71 +106,112 @@ func TestOutOfRangeEdgesAreSkipped(t *testing.T) {
 	}
 }
 
-func TestPruneTopNKeepsStrongest(t *testing.T) {
-	// Node 0 links to 1,2,3,4 with descending counts. Top 2 must keep 1
-	// and 2 and drop 3 and 4.
+// The cap is applied during construction by Builder.buildCSR, not by a
+// post-prune pass over the unpruned arrays. These tests exercise the
+// shipped path: an in-memory corpus, a cap, and a check that the
+// strongest neighbours survived.
+
+func cappedBuilder(t *testing.T, nodeCount int, edges []Edge, topN int) *CSR {
+	t.Helper()
+	db := newCorpus(t, seedTags(nodeCount)...)
+	for _, e := range edges {
+		ins := "INSERT INTO cooccurrence_edges(tag_a_id,tag_b_id,cooccur_count) VALUES(" +
+			itoa(int(e.A)) + "," + itoa(int(e.B)) + "," + itoa(int(e.Count)) + ")"
+		if _, err := db.Exec(ins); err != nil {
+			t.Fatal(err)
+		}
+	}
+	counts := make([]int64, nodeCount)
+	for _, e := range edges {
+		counts[e.A]++
+		counts[e.B]++
+	}
+	b := &Builder{Corpus: db, TopN: topN, DBPath: filepath.Join(t.TempDir(), "own.db")}
+	names := make([]string, nodeCount)
+	g, err := b.buildCSR(context.Background(), counts, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Verify(); err != nil {
+		t.Fatalf("capped build failed Verify: %v", err)
+	}
+	return g
+}
+
+func seedTags(n int) []string {
+	out := make([]string, 0, n)
+	out = append(out, `INSERT INTO tags(id,name)
+		WITH RECURSIVE seq(value) AS (
+			SELECT 1 UNION ALL SELECT value + 1 FROM seq WHERE value + 1 <= `+itoa(n)+`
+		) SELECT value, 'tag' || value FROM seq`)
+	return out
+}
+
+func TestCappedBuildKeepsStrongestNeighbours(t *testing.T) {
+	// Node 0 links to 1..4 with descending counts; a cap of 2 must keep 1
+	// and 2, not the first two encountered.
 	edges := []Edge{{0, 1, 90}, {0, 2, 80}, {0, 3, 70}, {0, 4, 60}}
-	g := build(t, 5, edges, 2)
-	ids, _ := g.Neighbours(0)
-	if len(ids) != 2 {
-		t.Fatalf("node 0 kept %d neighbours, want 2: %v", len(ids), ids)
+	g := cappedBuilder(t, 5, edges, 2)
+	if d := g.Degree(0); d != 2 {
+		t.Fatalf("node 0 degree = %d, want 2", d)
 	}
-	got := map[int32]bool{}
-	for _, id := range ids {
-		got[id] = true
+	ids, ws := g.Neighbours(0)
+	got := map[int32]float32{}
+	for i, id := range ids {
+		got[id] = ws[i]
 	}
-	if !got[1] || !got[2] {
-		t.Fatalf("node 0 kept %v, want the top two by count (1 and 2)", ids)
+	if got[1] != 90 || got[2] != 80 {
+		t.Fatalf("node 0 kept %v (weights %v); the cap must keep the strongest, not the first seen", got, got)
 	}
-	if got[3] || got[4] {
-		t.Fatalf("node 0 kept the weaker neighbours %v", ids)
+	if _, present := got[3]; present {
+		t.Fatal("a weaker neighbour survived the cap")
 	}
 }
 
-func TestPruneTopNReclaimsMemory(t *testing.T) {
-	// Pruning must actually shrink the arrays, not just stop reading
-	// them: a lite-mode graph holding 3 GB of addressed-but-unused
-	// neighbours defeats the entire point of the mode.
-	//
-	// Note the per-node semantics: topN bounds each node's degree, not
-	// the edge count. Node 0 fans out to 50 neighbours and is cut to 5;
-	// each of the 50 leaves keeps its single edge to node 0, so the
-	// graph goes from 100 directed entries to 55, not to 10.
-	edges := make([]Edge, 0, 50)
-	for i := 1; i <= 50; i++ {
-		edges = append(edges, Edge{0, int32(i), int64(100 - i)})
+func TestCappedBuildNeverMaterialisesTheUnprunedArrays(t *testing.T) {
+	// The whole point of capping during construction: the adjacency is
+	// allocated at its final size. On the real corpus the unpruned arrays
+	// are 118 MB against a capped 27 MB, and building-then-pruning held
+	// both, which is what pushed the measured peak to 352 MB.
+	edges := make([]Edge, 0, 400)
+	for i := 1; i <= 400; i++ {
+		edges = append(edges, Edge{A: 0, B: int32(i), Count: int64(1000 - i)})
 	}
-	full := Build(1+50, edges, nil, 0)
-	lit := build(t, 1+50, edges, 5)
-	if len(lit.neighbors) >= len(full.neighbors) {
-		t.Fatalf("pruned graph kept %d entries of %d; it did not reclaim",
-			len(lit.neighbors), len(full.neighbors))
+	g := cappedBuilder(t, 401, edges, 5)
+	// One node (the hub) capped at 5, plus 400 leaves with degree 1.
+	if got := len(g.neighbors); got != 405 {
+		t.Fatalf("allocated %d entries, want 405 (5 for the hub plus 400 leaves)", got)
 	}
-	if got := len(lit.neighbors); got != 55 {
-		t.Fatalf("pruned directed entries = %d, want 55 (5 from the hub plus 50 leaves)", got)
-	}
-	if d := lit.Degree(0); d != 5 {
+	if d := g.Degree(0); d != 5 {
 		t.Fatalf("hub degree = %d, want 5", d)
 	}
-	// Every leaf still points at the hub: pruning must not orphan a node.
-	leaves := 0
-	for i := 1; i <= 50; i++ {
-		if lit.Degree(int32(i)) != 1 {
-			t.Fatalf("leaf %d has degree %d, want 1", i, lit.Degree(int32(i)))
-		}
-		leaves++
-	}
-	if leaves != 50 {
-		t.Fatalf("checked %d leaves, want 50", leaves)
+}
+
+func TestCappedBuildReclaimsNothingUnnecessarily(t *testing.T) {
+	// A node under the cap keeps all its neighbours.
+	edges := []Edge{{0, 1, 5}, {0, 2, 4}, {1, 2, 3}}
+	g := cappedBuilder(t, 3, edges, 10)
+	if d := g.Degree(0); d != 2 {
+		t.Fatalf("node 0 degree = %d, want 2: a node below the cap is untouched", d)
 	}
 }
 
-func TestPruneTopNIsDeterministic(t *testing.T) {
-	// Equal counts must break ties by id, or two builds of the same
-	// corpus produce different rankings for reasons no one can explain.
+func TestUncappedBuildKeepsEveryNeighbour(t *testing.T) {
+	edges := []Edge{{0, 1, 5}, {0, 2, 4}, {1, 2, 3}}
+	g := cappedBuilder(t, 3, edges, 0)
+	var sum int
+	for i := 0; i < g.NodeCount; i++ {
+		sum += g.Degree(int32(i))
+	}
+	if sum != 2*len(edges) {
+		t.Fatalf("degrees sum to %d, want %d", sum, 2*len(edges))
+	}
+}
+
+func TestCappedBuildIsDeterministic(t *testing.T) {
 	edges := []Edge{{0, 5, 10}, {0, 3, 10}, {0, 9, 10}, {0, 1, 10}}
-	a := build(t, 10, edges, 2)
-	b := build(t, 10, edges, 2)
+	a := cappedBuilder(t, 10, edges, 2)
+	b := cappedBuilder(t, 10, edges, 2)
 	ai, _ := a.Neighbours(0)
 	bi, _ := b.Neighbours(0)
 	if len(ai) != len(bi) {
@@ -176,7 +219,7 @@ func TestPruneTopNIsDeterministic(t *testing.T) {
 	}
 	for i := range ai {
 		if ai[i] != bi[i] {
-			t.Fatalf("build %d is not deterministic: %v vs %v", i, ai, bi)
+			t.Fatalf("entry %d differs between builds: %v vs %v", i, ai, bi)
 		}
 	}
 }

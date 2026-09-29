@@ -30,32 +30,34 @@ func runIngest(ctx context.Context, args []string) error {
 	start := time.Now()
 	log := s.Log
 
-	// Measure the corpus before touching it. These are the rows_in numbers
-	// that make a later rows_kept of 0 diagnosable rather than mysterious.
-	var works, tags, workTags, edges int64
-	for _, q := range []struct {
-		label string
-		sql   string
-		dst   *int64
-	}{
-		{"works", `SELECT COUNT(*) FROM works`, &works},
-		{"tags", `SELECT COUNT(*) FROM tags`, &tags},
-		{"work_tags", `SELECT COUNT(*) FROM work_tags`, &workTags},
-		{"cooccurrence_edges", `SELECT COUNT(*) FROM cooccurrence_edges`, &edges},
-	} {
-		if err := s.Corpus.QueryRowContext(ctx, q.sql).Scan(q.dst); err != nil {
-			return fmt.Errorf("count %s: %w", q.label, err)
-		}
-		fmt.Printf("corpus %-20s rows_in=%d\n", q.label, *q.dst)
-		if err := log(ctx, "count "+q.label, fmt.Sprintf("rows_in=%d", *q.dst)); err != nil {
-			return err
-		}
+	b := &graph.Builder{
+		Corpus: s.Corpus, Store: execAdapter{s.DB}, TopN: c.TopN, DBPath: c.DB,
+		Trace: func(stage string, peakKiB int) {
+			fmt.Printf("  [%-18s] peak RSS %6.1f MiB\n", stage, float64(peakKiB)/1024)
+		},
 	}
-
-	b := &graph.Builder{Corpus: s.Corpus, Store: execAdapter{s.DB}, TopN: c.TopN, DBPath: c.DB}
 	res, err := b.Build(ctx)
 	if err != nil {
 		return err
+	}
+
+	// The measured counts, printed as rows_in beside everything derived
+	// from them. A rows_kept of zero is only diagnosable next to the count
+	// that went in; without the input, a silent zero and a legitimate
+	// prune look identical.
+	for _, row := range []struct {
+		label string
+		n     int64
+	}{
+		{"works", res.EntityRows},
+		{"tags", res.TagsIn},
+		{"work_tags", res.WorkTagRow},
+		{"cooccurrence_edges", res.Edges},
+	} {
+		fmt.Printf("corpus %-20s rows_in=%d\n", row.label, row.n)
+		if err := log(ctx, "count "+row.label, fmt.Sprintf("rows_in=%d", row.n)); err != nil {
+			return err
+		}
 	}
 
 	// The graph node set is derived from the edges, so it can disagree
@@ -85,7 +87,7 @@ func runIngest(ctx context.Context, args []string) error {
 	if err := s.SetMeta(ctx, "edge_count", fmt.Sprint(res.Edges)); err != nil {
 		return err
 	}
-	if err := s.SetMeta(ctx, "work_count", fmt.Sprint(works)); err != nil {
+	if err := s.SetMeta(ctx, "work_count", fmt.Sprint(res.EntityRows)); err != nil {
 		return err
 	}
 	if err := s.SetMeta(ctx, "top_n", fmt.Sprint(res.TopN)); err != nil {

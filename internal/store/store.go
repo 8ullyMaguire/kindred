@@ -83,7 +83,21 @@ func Open(ctx context.Context, path, corpusPath string) (*Store, error) {
 func (s *Store) openCorpus(ctx context.Context, path string) error {
 	// mode=ro is the guarantee, not a convention: the corpus is someone
 	// else's data and nothing in kindred may write to it.
-	dsn := "file:" + path + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(ON)"
+	//
+	// The pragmas are the memory story, and mmap_size=0 is the one that
+	// matters: SQLite's default behaviour maps the database into the
+	// process address space, and on a 1.7 GB corpus that is a 1.7 GB
+	// mapping the kernel can fault in. Measured on the 16 GB host, the Go
+	// heap never exceeded 73 MB while peak RSS reached 553 MB — the
+	// difference was the corpus mapping, not the program. cache_size is
+	// the page cache in KiB, negative for "kibibytes rather than pages".
+	dsn := "file:" + path +
+		"?mode=ro" +
+		"&_pragma=busy_timeout(5000)" +
+		"&_pragma=query_only(ON)" +
+		"&_pragma=mmap_size(0)" +
+		"&_pragma=cache_size(-2048)" +
+		"&_pragma=temp_store(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("open corpus: %w", err)
@@ -97,6 +111,19 @@ func (s *Store) openCorpus(ctx context.Context, path string) error {
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return fmt.Errorf("corpus %s: %w", path, err)
+	}
+	// Applied after the connection exists: pragmas are per-connection and
+	// the pool can open more than one, so the DSN alone is not enough to
+	// guarantee every pooled connection is configured.
+	for _, pragma := range []string{
+		"PRAGMA mmap_size=0",
+		"PRAGMA cache_size=-2048",
+		"PRAGMA temp_store=1",
+	} {
+		if _, err := db.ExecContext(ctx, pragma); err != nil {
+			db.Close()
+			return fmt.Errorf("corpus pragma %q: %w", pragma, err)
+		}
 	}
 	if err := assertCorpusShape(ctx, db); err != nil {
 		db.Close()

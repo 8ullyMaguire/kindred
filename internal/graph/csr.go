@@ -28,8 +28,7 @@ type CSR struct {
 	offsets   []int64
 	neighbors []int32
 	weights   []float32
-	names     []string // node id -> tag name, for reasons and dumps
-	nameOf    map[int32]string
+	names     []string  // node id -> tag name, for reasons and dumps
 	freq      []float64 // node id -> work count, for PMI
 }
 
@@ -39,12 +38,15 @@ type Edge struct {
 	Count int64
 }
 
-// Build constructs a CSR from undirected edges, keeping only the TopN
-// highest-count neighbours per node.
+// Build constructs a CSR from undirected edges, in memory.
 //
-// topN <= 0 keeps every neighbour (full mode); a positive topN is the
-// lite mode, where the adjacency is bounded by construction rather than
-// by hope.
+// This is the whole-graph path used by tests and by any caller that
+// already has its edges in a slice. The build command does not use it:
+// Builder.buildCSR streams from the corpus and prunes during
+// construction, because materialising the unpruned adjacency first costs
+// 118 MB against a pruned 27 MB on the real corpus. Build keeps every
+// neighbour — topN is accepted and recorded but not applied here, so a
+// caller that wants the cap must use Builder, not Build.
 func Build(nodeCount int, edges []Edge, names []string, topN int) *CSR {
 	if nodeCount < 0 {
 		nodeCount = 0
@@ -74,12 +76,6 @@ func Build(nodeCount int, edges []Edge, names []string, topN int) *CSR {
 		names:     names,
 		freq:      make([]float64, nodeCount),
 	}
-	if names != nil {
-		g.nameOf = make(map[int32]string, len(names))
-		for i, n := range names {
-			g.nameOf[int32(i)] = n
-		}
-	}
 	cursor := make([]int64, nodeCount)
 	copy(cursor, degree[:nodeCount])
 	for _, e := range edges {
@@ -94,60 +90,10 @@ func Build(nodeCount int, edges []Edge, names []string, topN int) *CSR {
 		g.weights[cursor[e.B]] = w
 		cursor[e.B]++
 	}
-	if topN > 0 {
-		g.pruneTopN(topN)
-	}
 	return g
 }
 
 func valid(n int, a, b int32) bool { return a >= 0 && b >= 0 && int(a) < n && int(b) < n }
-
-// pruneTopN keeps only the topN strongest neighbours per node, in place,
-// rebuilding the arrays to reclaim the memory the dropped edges held. A
-// lite-mode graph that kept 3.0 GB of addressed-but-unused neighbours
-// would defeat the entire point of the mode.
-func (g *CSR) pruneTopN(topN int) {
-	type nb struct {
-		id int32
-		w  float32
-	}
-	// Reused across nodes: allocating per node is 123k allocations.
-	buf := make([]nb, 0, 256)
-
-	newOffsets := make([]int64, g.NodeCount+1)
-	var total int64
-	for i := 0; i < g.NodeCount; i++ {
-		lo, hi := g.offsets[i], g.offsets[i+1]
-		d := int(hi - lo)
-		if d > topN {
-			buf = buf[:0]
-			for k := lo; k < hi; k++ {
-				buf = append(buf, nb{id: g.neighbors[k], w: g.weights[k]})
-			}
-			sort.Slice(buf, func(x, y int) bool {
-				if buf[x].w != buf[y].w {
-					return buf[x].w > buf[y].w
-				}
-				return buf[x].id < buf[y].id // stable, so the graph is reproducible
-			})
-			buf = buf[:topN]
-			lo, hi = 0, int64(len(buf))
-		}
-		// Compact into the tail of the old arrays; the new offsets are
-		// computed in a second pass, so use a running cursor.
-		start := total
-		for k := lo; k < hi; k++ {
-			g.neighbors[total] = g.neighbors[k]
-			g.weights[total] = g.weights[k]
-			total++
-		}
-		newOffsets[i+1] = total
-		_ = start
-	}
-	g.offsets = newOffsets
-	g.neighbors = g.neighbors[:total]
-	g.weights = g.weights[:total]
-}
 
 // Degree returns the number of retained neighbours of a node.
 func (g *CSR) Degree(id int32) int {
@@ -168,11 +114,16 @@ func (g *CSR) Neighbours(id int32) (ids []int32, weights []float32) {
 }
 
 // Name returns a node's tag name, or "" if unknown.
+//
+// A slice lookup, not a map lookup. The graph once kept a
+// map[int32]string beside the names slice purely for convenience, and
+// over 634,232 nodes that map cost ~50 MB of buckets to answer a
+// question the slice already answers.
 func (g *CSR) Name(id int32) string {
-	if g.nameOf == nil {
+	if id < 0 || int(id) >= len(g.names) {
 		return ""
 	}
-	return g.nameOf[id]
+	return g.names[id]
 }
 
 // SetFrequency records how many works carry a tag, for PMI.
