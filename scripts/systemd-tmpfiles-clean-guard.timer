@@ -1,0 +1,22 @@
+[Unit]
+Description=Regularly clean /tmp and /var/tmp, including runaway kindred runs
+Documentation=man:tmpfiles.d(5) man:systemd-tmpfiles(8)
+
+[Timer]
+OnBootSec=15min
+# 15 minutes, not the shipped 1d.
+#
+# A 4 GB tmpfs fills in about two hours when something writes a 131 MB
+# database every couple of minutes, so a daily sweep is not a safety
+# mechanism -- it is a coincidence waiting to not happen. At 15 minutes
+# with a 5-minute age rule in tmpfiles.d, steady-state use is about
+# 20 minutes of runs.
+#
+# This changes only HOW OFTEN the clean runs, not WHAT it cleans, so it
+# is safe for every other tmpfiles.d rule on the system.
+OnUnitActiveSec=15min
+AccuracySec=1min
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

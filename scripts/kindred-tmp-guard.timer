@@ -1,0 +1,23 @@
+[Unit]
+Description=Run the kindred /tmp guard every 15 minutes
+Documentation=file:///usr/local/share/kindred/tmp-guard.sh
+
+[Timer]
+# 15 minutes, not the systemd-tmpfiles-clean default of 1 day.
+#
+# A 4 GB tmpfs fills in about two hours when something writes a 131 MB
+# database every couple of minutes, so a daily sweep is not a safety
+# mechanism -- it is a coincidence waiting to not happen.
+#
+# 15 minutes, paired with the guard's 5-minute age threshold: files present
+# are from the last ~20 minutes, so about 10 runs, roughly 1.3 GB of a 4 GB
+# tmpfs. Enough headroom that a burst between sweeps cannot fill it.
+OnBootSec=10min
+OnUnitActiveSec=15min
+# A 1-minute window is plenty of jitter; the point is not to have every
+# host on the network sweep at the same instant.
+AccuracySec=1min
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

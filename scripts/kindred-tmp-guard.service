@@ -1,0 +1,21 @@
+[Unit]
+Description=Reclaim /tmp from abandoned kindred ingest runs
+Documentation=file:///usr/local/share/kindred/tmp-guard.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/kindred-tmp-guard
+# The guard removes other users' files in a shared /tmp, so it needs the
+# privilege to do that and nothing more. NoNewPrivileges keeps a
+# compromised guard from gaining anything, and it is a oneshot that
+# touches no network.
+NoNewPrivileges=yes
+PrivateTmp=no
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/tmp
+# Must be able to read /proc for the in-use check.
+ProtectProc=default
+
+[Install]
+WantedBy=multi-user.target
