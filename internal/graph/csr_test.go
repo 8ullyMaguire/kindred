@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"path/filepath"
 	"testing"
@@ -422,5 +423,38 @@ func TestNames(t *testing.T) {
 	unnamed := Build(2, nil, nil, 0)
 	if got := unnamed.Name(0); got != "" {
 		t.Fatalf("Name on an unnamed graph = %q, want empty", got)
+	}
+}
+
+// The tag-similarity endpoint serialises ScoredNeighbour directly, so its
+// field names ARE the API. This failed in the wild: without json tags
+// encoding/json emitted "TagID", "PMI" and "Count" into a response where
+// every other key is snake_case, and a client reading "tag_id" got
+// nothing at all.
+//
+// The assertion is on the exact key set, not on "it unmarshalled" -- the
+// bug produced perfectly valid JSON with the wrong names, so a
+// well-formedness check passes while the endpoint stays broken.
+func TestScoredNeighbourJSONKeys(t *testing.T) {
+	b, err := json.Marshal(ScoredNeighbour{TagID: 42, PMI: 8.59, Count: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"tag_id", "pmi", "count"} {
+		if _, ok := got[k]; !ok {
+			t.Errorf("no %q in %s -- a client parsing the documented key gets nothing", k, b)
+		}
+	}
+	for _, k := range []string{"TagID", "PMI", "Count"} {
+		if _, ok := got[k]; ok {
+			t.Errorf("Go identifier %q leaked into the API: %s", k, b)
+		}
+	}
+	if len(got) != 3 {
+		t.Errorf("expected exactly 3 keys, got %d: %s", len(got), b)
 	}
 }

@@ -7,23 +7,41 @@ Wants=network-online.target
 [Service]
 Type=simple
 
-# The service runs as whoever installs it. Set User= here if you want it
-# under a dedicated account; the default is to run as the invoking user,
-# because the corpus and the state directory are usually both under $HOME
-# and a service account cannot read them without being granted it.
+# A dedicated account. It owns /var/lib/kindred and can read the corpus,
+# and it cannot write the corpus or anything else outside its own state
+# directory.
 #
-# There is deliberately no hard-coded "User=" here, and none in any other
-# file. A unit in a public repository that names a person teaches every
-# reader that person's home directory layout, and there is nothing about
-# this service that needs it.
+# This is a generic name, not anybody's. A unit in a public repository
+# that hard-codes a person's account teaches every reader that person's
+# home directory layout, and nothing about this service needs it.
+User=kindre
+Group=kindre
 
 # Adjust these four paths. $STATE is where the index and the embeddings
 # live; $CORPUS is the read-only mirror; the binary comes from the build.
-Environment=STATE=%h/.local/share/kindred
-Environment=CORPUS=%h/kindling-data/ao3_metadata.db
-Environment=KINDRED_BIN=%h/.local/bin/kindred
+#
+# These three must be ABSOLUTE paths, not %h. systemd expands %h to the
+# service user's home directory, which is NOT the installer's: with no
+# User= below it is /root, and the sandbox then fails to mount anything
+# and the unit dies with status=226/NAMESPACE before the binary starts.
+# That is a confusing failure for a path that looks obviously correct in
+# the file, so it is worth saying here rather than only in a commit.
+Environment=STATE=/var/lib/kindred
+Environment=CORPUS=/srv/ao3/ao3_metadata.db
+#
+# If the corpus has to stay under a home directory -- it usually does,
+# because another project owns it -- then CORPUS points into that home,
+# ProtectHome=yes must become ProtectHome=read-only, and the process can
+# see every file in it. That is a real loss of isolation for the sake of
+# not moving 1.7 GB, and it is the right trade only when the corpus owner
+# is you.
 
-ExecStart=${KINDRED_BIN} serve \
+# The command is NOT a variable. systemd does not expand Environment= in
+# the executable path -- it execs the literal string, fails to find it,
+# and reports 203/EXEC, which looks like a permissions problem and is
+# not. ${VAR} IS expanded in the arguments below. So the path is written
+# out, and the flags that follow still use the variables.
+ExecStart=/usr/local/bin/kindred serve \
   --corpus ${CORPUS} \
   --db ${STATE}/kindred.db \
   --listen 127.0.0.1:8010 \
@@ -54,16 +72,23 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-# The corpus is under $HOME, so the state directory is the only writable
-# path and ProtectHome=read-only covers the reads.
-ReadWritePaths=%h/.local/share/kindred
+# The corpus is read-only, and the state directory is the only writable
+# path. ProtectSystem=strict makes everything else so.
+ReadOnlyPaths=%E{CORPUS}
+ReadWritePaths=/var/lib/kindred
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 RestrictNamespaces=true
 LockPersonality=true
-MemoryDenyWriteExecute=true
+# MemoryDenyWriteExecute is deliberately NOT set. It is a good default for
+# most daemons and it is wrong for a Go binary: the runtime maps regions
+# and marks them writable later, so a W^X policy makes the loader fail
+# with 203/EXEC before main ever runs. Verified on this host -- the exact
+# command succeeds as the same user with no sandbox and fails under it.
+# If you want W^X for the parts that are not the runtime, you want
+# seccomp, not this.
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 

@@ -215,10 +215,18 @@ func (g *CSR) NeighbourScore(query int32, limit int, totalWorks float64) []Score
 }
 
 // ScoredNeighbour is one neighbour with its PMI.
+// ScoredNeighbour is serialised directly by the tag-similarity endpoint,
+// so the field names ARE the API. Without tags, encoding/json emits
+// "TagID", "PMI" and "Count" -- Go identifiers, in a response where every
+// other key is snake_case. A client parsing "tag_id" got nothing.
+//
+// Counts are float64 because the PMI maths is done in float and rounding
+// the count to an integer for display would invite the reader to assume a
+// precision the score does not have.
 type ScoredNeighbour struct {
-	TagID int32
-	PMI   float64
-	Count float64
+	TagID int32   `json:"tag_id"`
+	PMI   float64 `json:"pmi"`
+	Count float64 `json:"count"`
 }
 
 // Stats describes a built graph, for logs and the stats endpoint.
