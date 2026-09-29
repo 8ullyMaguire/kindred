@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/budget"
+	"git.polarisocial.xyz/kindred/kindred/internal/embed"
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
@@ -14,7 +15,12 @@ import (
 func runIngest(ctx context.Context, args []string) error {
 	fs := newFlagSet("ingest")
 	c := bindConfig(fs)
-	if err := fs.Parse(args); err != nil {
+	var (
+		doEmbed    = fs.Bool("embed", false, "also compute the tag embeddings (slow; not needed in lite mode)")
+		embedIters = fs.Int("embed-iters", 60, "power-iteration steps for the embeddings")
+	)
+	c, err := finishConfig(c, fs, args)
+	if err != nil {
 		return err
 	}
 
@@ -73,6 +79,20 @@ func runIngest(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// Embeddings. Off by default and on by flag, because the compute is
+	// the slowest thing here and lite mode never reads them — the engine
+	// drops the embedding signal and renormalises the remaining weights
+	// instead. Building them unconditionally would make every Pi ingest
+	// pay for a table nothing queries.
+	if *doEmbed {
+		if c.Mode == "lite" {
+			fmt.Println("embed: skipping: --mode lite does not use the embedding signal, " +
+				"and building the table would cost memory nothing reads")
+		} else if err := buildEmbeddings(ctx, s, res.Nodes, c.EmbedDim, *embedIters, c.TopN); err != nil {
+			return err
+		}
+	}
+
 	if res.KeptEdges == 0 {
 		return fmt.Errorf("built an index with no edges: the corpus has no co-occurrence rows " +
 			"or they are all out of range — refusing to record this as a successful build")
@@ -113,6 +133,78 @@ func corpusStamp(ctx context.Context, db *sql.DB) string {
 		return ""
 	}
 	return newest.String
+}
+
+// buildEmbeddings computes the tag embeddings and stores them.
+func buildEmbeddings(ctx context.Context, s *store.Store, nodes, dim, iters, topN int) error {
+	peak := func(stage string) {
+		kiB, _ := budget.PeakRSSKiB()
+		fmt.Printf("  [%-18s] peak RSS %6.1f MiB\n", stage, float64(kiB)/1024)
+	}
+	peak("embed:matrix")
+	started := time.Now()
+	vectors, res, err := embed.Build(ctx, s.Corpus, nodes, dim, iters, topN)
+	if err != nil {
+		return err
+	}
+	peak("embed:solved")
+
+	if _, err := s.DB.ExecContext(ctx, `DELETE FROM embeddings`); err != nil {
+		return err
+	}
+	// Written in batches: one row per tag, 634,231 of them, and a single
+	// multi-row insert of that size is a statement SQLite has to parse
+	// from a string of megabytes.
+	const batch = 500
+	var pending int
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO embeddings(entity_id, kind, dim, vec) VALUES(?,'tag',?,?)`)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	for i, v := range vectors {
+		if _, err := stmt.ExecContext(ctx, int64(i), dim, embed.Pack(v)); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("store embedding %d: %w", i, err)
+		}
+		pending++
+		if pending == batch {
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+			if tx, err = s.DB.BeginTx(ctx, nil); err != nil {
+				return err
+			}
+			if stmt, err = tx.PrepareContext(ctx,
+				`INSERT INTO embeddings(entity_id, kind, dim, vec) VALUES(?,'tag',?,?)`); err != nil {
+				tx.Rollback()
+				return err
+			}
+			pending = 0
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	elapsed := time.Since(started)
+	fmt.Printf("embed rows=%d dim=%d top_n=%d iters=%d entries=%d in %s\n",
+		res.Rows, res.Dim, res.TopN, res.Iterations, res.Entries,
+		elapsed.Round(time.Millisecond))
+	peak("embed:stored")
+	if err := s.SetMeta(ctx, "embed_dim", fmt.Sprint(res.Dim)); err != nil {
+		return err
+	}
+	if err := s.Log(ctx, "embed", fmt.Sprintf("rows=%d dim=%d top_n=%d iters=%d entries=%d",
+		res.Rows, res.Dim, res.TopN, res.Iterations, res.Entries)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func runStats(ctx context.Context, args []string) error {

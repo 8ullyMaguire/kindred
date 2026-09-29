@@ -465,8 +465,12 @@ func (e *Engine) attachSummaries(ctx context.Context, items []rank.Candidate) er
 func (e *Engine) Embedding(ctx context.Context, kind string, id int64) ([]float32, bool, error) {
 	var blob []byte
 	var dim int
+	// Kind is part of the lookup: work 1 and tag 1 are different entities,
+	// and a lookup that ignored kind would return whichever one happened
+	// to be written.
 	err := e.Store.DB.QueryRowContext(ctx,
-		`SELECT dim, vec FROM embeddings WHERE entity_id = ?`, id).Scan(&dim, &blob)
+		`SELECT dim, vec FROM embeddings WHERE kind = ? AND entity_id = ?`,
+		kind, id).Scan(&dim, &blob)
 	if err != nil {
 		return nil, false, nil
 	}

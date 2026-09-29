@@ -62,7 +62,8 @@ func (s *Store) StableSalt(ctx context.Context) ([]byte, error) {
 // EmbeddingCount reports how many embeddings are stored.
 func (s *Store) EmbeddingCount(ctx context.Context) (int, error) {
 	var n int64
-	if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM embeddings`).Scan(&n); err != nil {
+	if err := s.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM embeddings WHERE kind = 'tag'`).Scan(&n); err != nil {
 		return 0, err
 	}
 	return int(n), nil
@@ -77,7 +78,7 @@ func (s *Store) EmbeddingStats(ctx context.Context) (map[string]any, error) {
 	var n int64
 	var minDim, maxDim sql.NullInt64
 	err := s.DB.QueryRowContext(ctx,
-		`SELECT COUNT(*), MIN(dim), MAX(dim) FROM embeddings`).Scan(&n, &minDim, &maxDim)
+		`SELECT COUNT(*), MIN(dim), MAX(dim) FROM embeddings WHERE kind = 'tag'`).Scan(&n, &minDim, &maxDim)
 	if err != nil {
 		return nil, err
 	}
