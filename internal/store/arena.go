@@ -28,6 +28,101 @@ import (
 // nothing to show.
 var ErrNoPair = arena.ErrNoPair
 
+// sqliteTimeLayout is the format SQLite's datetime('now') writes and the
+// format every TEXT timestamp column in kindred's state DB is stored in.
+//
+// It is also why those columns cannot be scanned into a time.Time directly.
+// modernc.org/sqlite hands a TEXT column back as a Go string, and database/sql
+// refuses to put a string into a *time.Time: "unsupported Scan, storing
+// driver.Value type string into type *time.Time". sql.NullTime happens to
+// absorb that, which is what made this survive so long in a struct where only
+// ONE field was a bare time.Time -- the nullable one looked handled and the
+// non-null one was a landmine nobody hit, because the only query that read it
+// was the resume path and every test judged immediately.
+//
+// Every read of a TEXT timestamp goes through scanTime.
+const sqliteTimeLayout = "2006-01-02 15:04:05"
+
+// scanTime reads a SQLite TEXT timestamp into a time.Time.
+//
+// The layouts are tried in order because the corpus mirror and older state
+// databases are not uniform: some rows carry a fractional part, some carry an
+// explicit zone, and datetime('now') carries neither. A timestamp that parses
+// as none of them is a real data problem and is reported rather than silently
+// becoming the zero time, because a zero PresentedAt would make every resumed
+// comparison look infinitely old.
+func scanTime(v any) (time.Time, error) {
+	switch t := v.(type) {
+	case nil:
+		return time.Time{}, nil
+	case time.Time:
+		return t, nil
+	case []byte:
+		return parseSQLiteTime(string(t))
+	case string:
+		return parseSQLiteTime(t)
+	default:
+		return time.Time{}, fmt.Errorf("cannot read %T as a timestamp", v)
+	}
+}
+
+func parseSQLiteTime(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	for _, layout := range []string{
+		sqliteTimeLayout,
+		sqliteTimeLayout + ".999999999",
+		"2006-01-02T15:04:05Z07:00",
+		"2006-01-02T15:04:05",
+		time.RFC3339Nano,
+		time.RFC3339,
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unrecognised timestamp %q", s)
+}
+
+// nullTime wraps scanTime for a nullable column, for the same reason
+// sql.NullTime is used: judged_at is NULL until the comparison is judged.
+type nullTime struct {
+	Time  time.Time
+	Valid bool
+}
+
+func (n *nullTime) Scan(v any) error {
+	if v == nil {
+		n.Time, n.Valid = time.Time{}, false
+		return nil
+	}
+	t, err := scanTime(v)
+	if err != nil {
+		return err
+	}
+	n.Time, n.Valid = t, true
+	return nil
+}
+
+// timeValue wraps scanTime for a NOT NULL column.
+type timeValue struct{ time.Time }
+
+func (t *timeValue) Scan(v any) error {
+	if v == nil {
+		// A NOT NULL column that is NULL is a schema violation, not an
+		// empty timestamp. Defaulting to the zero time would make the row
+		// look older than anything that has ever existed.
+		return errors.New("NOT NULL timestamp column is NULL")
+	}
+	parsed, err := scanTime(v)
+	if err != nil {
+		return err
+	}
+	t.Time = parsed
+	return nil
+}
+
 // OwnerKey hashes an identifier into the arena's owner key.
 //
 // The arena stores comparisons indefinitely and the identity that made
@@ -278,19 +373,27 @@ func (s *Store) SeenPairs(ctx context.Context, ownerKey string, limit int) (map[
 func (s *Store) UnjudgedInSession(ctx context.Context, sessionKey string) (Comparison, bool, error) {
 	var c Comparison
 	var choice sql.NullString
+	// presented_at and judged_at are TEXT columns, so they are read through
+	// the wrappers rather than straight into time.Time / sql.NullTime. A
+	// bare *time.Time here is a runtime error on every call, not a compile
+	// error, which is why it shipped.
+	var presented timeValue
+	var judged nullTime
 	err := s.DB.QueryRowContext(ctx,
 		`SELECT id, work_a, work_b, choice, session_key, owner_key, strategy, presented_at, judged_at
 		 FROM arena_comparisons
 		 WHERE session_key = ? AND judged_at IS NULL
 		 ORDER BY id DESC LIMIT 1`, sessionKey).
 		Scan(&c.ID, &c.WorkA, &c.WorkB, &choice, &c.SessionKey, &c.OwnerKey,
-			&c.Strategy, &c.PresentedAt, &c.JudgedAt)
+			&c.Strategy, &presented, &judged)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, false, nil
 	}
 	if err != nil {
 		return c, false, fmt.Errorf("unjudged in session: %w", err)
 	}
+	c.PresentedAt = presented.Time
+	c.JudgedAt = sql.NullTime{Time: judged.Time, Valid: judged.Valid}
 	c.Choice = choice.String
 	return c, true, nil
 }
