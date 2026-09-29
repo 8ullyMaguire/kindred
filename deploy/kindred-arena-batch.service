@@ -1,0 +1,37 @@
+[Unit]
+Description=Run a kindred arena rating period
+Documentation=https://github.com/polarisocial/kindred
+# The batch is a write, so it must run when the server can serve it. If
+# kindred is down there is nothing to rate against and the POST would fail
+# into the void, which is fine -- the next tick picks the work up.
+After=kindred.service
+Requires=kindred.service
+
+[Service]
+Type=oneshot
+# A POST to the RUNNING server, not a second `kindred` invocation. The
+# ratings the batch writes are loaded into the serving process's memory for
+# the peer_rating signal, and a separate process writing the same database
+# would leave the recommender scoring against stale ratings until the next
+# restart. A batch that updated the database and changed nothing a reader
+# sees is worse than no batch at all, because the log says it worked.
+#
+# 127.0.0.1 rather than the public hostname: this is loopback, so it must not
+# depend on DNS, TLS, or the proxy being up.
+ExecStart=/usr/bin/curl -fsS --max-time 120 -X POST http://127.0.0.1:8010/api/v1/arena/batch
+# A failure is a failure. The batch is the only thing that moves ratings
+# forward, and a timer that swallows errors is a timer nobody notices has
+# been failing for a month.
+SuccessExitStatus=0
+
+# Nothing to harden: this is curl making one loopback request.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -38,22 +38,34 @@ This document outlines the current state of the Arena ranking functionality in t
 
 ### What is Not Working / Missing
 
-1. **The arena does not influence recommendations.** `internal/signal` has no
-   arena term, so learned tag weights do not yet affect `/recommend`. This is
-   the one open product decision here — the arena collects preferences and
-   ranks works, but nothing consumes them at recommendation time.
+1. **API documentation** for the arena endpoints is not in the main API spec.
 
-2. **The batch is manual.** Nothing schedules `POST /api/v1/arena/batch`; it
-   runs when something calls it. Until it is scheduled, ratings only change
-   when a batch is invoked by hand. This is why the leaderboard was empty
-   after the first deployment, and it is easy to mistake for "no judgements yet".
+2. **The batch cadence is a judgement call.** The timer runs every 10 minutes
+   (`deploy/kindred-arena-batch.timer`). A Glicko period is the set of games
+   since the last one and the batch rule fits many games, so this trades
+   period quality against how fast a reader sees their judgement count. One
+   line to change.
 
-3. **API documentation** for the arena endpoints is not in the main API spec.
-
-4. **Test coverage gaps**: no browser-driven test, and no test that runs
-   against the real 1.7 GB mirror — which is where all four defects today were
+3. **Test coverage gaps**: no browser-driven test, and no test that runs
+   against the real 1.7 GB mirror — which is where every defect so far was
    found. `internal/web` has no test file of its own; page tests live in
    `internal/api` because that is where the fixture is.
+
+4. `TestHealthzReportsOK` fails under `-race` on a clean tree. Pre-existing,
+   confirmed by stashing all of this work. Untouched.
+
+### Now wired, and worth knowing
+
+`peer_rating` (SPEC §1's named signal) scores candidates by the arena's damped
+rating, at default weight 0.11. It is registered **unconditionally**: with an
+empty arena it returns `rank.ErrSkip` so `meta.degraded[]` names it, which is
+SPEC §7.1 and the exact kindling failure (an arena signal inert in production
+and silent about it). A signal added only when it has data is a signal absent
+without saying so.
+
+A batch reloads the engine's ratings under an RWMutex, so a period changes
+recommendations immediately. The timer POSTs to the running server rather than
+invoking a second binary, for the same reason.
 
 ### File Changes Summary
 ```

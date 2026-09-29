@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -284,6 +285,18 @@ func (s *Server) handleArenaBatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	// The batch just changed every rating in the arena, and the engine
+	// holds the copy peer_rating scores from. Reloading here is what makes a
+	// rating actually change a recommendation: serve.go loads once at
+	// startup, so without this the recommender would keep serving the
+	// pre-batch ratings until the next restart -- a batch that ran, logged
+	// success, updated the leaderboard, and changed nothing a reader sees.
+	//
+	// The reload is a single indexed query over arena_ratings, and a batch
+	// is a rare event by construction, so this is not on a hot path.
+	if res.Skipped == "" {
+		s.refreshArenaRatings(r.Context())
+	}
 	if res.Skipped != "" {
 		writeJSON(w, http.StatusOK, map[string]any{"skipped": res.Skipped})
 		return
@@ -291,6 +304,30 @@ func (s *Server) handleArenaBatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"period": res.Period, "comparisons": res.Comparisons, "works_updated": res.Updated,
 	})
+}
+
+// refreshArenaRatings reloads the engine's copy of the arena's ratings.
+//
+// A failure here is logged, not returned: the batch itself succeeded, and
+// reporting the reload failure as a batch failure would tell the operator
+// the period was lost when it was in fact written. The signal degrades on
+// its own if the map goes empty.
+func (s *Server) refreshArenaRatings(ctx context.Context) {
+	if s.Engine == nil {
+		return
+	}
+	ratings, median, err := s.Store.EffectiveRatings(ctx)
+	if err != nil {
+		if s.Log != nil {
+			s.Log.Warn("arena ratings reload failed; peer_rating stays degraded",
+				"err", err)
+		}
+		return
+	}
+	s.Engine.SetArenaRatings(ratings, median)
+	if s.Log != nil {
+		s.Log.Info("arena ratings reloaded", "works", len(ratings), "median", median)
+	}
 }
 
 // titlesFor attaches corpus titles to leaderboard entries.

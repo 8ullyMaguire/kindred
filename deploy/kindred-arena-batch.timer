@@ -1,0 +1,35 @@
+[Unit]
+Description=Run a kindred arena rating period on a fixed cadence
+Documentation=https://github.com/polarisocial/kindred
+
+[Timer]
+Unit=kindred-arena-batch.service
+
+# Every 10 minutes.
+#
+# A Glicko rating period is the set of games played since the last one, and
+# the batch rule fits a period of MANY games. A 10-minute tick gives a
+# public arena a few comparisons per period at low traffic and a few dozen
+# when it is busy, which is the range the arithmetic assumes.
+#
+# The alternative -- a nightly batch -- is wrong for a public service: it
+# means a reader's judgements do not affect any ranking for up to a day,
+# and the whole point of asking someone to judge a pair is that the answer
+# counts. A period of exactly one game, which a very quiet hour would
+# produce, is the regime Glicko's rule fits worst, so the floor is a
+# half-hour rather than a minute.
+#
+# This is the one scheduling decision here that is genuinely arguable, and
+# it is arguable because it trades responsiveness against period quality.
+# 10 minutes is chosen for "a reader sees their judgement matter within a
+# coffee break". Change this line and nothing else.
+OnBootSec=5min
+OnUnitActiveSec=10min
+
+# Jitter so a fleet does not batch in lockstep, and a generous accuracy
+# window because a rating period is not a deadline.
+AccuracySec=1min
+RandomizedDelaySec=90
+
+[Install]
+WantedBy=timers.target

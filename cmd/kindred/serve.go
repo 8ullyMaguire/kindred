@@ -114,6 +114,24 @@ func runServe(ctx context.Context, args []string) error {
 		EmbedDim: embedDim,
 	}
 
+	// The arena's ratings, loaded once at startup so the peer_rating signal
+	// is a map lookup per candidate rather than a query. A ratings table
+	// that changes only when a batch runs is exactly the kind of thing a
+	// request-path query is wrong for, and a batch is rare enough that
+	// reloading on a timer would be simpler than invalidating per request.
+	//
+	// A failure here is logged and the signal reports itself degraded, which
+	// is the whole point of SPEC §7.1: an arena signal that is inert must
+	// say so rather than disappear.
+	if ratings, median, err := s.EffectiveRatings(ctx); err != nil {
+		logger.Warn("arena ratings unavailable; peer_rating will report degraded",
+			"err", err)
+		eng.SetArenaRatings(map[int64]float64{}, 0)
+	} else {
+		eng.SetArenaRatings(ratings, median)
+		logger.Info("arena ratings loaded", "works", len(ratings), "median", median)
+	}
+
 	srv := &api.Server{
 		Engine:    eng,
 		Store:     s,

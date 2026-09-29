@@ -57,6 +57,16 @@ ingest: build
 budget: build
 	@./scripts/budget.sh $(BIN) $(CORPUS) $(DB) $(PORT) $(MODE)
 
+# The arena batch timer. Prints what would be installed; the install itself
+# needs root, so it is not done for you.
+.PHONY: arena-timer
+arena-timer:
+	@echo "sudo install -m644 deploy/kindred-arena-batch.service /etc/systemd/system/"
+	@echo "sudo install -m644 deploy/kindred-arena-batch.timer   /etc/systemd/system/"
+	@echo "sudo systemctl daemon-reload"
+	@echo "sudo systemctl enable --now kindred-arena-batch.timer"
+	@echo "systemctl list-timers kindred-arena-batch.timer"
+
 .PHONY: clean
 clean:
 	rm -rf bin

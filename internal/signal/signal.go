@@ -318,6 +318,72 @@ func (s Recency) Score(c rank.Candidate, _ []rank.Candidate, _ rank.Store) (floa
 	return score, fmt.Sprintf("updated %.0f days ago (halflife 365d)", age), nil
 }
 
+// PeerRating scores a candidate by the arena's crowd rating for it.
+//
+// This is the signal kindling's arena was always feeding the recommender, and
+// it is the one dimension kindred can have that no amount of corpus analysis
+// produces: what other readers actually chose. Everything else in this file
+// is derived from the work's own metadata, so they all agree with each other
+// about what a fic "is". This one is the only evidence of what a reader felt.
+//
+// The score is the EFFECTIVE rating, not the raw one. Raw Glicko-2 ratings
+// start every unrated work at exactly 1500 with a large deviation, and a
+// work compared once would otherwise outrank a work compared thirty times.
+// Effective damping is what the arena already computes for the leaderboard,
+// and using it here means the number the reader saw is the number that ranks.
+//
+// The signal is NOT skipped when the arena is empty. It returns rank.ErrSkip,
+// which puts "peer_rating" in meta.degraded[] -- the behaviour SPEC §7.1
+// requires, and the specific fix kindling needed: an arena signal that is
+// inert and silent about it is indistinguishable from a signal that does not
+// exist. Naming the absence in every response is the whole point.
+type PeerRating struct {
+	// Ratings maps work id to effective rating, already damped and ready to
+	// score. Nil or empty means the arena has not rated anything yet.
+	Ratings map[int64]float64
+	// Median is the corpus midpoint, used to centre the score so a rating
+	// of "average" contributes 0 rather than a constant offset that would
+	// drag the whole list one way.
+	Median float64
+	// Scale is the rating spread treated as one unit. The arena's ratings
+	// run roughly +/-150 around the median, so the score lands in about
+	// [-1, 1] and is comparable with the other signals' [0, 1].
+	Scale float64
+}
+
+func (PeerRating) Name() string { return "peer_rating" }
+
+func (s PeerRating) Score(c rank.Candidate, _ []rank.Candidate, _ rank.Store) (float64, string, error) {
+	if len(s.Ratings) == 0 {
+		// No ratings at all: skip, and be named in meta.degraded[].
+		return 0, "", rank.ErrSkip
+	}
+	v, ok := s.Ratings[c.ID]
+	if !ok {
+		// The arena has rated something, but not this work. That is a
+		// genuine absence of evidence rather than a missing dimension, so
+		// the candidate scores 0 on this axis and the signal stays
+		// un-degraded. Skipping here would report the whole signal as
+		// degraded the first time an unrated work appears in the pool,
+		// which is noise about a condition that is working correctly.
+		return 0, "", nil
+	}
+	scale := s.Scale
+	if scale <= 0 {
+		scale = 150
+	}
+	score := (v - s.Median) / scale
+	if score > 1 {
+		score = 1
+	} else if score < -1 {
+		score = -1
+	}
+	// A negative score is a real answer: the arena has evidence this work is
+	// below average, and burying that would waste the signal. rank.Tune
+	// weights a signal, not its sign, so this composes normally.
+	return score, fmt.Sprintf("arena effective rating %.1f", v), nil
+}
+
 // Popularity scores log-scaled hits and kudos together.
 type Popularity struct{}
 

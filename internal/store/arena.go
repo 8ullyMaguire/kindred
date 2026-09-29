@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -503,6 +504,68 @@ func EffectiveRating(mu, phi, median float64) float64 {
 		damp = 1
 	}
 	return median + (mu-median)*damp
+}
+
+// EffectiveRatings returns every rated work's damped rating, keyed by work
+// id, for the peer_rating signal.
+//
+// This is the whole arena_ratings table, not the leaderboard's top N. The
+// signal scores each candidate, and a candidate outside the top N would
+// otherwise score zero for the one signal that is the only evidence of what
+// a reader actually thought -- so restricting it to the leaderboard would
+// quietly make the arena's opinion apply only to works that were already
+// winning.
+//
+// Only rows with comparisons > 0 are returned. A row with none is an
+// unrated work sitting at the starting rating, and returning it would put a
+// flat 1500 into the map, which is indistinguishable from a genuinely
+// average work.
+func (s *Store) EffectiveRatings(ctx context.Context) (map[int64]float64, float64, error) {
+	rows, err := s.DB.QueryContext(ctx,
+		`SELECT work_id, mu, phi FROM arena_ratings WHERE comparisons > 0`)
+	if err != nil {
+		return nil, arena.MU_INIT, fmt.Errorf("effective ratings: %w", err)
+	}
+	defer rows.Close()
+
+	// Read once into the raw ratings, because the median is not known until
+	// the whole population is, and every work's effective rating depends on
+	// it. Damping inside the loop would anchor every work on a median that
+	// had not been computed yet.
+	type raw struct {
+		mu, phi float64
+	}
+	raws := make(map[int64]raw, 256)
+	mus := make([]float64, 0, 256)
+	for rows.Next() {
+		var id int64
+		var r raw
+		if err := rows.Scan(&id, &r.mu, &r.phi); err != nil {
+			return nil, arena.MU_INIT, fmt.Errorf("effective ratings scan: %w", err)
+		}
+		raws[id] = r
+		mus = append(mus, r.mu)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, arena.MU_INIT, fmt.Errorf("effective ratings rows: %w", err)
+	}
+	if len(raws) == 0 {
+		// No ratings yet. An empty map is the signal's degraded signal.
+		return map[int64]float64{}, arena.MU_INIT, nil
+	}
+
+	sort.Float64s(mus)
+	n := len(mus)
+	median := mus[n/2]
+	if n%2 == 0 {
+		median = (mus[n/2-1] + mus[n/2]) / 2
+	}
+
+	out := make(map[int64]float64, len(raws))
+	for id, r := range raws {
+		out[id] = EffectiveRating(r.mu, r.phi, median)
+	}
+	return out, median, nil
 }
 
 // Leaderboard returns the top works by effective rating.

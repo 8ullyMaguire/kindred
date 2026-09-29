@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
@@ -40,6 +41,40 @@ type Engine struct {
 
 	// EmbedDim is the embedding width, for the reason string.
 	EmbedDim int
+
+	// ArenaRatings maps work id to the arena's damped rating, and
+	// ArenaMedian is the centre it was damped around. Nil means the arena
+	// has rated nothing, which is NOT the same as leaving peer_rating out:
+	// the signal is still registered so it reports itself degraded.
+	//
+	// Guarded by arenaMu because a batch replaces this map while requests
+	// are reading it. Assigning a map field is not atomic, and an unsynced
+	// reader during a batch is a concurrent map read and write -- a fatal
+	// runtime error, not a race the detector merely flags. Use
+	// SetArenaRatings to replace them and ArenaSignal to read a consistent
+	// pair.
+	ArenaRatings map[int64]float64
+	ArenaMedian  float64
+	arenaMu      sync.RWMutex
+}
+
+// SetArenaRatings replaces the arena's ratings atomically with respect to
+// readers.
+func (e *Engine) SetArenaRatings(ratings map[int64]float64, median float64) {
+	e.arenaMu.Lock()
+	defer e.arenaMu.Unlock()
+	e.ArenaRatings = ratings
+	e.ArenaMedian = median
+}
+
+// ArenaSignal returns a consistent snapshot of the ratings and the median
+// they were damped around. The two are read under one lock because the
+// signal needs both to agree, and a torn read would centre the score on a
+// median from a different population.
+func (e *Engine) ArenaSignal() (map[int64]float64, float64) {
+	e.arenaMu.RLock()
+	defer e.arenaMu.RUnlock()
+	return e.ArenaRatings, e.ArenaMedian
 }
 
 // Seed is one seed reference.
@@ -106,12 +141,18 @@ func DefaultTune() rank.Tune {
 	return rank.Tune{
 		Name: "default",
 		Weights: map[string]float64{
-			"tag_overlap":   0.25,
-			"neighbourhood": 0.35,
-			"quality":       0.10,
-			"recency":       0.10,
-			"popularity":    0.10,
+			"tag_overlap":   0.22,
+			"neighbourhood": 0.30,
+			"quality":       0.09,
+			"recency":       0.09,
+			"popularity":    0.09,
 			"embedding":     0.10,
+			// peer_rating starts small on purpose. It is the only signal
+			// fed by human judgement rather than corpus analysis, so it is
+			// the one whose weight should earn its place -- and an arena
+			// with a handful of comparisons should nudge a ranking, not
+			// steer it. `kindred tune` raises it without a code change.
+			"peer_rating": 0.11,
 		},
 	}
 }
@@ -373,6 +414,27 @@ func (e *Engine) signals(seeds []rank.Candidate) ([]rank.Signal, rank.Tune) {
 		})
 	}
 	sigs = append(sigs, signal.Quality{}, signal.Recency{Now: nowDays()}, signal.Popularity{})
+
+	// peer_rating is the arena's contribution to ranking, and it is the
+	// only signal here that is evidence of what a reader actually chose
+	// rather than a restatement of the work's own metadata. SPEC §1 lists it
+	// as a named signal and §7.1 requires its absence to be reported in
+	// meta.degraded[] -- kindling's exact failure was an arena signal that
+	// was inert in production and silent about it.
+	//
+	// Registered UNCONDITIONALLY, including when the arena has rated
+	// nothing. Guarding this on `e.ArenaRatings != nil` would be the bug
+	// restated: a signal that is only present when it has data is a signal
+	// that is absent without saying so. With no ratings it scores
+	// rank.ErrSkip for every candidate, and rank names it in
+	// meta.degraded[] on every recommendation -- which is the observable
+	// difference between "the arena has no opinion" and "the arena signal
+	// does not work".
+	arenaRatings, arenaMedian := e.ArenaSignal()
+	sigs = append(sigs, signal.PeerRating{
+		Ratings: arenaRatings,
+		Median:  arenaMedian,
+	})
 
 	if !e.Lite {
 		sigs = append(sigs, signal.Embedding{
