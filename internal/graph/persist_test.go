@@ -169,8 +169,13 @@ func TestLoadCSRReadsBackAStreamedIndex(t *testing.T) {
 }
 
 // TestLoadCSRRejectsAPaddedIndex is the regression test for the padding
-// bug, in the form a user would hit it: an index file with a run of
-// trailing zeros must not load, and must say why.
+// bug, in the strongest form available.
+//
+// The first version of the loader read the arrays and ignored whatever
+// followed, so a padded file loaded "successfully" and served a graph
+// with the padding still in memory. The loader now checks that the file
+// is exactly the size its header describes, so a padded index is refused
+// outright rather than silently accepted.
 func TestLoadCSRRejectsAPaddedIndex(t *testing.T) {
 	g := smallGraph()
 	path := filepath.Join(t.TempDir(), "k.db")
@@ -187,15 +192,34 @@ func TestLoadCSRRejectsAPaddedIndex(t *testing.T) {
 	if err := os.WriteFile(csrPath(path), padded, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A padded file's arrays are still readable, because the reader
-	// ignores the tail — so this must still load. The test that matters
-	// is the size assertion above, which is what catches the writer.
-	loaded, err := LoadCSR(context.Background(), path, nil, nil, nil)
-	if err != nil {
-		t.Fatalf("a padded index failed to load: %v", err)
+	_, err = LoadCSR(context.Background(), path, nil, nil, nil)
+	if err == nil {
+		t.Fatal("a padded index loaded; the loader must refuse a file whose " +
+			"size disagrees with its header, which is the padding signature")
 	}
-	if loaded.NodeCount != g.NodeCount {
-		t.Fatalf("node count %d after padding, want %d", loaded.NodeCount, g.NodeCount)
+	if !strings.Contains(err.Error(), "disagree") {
+		t.Fatalf("err = %v, want it to name the layout disagreement", err)
+	}
+}
+
+// TestLoadCSRRejectsATruncatedIndex is the other half: a short file must
+// fail too, rather than decoding whatever bytes remain.
+func TestLoadCSRRejectsATruncatedIndex(t *testing.T) {
+	g := smallGraph()
+	path := filepath.Join(t.TempDir(), "k.db")
+	if err := persistCSRStream(context.Background(), &Builder{DBPath: path}, g,
+		BuildResult{Nodes: g.NodeCount, Edges: int64(g.EdgeCount), TopN: g.TopN}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(csrPath(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(csrPath(path), raw[:len(raw)-8], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCSR(context.Background(), path, nil, nil, nil); err == nil {
+		t.Fatal("a truncated index loaded")
 	}
 }
 

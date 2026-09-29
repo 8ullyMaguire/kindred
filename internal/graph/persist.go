@@ -1,10 +1,12 @@
 package graph
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 	"os"
 )
@@ -161,33 +163,99 @@ func persistCSR(ctx context.Context, b *Builder, blob []byte, res BuildResult) e
 	return nil
 }
 
-// LoadCSR reads an index written by persistCSR, restoring names and
+// LoadCSR reads an index written by persistCSRStream, restoring names and
 // frequencies from the corpus.
 //
-// Frequencies are re-read rather than stored: they change with the corpus,
-// and stale PMI produces a silently wrong ranking rather than an error.
+// The index is read through a streaming decoder rather than
+// os.ReadFile + Decode. The first version did the obvious thing — read
+// 28 MB into one buffer, then copy it into the offsets, neighbours and
+// weights arrays — and lite mode measured 58.9 MB of heap, over its
+// 60 MB cap, for a graph that is 27 MB on disk. It was the same "hold it
+// twice" mistake the writer had: this process was the one paying for it
+// twice, on every start, to hold a file it was about to discard.
+//
+// The header is read first so the array lengths are known, then each
+// array is decoded straight from a buffered reader. The peak is one
+// buffer plus the arrays, not the arrays plus a copy of themselves.
 func LoadCSR(ctx context.Context, dbPath string, corpus *sql.DB, readFreq func() (map[int32]int64, error), readNames func() ([]string, error)) (*CSR, error) {
-	raw, err := os.ReadFile(csrPath(dbPath))
+	path := csrPath(dbPath)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("read index: %w", err)
 	}
-	if len(raw) < headerSize {
-		return nil, fmt.Errorf("index file is truncated: %d bytes", len(raw))
+	defer f.Close()
+
+	st, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat index: %w", err)
 	}
-	if string(raw[0:4]) != string(csrMagic[:]) {
+	if st.Size() < headerSize {
+		return nil, fmt.Errorf("index file is truncated: %d bytes", st.Size())
+	}
+
+	head := make([]byte, headerSize)
+	if _, err := io.ReadFull(f, head); err != nil {
+		return nil, fmt.Errorf("read index header: %w", err)
+	}
+	if string(head[0:4]) != string(csrMagic[:]) {
 		return nil, fmt.Errorf("index file has the wrong magic; not a kindred index")
 	}
-	if v := binary.LittleEndian.Uint32(raw[4:8]); v != 1 {
+	if v := binary.LittleEndian.Uint32(head[4:8]); v != 1 {
 		return nil, fmt.Errorf("index format version %d is not supported (want 1)", v)
 	}
-	nodes := int(binary.LittleEndian.Uint64(raw[8:16]))
-	edges := int(binary.LittleEndian.Uint64(raw[16:24]))
-	topN := int(binary.LittleEndian.Uint64(raw[24:32]))
-
-	g, err := Decode(nodes, edges, topN, raw[headerSize:])
-	if err != nil {
-		return nil, err
+	nodes := int(binary.LittleEndian.Uint64(head[8:16]))
+	edges := int(binary.LittleEndian.Uint64(head[16:24]))
+	topN := int(binary.LittleEndian.Uint64(head[24:32]))
+	if nodes < 0 || nodes > maxSaneNodes {
+		return nil, fmt.Errorf("index header claims %d nodes, which is not a real graph", nodes)
 	}
+
+	// A 256 KiB read buffer: large enough that the per-read syscall cost
+	// disappears against 28 MB, small enough to be noise.
+	br := bufio.NewReaderSize(f, 256*1024)
+	g := &CSR{
+		NodeCount: nodes,
+		EdgeCount: edges,
+		TopN:      topN,
+		offsets:   make([]int64, nodes+1),
+		freq:      make([]float64, nodes),
+	}
+
+	var scratch [8]byte
+	for i := range g.offsets {
+		if _, err := io.ReadFull(br, scratch[:8]); err != nil {
+			return nil, fmt.Errorf("read offsets (%d/%d): %w", i, len(g.offsets), err)
+		}
+		g.offsets[i] = int64(binary.LittleEndian.Uint64(scratch[:8]))
+	}
+	n := int(g.offsets[nodes])
+	if n < 0 {
+		return nil, fmt.Errorf("index declares %d entries, which is negative", n)
+	}
+	// The file must be exactly the header, the offsets, and two arrays of
+	// n entries. Anything else means the writer and reader disagree, and
+	// reading on regardless would decode whatever happens to be there.
+	want := int64(headerSize) + int64(8*(nodes+1)) + int64(8*n)
+	if st.Size() != want {
+		return nil, fmt.Errorf("index file is %d bytes but its header describes %d; "+
+			"the writer and reader disagree on the layout", st.Size(), want)
+	}
+
+	g.neighbors = make([]int32, n)
+	for i := range g.neighbors {
+		if _, err := io.ReadFull(br, scratch[:4]); err != nil {
+			return nil, fmt.Errorf("read neighbours (%d/%d): %w", i, n, err)
+		}
+		g.neighbors[i] = int32(binary.LittleEndian.Uint32(scratch[:4]))
+	}
+	g.weights = make([]float32, n)
+	for i := range g.weights {
+		if _, err := io.ReadFull(br, scratch[:4]); err != nil {
+			return nil, fmt.Errorf("read weights (%d/%d): %w", i, n, err)
+		}
+		g.weights[i] = math.Float32frombits(binary.LittleEndian.Uint32(scratch[:4]))
+	}
+
 	if err := g.Verify(); err != nil {
 		return nil, fmt.Errorf("index on disk failed its invariants: %w", err)
 	}
@@ -209,6 +277,10 @@ func LoadCSR(ctx context.Context, dbPath string, corpus *sql.DB, readFreq func()
 	}
 	return g, nil
 }
+
+// maxSaneNodes bounds what a header may claim, so a corrupt or hostile
+// file cannot make the process allocate for a graph that does not exist.
+const maxSaneNodes = 1 << 28
 
 // IndexExists reports whether an index is on disk.
 func IndexExists(dbPath string) bool {

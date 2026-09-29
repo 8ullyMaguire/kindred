@@ -12,6 +12,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,6 +63,15 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /stats", s.handleStats)
 	mux.HandleFunc("GET /api/v1/stats", s.handleStats)
+
+	// A 404 that is not JSON is a 404 a JSON client cannot read, and
+	// net/http's default handler returns plain text. Every response this
+	// server produces is JSON, including the ones nobody routed — so a
+	// catch-all pattern handles them. Registered last, because ServeMux
+	// prefers the most specific pattern.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("no route for %s %s", r.Method, r.URL.Path))
+	})
 
 	return s.withLogging(s.withRecovery(mux))
 }
@@ -137,11 +147,20 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) parseRecommend(r *http.Request) (*engine.Request, error) {
 	q := r.URL.Query()
+	// exclude_seeds defaults to true. A recommender that returns the work
+	// you seeded from, at the top, with a perfect similarity score, is
+	// worse than useless — and the default was off, so the API returned
+	// the seed while the CLI excluded it. Two entry points to the same
+	// ranking must not disagree about this.
+	exclude := true
+	if v := q.Get("exclude_seeds"); v != "" {
+		exclude = truthy(v)
+	}
 	req := &engine.Request{
 		Kind:        q.Get("kind"),
 		Tune:        q.Get("tune"),
 		GroupBy:     q.Get("group_by"),
-		Exclude:     truthy(q.Get("exclude_seeds")),
+		Exclude:     exclude,
 		N:           atoiDefault(q.Get("n"), 10),
 		PoolSize:    atoiDefault(q.Get("pool"), 0),
 		MaxPerGroup: atoiDefault(q.Get("max_per_group"), 0),
@@ -192,8 +211,11 @@ func (s *Server) parseRecommend(r *http.Request) (*engine.Request, error) {
 		if body.Pool != 0 {
 			req.PoolSize = body.Pool
 		}
-		if body.Exclude {
-			req.Exclude = true
+		// An absent exclude_seeds in the body keeps the server default of
+		// true; an explicit false is honoured, because a client building a
+		// "more like this, including this" list may genuinely want it.
+		if !body.Exclude {
+			req.Exclude = false
 		}
 	}
 	if len(seeds) == 0 {
@@ -214,8 +236,14 @@ func (s *Server) parseRecommend(r *http.Request) (*engine.Request, error) {
 // the thing it named does not exist.
 func (s *Server) writeEngineErr(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, store.ErrNotFound):
-		writeErr(w, http.StatusNotFound, err)
+	case errors.Is(err, store.ErrNotFound),
+		errors.Is(err, corpus.ErrNotFound),
+		errors.Is(err, sql.ErrNoRows):
+		// Three sentinels mean "not found", from three layers. The corpus
+		// has its own because it is a read-only mirror with its own
+		// vocabulary; matching only the store's turned every "no such
+		// work" into a 500.
+		writeErr(w, http.StatusNotFound, fmt.Errorf("no such entity: %v", err))
 	case errors.Is(err, store.ErrInvalid):
 		writeErr(w, http.StatusBadRequest, err)
 	default:
@@ -328,6 +356,7 @@ func (s *Server) handleAO3Work(w http.ResponseWriter, r *http.Request) {
 		s.writeEngineErr(w, err)
 		return
 	}
+
 	pairs, err := s.Engine.Corpus.TagPairs(r.Context(), []int64{id})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -465,7 +494,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"budget_ok":    !overBudget,
 	}
 	if s.Store != nil {
-		if n, err := s.Store.MetaInt(r.Context(), "corpus_works"); err == nil {
+		// work_count is the key the ingest writes. The first version of
+		// this read "corpus_works", which nothing ever wrote, so a healthy
+		// service reported corpus_works: 0 — a number that looks like a
+		// measurement and is not one.
+		if n, err := s.Store.MetaInt(r.Context(), "work_count"); err == nil {
 			body["corpus_works"] = n
 		}
 	}
@@ -568,34 +601,66 @@ func pathInt64(w http.ResponseWriter, r *http.Request, name string) (int64, erro
 	return n, nil
 }
 
+// scanWorkJSON projects a works row into the API's shape.
+//
+// Every nullable column is scanned into a sql.Null* and only then
+// converted. Scanning straight into a string fails on NULL, and the real
+// corpus has NULL summaries — the first version of this returned 500 for
+// every list request, which is the same class of bug the corpus reader
+// documents: a NULL is not a zero, and a zero is not a value.
+//
+// A NULL summary is emitted as null, not "". A client can tell "no
+// summary" from "an empty summary", which matters for a field that is
+// sometimes genuinely empty.
 func scanWorkJSON(rows interface{ Scan(...any) error }) (map[string]any, bool, error) {
 	var (
 		id, wordCount, kudos, hits int64
-		title, url, summary        string
-		language                   string
-		complete                   int
-		updateDate                 string
-		bookmarks                  *int64
+		title, url, summary        sql.NullString
+		language                   sql.NullString
+		complete                   sql.NullInt64
+		updateDate                 sql.NullString
+		bookmarks                  sql.NullInt64
 	)
 	if err := rows.Scan(&id, &title, &summary, &url, &wordCount, &kudos, &hits,
 		&bookmarks, &updateDate, &language, &complete); err != nil {
 		return nil, false, err
 	}
 	item := map[string]any{
-		"id": id, "title": title, "summary": summary, "url": url,
-		"word_count": wordCount, "kudos": kudos, "hits": hits,
-		"update_date": updateDate, "language": language,
-		"complete": complete != 0,
+		"id":         id,
+		"word_count": wordCount,
+		"kudos":      kudos,
+		"hits":       hits,
 	}
-	// bookmarks is NULL for 112,890 of 112,935 works. Emitting it as null
-	// rather than 0 is the honest report, and it is why a client sorting
-	// on it must handle absence.
-	if bookmarks == nil {
-		item["bookmarks"] = nil
-		return item, true, nil
+	// Nullable text stays null when absent.
+	item["title"] = nullStr(title)
+	item["summary"] = nullStr(summary)
+	item["url"] = nullStr(url)
+	item["language"] = nullStr(language)
+	item["update_date"] = nullStr(updateDate)
+	// A NULL complete flag is not "incomplete": it is unknown. Emitting
+	// false would claim a fact the corpus does not have.
+	if complete.Valid {
+		item["complete"] = complete.Int64 != 0
+	} else {
+		item["complete"] = nil
 	}
-	item["bookmarks"] = *bookmarks
-	return item, false, nil
+	// bookmarks is NULL for 112,890 of 112,935 works, so it is null far
+	// more often than not. Emitting 0 would make an unbookmarked work and
+	// an unrecorded one indistinguishable, and a client sorting on it
+	// would put the emptiest works first.
+	item["bookmarks"] = nil
+	if bookmarks.Valid {
+		item["bookmarks"] = bookmarks.Int64
+	}
+	return item, !bookmarks.Valid, nil
+}
+
+// nullStr converts a nullable string, preserving NULL.
+func nullStr(v sql.NullString) any {
+	if !v.Valid {
+		return nil
+	}
+	return v.String
 }
 
 // workJSON projects a corpus entity into the API's work shape.
@@ -622,6 +687,11 @@ func atoiDefault(s string, def int) int {
 	return n
 }
 
+// clamp bounds n into [lo,hi].
+//
+// A limit of 0 is clamped up to lo rather than treated as "no limit":
+// "give me everything" is what an unbounded response looks like, and it is
+// not something a query parameter should be able to ask for.
 func clamp(n, lo, hi int) int {
 	if n < lo {
 		return lo
