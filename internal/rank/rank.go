@@ -51,17 +51,22 @@ func IsSkip(err error) bool { return err == ErrSkip }
 
 // Candidate is an entity with its score and evidence.
 type Candidate struct {
-	ID       int64
-	Kind     string
-	Title    string
-	URL      string
-	Summary  string
-	Stats    map[string]float64
-	TagNames []string
-	TagIDs   []int32
+	ID      int64              `json:"id"`
+	Kind    string             `json:"kind"`
+	Title   string             `json:"title"`
+	URL     string             `json:"url"`
+	Summary string             `json:"summary,omitempty"`
+	Stats   map[string]float64 `json:"stats,omitempty"`
+	// TagNames is what a client displays; TagIDs is what the graph is
+	// keyed by. Both are needed, and both are tagged: without JSON tags
+	// Go marshals the field names verbatim, so the response carried
+	// "ID", "TagNames" and "URL" and any client would break on the next
+	// rename of a private field.
+	TagNames []string `json:"tags,omitempty"`
+	TagIDs   []int32  `json:"tag_ids,omitempty"`
 
-	Score    float64
-	Evidence []Evidence
+	Score    float64    `json:"score"`
+	Evidence []Evidence `json:"evidence,omitempty"`
 }
 
 // Evidence is one signal's contribution to a score.

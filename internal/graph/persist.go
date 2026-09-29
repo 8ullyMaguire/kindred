@@ -52,29 +52,49 @@ func persistCSRStream(ctx context.Context, b *Builder, g *CSR, res BuildResult) 
 		return fmt.Errorf("write index header: %w", err)
 	}
 
-	// 64 KiB chunks: large enough to keep syscalls down, small enough that
-	// the buffer is never a meaningful share of the budget.
+	// A length-tracked buffer, flushed with an explicit length.
+	//
+	// The first version of this used `buf = buf[:0]` and `f.Write(buf)`,
+	// which writes the whole 16 KiB backing array on every flush and
+	// nothing at all when the buffer is empty — so the file gained a run
+	// of zero padding after each real write. The loader, which is
+	// position-based, then read its neighbours out of that padding: the
+	// first neighbour of the real corpus came back as 2873866, which is
+	// the value of the last offset. The file was 101,032 bytes longer
+	// than its own header implied, which is how the padding was found.
+	//
+	// Write with an explicit length and the layout is exactly what
+	// Decode expects, with no padding anywhere.
 	const chunk = 16 * 1024
-	buf := make([]byte, chunk)
+	var (
+		buf  [chunk]byte
+		fill int
+	)
 	flush := func() error {
-		if len(buf) == 0 {
+		if fill == 0 {
 			return nil
 		}
-		_, err := f.Write(buf)
-		buf = buf[:0]
+		_, err := f.Write(buf[:fill])
+		fill = 0
 		return err
 	}
 	put := func(b []byte) error {
-		if len(buf)+len(b) > chunk {
+		if len(b) > chunk {
+			// Too big to buffer: flush what is held, then write straight
+			// through, so the bytes never need a full-size staging copy.
+			if err := flush(); err != nil {
+				return err
+			}
+			_, err := f.Write(b)
+			return err
+		}
+		if fill+len(b) > chunk {
 			if err := flush(); err != nil {
 				return err
 			}
 		}
-		if len(b) >= chunk {
-			_, err := f.Write(b)
-			return err
-		}
-		buf = append(buf, b...)
+		copy(buf[fill:], b)
+		fill += len(b)
 		return nil
 	}
 

@@ -31,6 +31,36 @@ var (
 	ErrInvalid   = errors.New("invalid")
 )
 
+// EmbeddingCount reports how many embeddings are stored.
+func (s *Store) EmbeddingCount(ctx context.Context) (int, error) {
+	var n int64
+	if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM embeddings`).Scan(&n); err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
+// EmbeddingStats reports how many embeddings are stored and at what width.
+//
+// Width matters: a mean width across a mixed set hides the case where a
+// host has 32-dim vectors for some entities and 64 for others, and a cosine
+// over mismatched vectors is not a cosine at all.
+func (s *Store) EmbeddingStats(ctx context.Context) (map[string]any, error) {
+	var n int64
+	var minDim, maxDim sql.NullInt64
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*), MIN(dim), MAX(dim) FROM embeddings`).Scan(&n, &minDim, &maxDim)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{"count": n}
+	if minDim.Valid {
+		out["min_dim"] = minDim.Int64
+		out["max_dim"] = maxDim.Int64
+	}
+	return out, nil
+}
+
 // Store holds both databases.
 type Store struct {
 	DB     *sql.DB // kindred's own state, read-write, local disk

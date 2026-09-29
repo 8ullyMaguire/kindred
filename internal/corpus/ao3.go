@@ -160,6 +160,54 @@ func (a *AO3) Entity(ctx context.Context, id int64) (Entity, error) {
 
 var ErrNotFound = fmt.Errorf("not found in corpus")
 
+// TagPair is a tag id together with its name.
+//
+// Both halves travel as one because both are needed together: the graph
+// is keyed by id and a response shows names. Carrying them as a pair is
+// what stops them arriving out of step — matching an id list against a
+// name list by position is how a ranking ends up looking entirely
+// plausible while scoring every candidate against the wrong tags.
+type TagPair struct {
+	ID   int32
+	Name string
+}
+
+// TagPairs returns the tags of each work, id and name together.
+//
+// The graph is keyed by tag id while the corpus reports tag names, so
+// resolving one from the other client-side would mean a 634,231-entry
+// map. That map was measured at 50 MB of RSS and deleted once. work_tags
+// joins tags in one row, so both halves arrive together: no extra query,
+// no extra map, and no way for the two lists to disagree.
+func (a *AO3) TagPairs(ctx context.Context, ids []int64) (map[int64][]TagPair, error) {
+	if len(ids) == 0 {
+		return map[int64][]TagPair{}, nil
+	}
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := a.DB.QueryContext(ctx,
+		`SELECT wt.work_id, wt.tag_id, t.name
+		 FROM work_tags wt JOIN tags t ON t.id = wt.tag_id
+		 WHERE wt.work_id IN (`+makePlaceholders(len(args))+`)
+		 ORDER BY wt.work_id, wt.tag_id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("tag pairs: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[int64][]TagPair, len(ids))
+	for rows.Next() {
+		var work int64
+		var pair TagPair
+		if err := rows.Scan(&work, &pair.ID, &pair.Name); err != nil {
+			return nil, err
+		}
+		out[work] = append(out[work], pair)
+	}
+	return out, rows.Err()
+}
+
 // CandidateRows loads works with their tags in one pass — no N+1. Ranking
 // pulls thousands of candidates per request, so a per-candidate tag
 // query is the single largest avoidable cost in the engine.
@@ -285,6 +333,10 @@ func parseDate(s string) float64 {
 	}
 	return 0
 }
+
+// Placeholders renders n comma-separated bind markers. Exported because
+// the engine builds the same IN (...) lists the corpus does.
+func Placeholders(n int) string { return makePlaceholders(n) }
 
 func makePlaceholders(n int) string {
 	if n <= 0 {
