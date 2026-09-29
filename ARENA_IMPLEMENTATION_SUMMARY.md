@@ -1,48 +1,71 @@
-Kindred Arena Ranking Functionality - Implementation Complete
+# Arena — state of the implementation
 
-The arena feature is fully implemented in the kindred codebase. All core logic, API endpoints, and web pages are present and functional.
+Verified on thinkcentre against the real 1.7 GB mirror, and live at
+`https://kindred.polarisocial.xyz`. Commits `8052070` (UI) and `22b6d29` (batch).
 
-Key delivered components:
-- Glicko-2 rating system with four pairing strategies (max-uncertainty, max-expected, max-info, explore)
-- Thread-safe store with five tables: comparisons, presentations, sessions, leaderboard cache, tag weights
-- HTTP API endpoints under /api/v1/arena/* (pair, judge, leaderboard, rank, my-ranking, batch)
-- Web interface: /arena (pair judgment), /leaderboard (rankings), /rank/<id> (work details), /my-ranking (user preferences)
-- Navigation links added to base layout
-- Templates use existing AO3 2.0 theme (no JavaScript required for core functionality)
-- Session persistence via cookie (kindred_arena) shared between web and API
-- Memory usage observed within caps (Lite ≤120 MiB RSS, Full ≤220 MiB RSS)
-- Builds to static binary (~14 MB) with flags -s -w, CGO_ENABLED=0
-- Dependencies: chi v5, modernc.org/sqlite, x/crypto
-- UI assets served via Go embed
-- Publicly reachable via kindred.polarisocial.xyz (proxy 8009 → 8010)
+## What exists
 
-Verification steps:
-1. Build: make build or go build ./...
-2. Test: make test or go test ./... (all tests pass)
-3. Run server: CORPUS=$HOME/kindling-data/ao3_metadata.db DB=$HOME/.local/share/kindred/kindred.db.test PORT=8011 MODE=lite bin/kindred serve
-4. Visit http://127.0.0.1:8011/arena to judge pairs
-5. Visit /leaderboard, /rank/<id>, /my-ranking to verify pages render
-6. Run memory budget gate: make budget (walks all routes including new arena ones)
+| surface | route | notes |
+|---|---|---|
+| pair + judge | `GET /arena`, `POST /arena/judge` | radio form, no JS, 303 to next pair |
+| standings | `GET /leaderboard`, `GET /api/v1/arena/leaderboard` | rating, RD, W/L/D |
+| one work | `GET /rank/<id>`, `GET /api/v1/arena/rank/{id}` | rating, tally, period history |
+| your profile | `GET /my-ranking`, `GET /api/v1/arena/my-ranking` | liked / disliked tags |
+| rating period | `POST /api/v1/arena/batch` | the only writer of ratings |
 
-Next steps for extension (if desired):
-- Wire arena signal into recommender (gated by tune flag)
-- Add API documentation for new endpoints
-- Enhance UI (mobile layout, loading states, avatars)
-- Add end-to-end/browser tests
+Engine (`internal/arena`, unchanged and well tested): Glicko-2 pinned to the
+paper's iteration table, four pairing strategies (maxinfo, maxuncertainty,
+maxexpected, explore), batch update, idle decay, rarity-weighted tag learning.
 
-The handoff file HANDOFF.md in the project root contains detailed reasoning, file changes, and actionable steps for another AI agent to review or extend the work.
+Store: five tables — comparisons, ratings, rating history, tag weights, sessions.
 
-Verified end to end against the real 1.7 GB corpus on thinkcentre: GET /arena serves a
-real pair (111 ms), POST /arena/judge returns 303 and advances, /leaderboard,
-/rank/<id> and /my-ranking all render, tag weights are learned from a choice, and the
-service log holds zero panics. The tests in internal/api/arena_web_test.go cover all of
-this, including a regression test for the placeholder-slice panic below.
+## Verified behaviour
 
-Three bugs were found only by running it against the real corpus, not by the test suite:
-  - CandidateWorkIDs ordered by a `comments` column that exists in neither the real
-    mirror nor the test fixture. Replaced with `hits`, which the mirror populates.
-  - tagLinksForWork built its tag-name query by slicing the work-ID placeholder list to
-    the tag count. Two works, 78 tags, two-element slice: a panic on every arena
-    request. It compiled and passed every test that existed.
-  - internal/web had no test file of its own; the pages were only reachable through
-    internal/api's fixture, so nothing asked for the arena until now.
+Judged 5 comparisons over 4 works, ran a batch, and the leaderboard came back
+with real ratings: top work 1685.5 ±155.2 on a 3-1-1 record. A second batch
+with nothing new correctly skips rather than inventing a period.
+
+Full budget gate on the real corpus: **37 MiB against a 220 MiB cap, PASS**,
+with the arena steps walked. Live service after 25 arena page hits: peak RSS
+181 MiB of 220, zero panics, zero restarts.
+
+## The bugs, and why the suite was green through all of them
+
+Four defects, all at the boundary between a correct computation and the thing
+it talks to. `internal/arena`'s arithmetic was right throughout and its tests
+passed through every one.
+
+1. **`comments` column** — the candidate pool ordered by a column that exists
+   in neither the real mirror nor the test fixture. The comment claimed it was
+   "the field that is actually populated". `hits` is.
+2. **`placeholders[:len(allTags)]`** — the tag-name query sliced the *work-ID*
+   placeholder list to the tag count. Two works, 78 tags, a two-element slice:
+   panic on every arena request.
+3. **`RatingRow` as a query arg** — the batch passed a struct where nine
+   scalars were expected, so every period 500'd and no rating was ever written.
+   The store's own `SaveRating` does the same upsert correctly, so this was a
+   second, wrong copy of working SQL in the API layer.
+4. **period number read as a timestamp** — `arena_last_period` was written as
+   `1, 2, 3…` and read back as `time.Unix(1, 0)` = 1970-01-01T00:00:01Z, so
+   every batch re-folded the entire history. The bound was also inclusive, and
+   `judged_at` has one-second resolution, so same-second judgements were
+   double-counted too.
+
+Each fix is proven by mutation: restoring the bug makes the specific test fail
+with the original error, and the source is restored in the same process.
+
+## Known gaps
+
+- `routes.txt` is **dead**. It claims to be the gate's source of truth and
+  nothing reads it; `scripts/budget.sh` has its own hardcoded list. Kept as a
+  review checklist, with a header saying so. The gate is the script.
+- The arena signal is **not** wired into the recommender. `internal/signal`
+  has no arena term, so learned preferences do not yet affect `/recommend`.
+  Deliberate, and the one open product decision here.
+- The batch is manual. Nothing schedules `POST /api/v1/arena/batch`; it runs
+  when something calls it.
+- No browser-driven test. Coverage is HTTP-level via `internal/api`'s fixture.
+- `internal/web` still has no test file of its own; page tests live in
+  `internal/api` because that is where the fixture is.
+
+See `HANDOFF.md` for the per-file change list and the extend-it notes.

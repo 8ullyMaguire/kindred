@@ -31,26 +31,29 @@ This document outlines the current state of the Arena ranking functionality in t
    - Static binary produced (~14 MB) with flags `-s -w`, CGO_ENABLED=0
    - Dependencies: chi v5, modernc.org/sqlite, x/crypto
    - UI assets served via Go `embed`
-   - Memory caps observed: Lite ≤ 120 MiB RSS, Full ≤ 220 MiB RSS (tested)
-   - Publicly reachable via `kindred.polarisocial.xyz` (proxy 8009 → 8010)
+   - Deployed on thinkcentre as a systemd unit, reachable at
+     `kindred.polarisocial.xyz` (proxy 8009 → 8010)
+   - Measured: budget gate 37 MiB of a 220 MiB cap; live service peaks at
+     181 MiB of 220 after 25 arena page hits, zero panics, zero restarts
 
 ### What is Not Working / Missing
-1. **Automatic Integration with Recommender**:
-   - The arena signal is not yet wired into the recommender loop (tune flag gated)
-   - This is intentional; the arena is currently a standalone feature
 
-2. **API Documentation**:
-   - The new API endpoints are not yet documented in the main API spec (though they follow existing patterns)
+1. **The arena does not influence recommendations.** `internal/signal` has no
+   arena term, so learned tag weights do not yet affect `/recommend`. This is
+   the one open product decision here — the arena collects preferences and
+   ranks works, but nothing consumes them at recommendation time.
 
-3. **UI Polish**:
-   - The arena pair page could benefit from better mobile layout (currently functional)
-   - No visual indication of loading state during pair generation (typically instant)
+2. **The batch is manual.** Nothing schedules `POST /api/v1/arena/batch`; it
+   runs when something calls it. Until it is scheduled, ratings only change
+   when a batch is invoked by hand. This is why the leaderboard was empty
+   after the first deployment, and it is easy to mistake for "no judgements yet".
 
-4. **Test Coverage**:
-   - Unit tests exist for the arena package (internal/arena)
-   - Page tests exist in internal/api/arena_web_test.go (added with this work) and cover
-     all four pages, the judge POST, and the slice-bounds regression
-   - Still no browser-driven test, and no test that runs against the real 1.7 GB mirror
+3. **API documentation** for the arena endpoints is not in the main API spec.
+
+4. **Test coverage gaps**: no browser-driven test, and no test that runs
+   against the real 1.7 GB mirror — which is where all four defects today were
+   found. `internal/web` has no test file of its own; page tests live in
+   `internal/api` because that is where the fixture is.
 
 ### File Changes Summary
 ```
@@ -71,36 +74,52 @@ internal/api/arena_web_test.go   # NEW: page tests for the four arena pages
 
 ## Actionable Steps for Another AI Agent
 
-### 1. Verify the Implementation Locally
-   - Build the binary: `make build` or `go build ./...`
-   - Run the server in lite mode for quick testing:
-     ```bash
-     CORPUS=$HOME/kindling-data/ao3_metadata.db \
-     DB=$HOME/.local/share/kindred/kindred.db.test \
-     PORT=8011 \
-     MODE=lite \
-     bin/kindred serve
-     ```
-   - Open `http://127.0.0.1:8011/` in a browser
-   - Navigate to `/arena` and verify a pairing appears
-   - Judge a pair (pick a radio, then submit) and verify you get a new pair
-   - Visit `/leaderboard` to see ranked works
-   - Visit `/rank/<id>` for a specific work (replace `<id>` with a work ID from the leaderboard)
-   - Visit `/my-ranking` to see your learned tag preferences (requires at least 3 judgments)
+### 1. Verify the Implementation
+
+   **The corpus is NOT on the development host.** It is 1.7 GB and lives only
+   on thinkcentre at `/home/alvaro/kindling-data/ao3_metadata.db`. Running the
+   server locally will fail with `unable to open database file (14)`. Verify
+   there:
+
+   ```bash
+   make build
+   scp bin/kindred thinkcentre:/tmp/kindred-test
+   ssh thinkcentre '/tmp/kindred-test serve \
+     --corpus /home/alvaro/kindling-data/ao3_metadata.db \
+     --db /tmp/kindred-test.db --listen 127.0.0.1:8012 --mode lite &'
+   ```
+
+   Then walk the arena, and note that a leaderboard is empty until a **batch
+   has run** — judging alone records comparisons but rates nothing:
+
+   ```bash
+   curl -s localhost:8012/arena            # a pair, two cards
+   curl -s -X POST localhost:8012/api/v1/arena/batch   # rates the period
+   curl -s localhost:8012/leaderboard      # now populated
+   ```
+
+   The live service is already deployed and reachable at
+   `https://kindred.polarisocial.xyz`.
 
 ### 2. Run the Test Suite
-   - Ensure all tests pass: `make test` or `go test ./...`
-   - Pay special attention to:
-     - `internal/arena` tests (core logic)
-     - `internal/store` tests (arena tables)
-     - No web-specific tests exist; consider adding them
+   - `make test` or `go test ./...` — all 14 packages pass.
+   - Arena coverage: `internal/arena` (arithmetic), `internal/api/arena_web_test.go`
+     (the four pages), `internal/api/arena_batch_test.go` (the batch write path).
+   - The batch path had **no** tests until `arena_batch_test.go` was added, and
+     three defects lived there. If you add arena behaviour, test the write, not
+     just the arithmetic — that boundary is where every bug so far has been.
 
-### 3. Check Memory Usage (Optional but Recommended)
-   - The project has a strict memory budget. Run the budget gate to verify:
-     ```bash
-     make budget
-     ```
-   - This will walk all routes (including the new arena ones) and exit non-zero if RSS exceeds the cap.
+### 3. Check Memory Usage
+   ```bash
+   scripts/budget.sh bin/kindred <corpus> <db> 8013 full
+   ```
+   Exits non-zero over the cap. Last run on the real corpus: 37 MiB of 220,
+   PASS, arena steps included.
+
+   **Do not trust `routes.txt`** — it claims to be this gate's source of truth
+   and nothing reads it. `scripts/budget.sh` has its own hardcoded probe list,
+   so a route listed in `routes.txt` and absent from the script is outside the
+   budget. Add the probe to the script.
 
 ### 4. Extend the Functionality (if desired)
    - **Wire into Recommender**: 
