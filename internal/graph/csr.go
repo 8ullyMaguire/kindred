@@ -126,6 +126,24 @@ func (g *CSR) Name(id int32) string {
 	return g.names[id]
 }
 
+// DropNames releases the tag-name table.
+//
+// The names are needed to write the index file and to answer
+// "what is this tag called", and neither is true while the embedding
+// eigensolver is running. They are 634,231 Go strings — 16 B of header
+// each plus the bytes, so tens of megabytes — and on the Pi-sized budget
+// that is the difference between fitting and not.
+//
+// The index file is written before this is called, and the server reloads
+// names from the corpus rather than from the in-memory graph, so nothing
+// reads them afterwards. Calling it twice is safe.
+func (g *CSR) DropNames() {
+	if g == nil {
+		return
+	}
+	g.names = nil
+}
+
 // SetFrequency records how many works carry a tag, for PMI.
 func (g *CSR) SetFrequency(id int32, n int) {
 	if id >= 0 && int(id) < g.NodeCount {

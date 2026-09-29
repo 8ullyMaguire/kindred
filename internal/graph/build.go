@@ -83,6 +83,12 @@ type BuildResult struct {
 // VmHWM per second from outside the process and watching which stage the
 // log line named at the time.
 type Builder struct {
+	// graph is the built index, kept so the caller can drop its name table
+	// before a second large allocation. The names are tens of megabytes
+	// and nothing between the index write and the embedding solve reads
+	// them, so the caller is given the chance to release them.
+	graph *CSR
+
 	Corpus *sql.DB
 	Store  Executor
 	TopN   int
@@ -96,6 +102,16 @@ type Builder struct {
 }
 
 // phase reports a stage boundary to the trace hook.
+// ReleaseGraphNames drops the tag-name table from the built index, if one
+// was built. Safe to call more than once, and safe to call when no build
+// has happened.
+func (b *Builder) ReleaseGraphNames() {
+	if b == nil || b.graph == nil {
+		return
+	}
+	b.graph.DropNames()
+}
+
 func (b *Builder) phase(stage string) {
 	if b.Trace == nil {
 		return
@@ -204,6 +220,7 @@ func (b *Builder) Build(ctx context.Context) (BuildResult, error) {
 	if err != nil {
 		return res, err
 	}
+	b.graph = csr
 	if err := csr.Verify(); err != nil {
 		return res, fmt.Errorf("built graph failed its own invariants: %w", err)
 	}

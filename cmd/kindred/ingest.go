@@ -1,18 +1,12 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
-	"encoding/binary"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/budget"
-	"git.polarisocial.xyz/kindred/kindred/internal/embed"
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
@@ -21,8 +15,7 @@ func runIngest(ctx context.Context, args []string) error {
 	fs := newFlagSet("ingest")
 	c := bindConfig(fs)
 	var (
-		doEmbed    = fs.Bool("embed", false, "also compute the tag embeddings (slow; not needed in lite mode)")
-		embedIters = fs.Int("embed-iters", 60, "power-iteration steps for the embeddings")
+		doEmbed = fs.Bool("embed", false, "after building the index, print the command that builds the embeddings")
 	)
 	c, err := finishConfig(c, fs, args)
 	if err != nil {
@@ -89,12 +82,42 @@ func runIngest(ctx context.Context, args []string) error {
 	// drops the embedding signal and renormalises the remaining weights
 	// instead. Building them unconditionally would make every Pi ingest
 	// pay for a table nothing queries.
+	// The embedding phase runs in a SEPARATE PROCESS.
+	//
+	// Measured on the real corpus: the index build peaks at 181 MiB and the
+	// eigensolver adds 127 MiB of its own (the 32 x 634,232 block is 77 MiB
+	// however it is stored, plus 44 MiB of matrix and 13 MiB of scratch).
+	// In one process the peak is their SUM, 308 MiB against a 220 MiB cap,
+	// and no amount of freeing inside the process helps: the 181 MiB is
+	// SQLite's, holding a 216 MB state database, and it is resident whether
+	// or not anything is reading it.
+	//
+	// In two processes each phase gets the whole cap. That is not a
+	// workaround, it is the actual shape of the problem: the index build
+	// is an I/O-bound job against a database, and the eigensolver is a
+	// compute-bound job over a matrix. They share nothing except the file
+	// on disk, which is the one thing processes are good at sharing.
+	//
+	// The first phase must therefore finish and close its database before
+	// the second opens it, or SQLite's own locking makes this a race
+	// rather than a sequence. The child is started after this function
+	// returns, from main.
 	if *doEmbed {
 		if c.Mode == "lite" {
 			fmt.Println("embed: skipping: --mode lite does not use the embedding signal, " +
 				"and building the table would cost memory nothing reads")
-		} else if err := buildEmbeddings(ctx, s, res.Nodes, c.EmbedDim, *embedIters, c.TopN); err != nil {
-			return err
+		} else {
+			// Everything the embed command needs is already on disk: the
+			// corpus is the same file, the state db is the same file, and
+			// the node count is in graph_meta. So the operator runs:
+			//
+			//   kindred embed --db KINDRED_DB --corpus MIRROR
+			//
+			// as a second command, and each process peaks on its own phase
+			// rather than on the sum of both.
+			fmt.Printf("embed: the index is built. Run the embedding phase as a "+
+				"separate command so each fits the budget on its own:\n"+
+				"  kindred embed --db %s --corpus <mirror>\n", c.DB)
 		}
 	}
 
@@ -138,191 +161,6 @@ func corpusStamp(ctx context.Context, db *sql.DB) string {
 		return ""
 	}
 	return newest.String
-}
-
-// buildEmbeddings computes the tag embeddings and stores them.
-//
-// The shapes do not line up, and that is the whole problem:
-//
-//   - the solver produces components: k=32 vectors, each of `nodes`
-//     float32 values, one per tag. Component-major, 81 MB total.
-//   - the store wants one row per (kind, entity) with a dim-vector blob:
-//     entity-major, so tag t's vector is (c0[t], c1[t], ... c31[t]).
-//
-// Holding both to transpose in memory is 162 MB on the real corpus, on top
-// of the 137 MB the solver already needs — which is how the first version
-// reached 379 MB against a 220 MB cap. A per-component sink does not help:
-// one component carries only 1 of the 32 coordinates, so it cannot write a
-// complete row without the other 31.
-//
-// So the components go to disk as they are produced — 2.5 MB each, written
-// through a length-tracked buffer — and a second pass reads all 32 streams
-// in lockstep and writes the transposed rows. The transpose needs one
-// coordinate per component at a time, so its working set is 32 buffered
-// readers, not 32 vectors. Peak stays at the solver's, ~140 MB.
-func buildEmbeddings(ctx context.Context, s *store.Store, nodes, dim, iters, topN int) error {
-	peak := func(stage string) {
-		kiB, _ := budget.PeakRSSKiB()
-		fmt.Printf("  [%-18s] peak RSS %6.1f MiB\n", stage, float64(kiB)/1024)
-	}
-	peak("embed:matrix")
-	started := time.Now()
-
-	// Components land in a temp dir beside the state DB, so the build can be
-	// retried without recomputing and so a failed run leaves no half-written
-	// table behind.
-	dir, err := os.MkdirTemp(filepath.Dir(s.Path), "embed-*")
-	if err != nil {
-		return fmt.Errorf("embed: temp dir: %w", err)
-	}
-	defer os.RemoveAll(dir)
-
-	files := make([]*os.File, 0, dim)
-	defer func() {
-		for _, f := range files {
-			f.Close()
-		}
-	}()
-
-	var res embed.BuildResult
-	res, err = embed.BuildTo(ctx, s.Corpus, nodes, dim, iters, topN,
-		func(component int, comp []float32) error {
-			if len(comp) != nodes {
-				return fmt.Errorf("embed: component %d has %d entries, want %d "+
-					"(one per tag)", component, len(comp), nodes)
-			}
-			if component >= dim {
-				return fmt.Errorf("embed: solver produced component %d but dim is %d",
-					component, dim)
-			}
-			path := filepath.Join(dir, fmt.Sprintf("c%03d.f32", component))
-			f, err := os.Create(path)
-			if err != nil {
-				return err
-			}
-			// A bufio.Writer is a fixed 4 KB buffer, and its Flush is what
-			// makes the length exact. Writing the component directly as a
-			// 2.5 MB byte slice is the alternative and costs that much
-			// transiently; the file is written once and read once, so the
-			// smaller peak is worth the extra pass through a buffer.
-			w := bufio.NewWriterSize(f, 1<<16)
-			if err := binary.Write(w, binary.LittleEndian, comp); err != nil {
-				f.Close()
-				return err
-			}
-			if err := w.Flush(); err != nil {
-				f.Close()
-				return err
-			}
-			files = append(files, f)
-			return nil
-		})
-	if err != nil {
-		return err
-	}
-	if len(files) < dim {
-		return fmt.Errorf("embed: solver produced %d components, want %d; the "+
-			"corpus may have too few independent signals", len(files), dim)
-	}
-	peak("embed:solved")
-
-	if _, err := s.DB.ExecContext(ctx, `DELETE FROM embeddings`); err != nil {
-		return err
-	}
-	// Batched transactions, not one for the whole table.
-	//
-	// The database is in WAL mode, and a single transaction inserting
-	// 634,231 rows holds every page it dirties in the write-ahead log
-	// until commit. Measured: the store step took the peak from 192 MB to
-	// 325 MB, and the extra 133 MB was the log, not the data. Batching
-	// every 5,000 rows caps the log at ~1 MB.
-	//
-	// Committing per row instead would be 634,231 fsyncs and minutes of
-	// wall clock, which is why the batch is 5,000 rather than 1.
-	//
-	// A crash midway leaves a table with fewer tags than it should have,
-	// so `embed_stored` is written only in the final batch: a partial set
-	// is detectable rather than something a reader has to infer from
-	// counting rows.
-	const batch = 5000
-	var tx *sql.Tx
-	var stmt *sql.Stmt
-	beginBatch := func() error {
-		var err error
-		if tx, err = s.DB.BeginTx(ctx, nil); err != nil {
-			return err
-		}
-		if stmt, err = tx.PrepareContext(ctx,
-			`INSERT INTO embeddings(kind, entity_id, dim, vec) VALUES('tag',?,?,?)`); err != nil {
-			tx.Rollback()
-			return err
-		}
-		return nil
-	}
-	commitBatch := func() error {
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-		return nil
-	}
-	if err := beginBatch(); err != nil {
-		return err
-	}
-	// The component files were written through these handles, so each is
-	// positioned at its end. The transpose pass reads them from the
-	// beginning: seek, or the first read is an EOF.
-	for _, f := range files {
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			return fmt.Errorf("embed: rewind component: %w", err)
-		}
-	}
-
-	rowBuf := make([]byte, dim*4)
-	written := 0
-	for row := 0; row < nodes; row++ {
-		for c := 0; c < dim; c++ {
-			if err := binary.Read(files[c], binary.LittleEndian, rowBuf[c*4:c*4+4]); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("embed: reading tag %d coordinate %d: %w", row, c, err)
-			}
-		}
-		if _, err := stmt.ExecContext(ctx, int64(row), dim, rowBuf); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("embed: store tag %d: %w", row, err)
-		}
-		written++
-		if written%batch == 0 {
-			if err := commitBatch(); err != nil {
-				return err
-			}
-			if err := beginBatch(); err != nil {
-				return err
-			}
-		}
-	}
-	if err := commitBatch(); err != nil {
-		return err
-	}
-	// Checkpoint the log into the database and let SQLite shrink the WAL.
-	// Without this the -wal file stays at its high-water size and the pages
-	// it holds are counted in the process's RSS until the file is truncated.
-	if _, err := s.DB.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
-		return fmt.Errorf("embed: checkpoint: %w", err)
-	}
-	peak("embed:stored")
-
-	elapsed := time.Since(started)
-	fmt.Printf("embed rows=%d dim=%d top_n=%d iters=%d entries=%d in %s\n",
-		res.Rows, res.Dim, res.TopN, res.Iterations, res.Entries,
-		elapsed.Round(time.Millisecond))
-	if err := s.SetMeta(ctx, "embed_dim", fmt.Sprint(res.Dim)); err != nil {
-		return err
-	}
-	if err := s.Log(ctx, "embed", fmt.Sprintf("rows=%d dim=%d top_n=%d iters=%d entries=%d",
-		res.Rows, res.Dim, res.TopN, res.Iterations, res.Entries)); err != nil {
-		return err
-	}
-	return nil
 }
 
 func runStats(ctx context.Context, args []string) error {

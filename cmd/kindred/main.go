@@ -55,6 +55,8 @@ func main() {
 		err = runServe(ctx, args)
 	case "ingest":
 		err = runIngest(ctx, args)
+	case "embed":
+		err = runEmbed(ctx, args)
 	case "recommend":
 		err = runRecommend(ctx, args)
 	case "stats":
