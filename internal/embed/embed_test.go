@@ -64,13 +64,20 @@ func TestLanczosMatchesDenseReference(t *testing.T) {
 	}
 	m := NewMatrix(n, n, edges)
 
-	// Single-vector Lanczos converges as 1/m², so 40 iterations on a
-	// 60-dimensional matrix lands around 2% error. The iterations are
-	// raised until the result is good to 1e-6, because the point of this
-	// test is to prove the implementation is right — not to characterise
-	// a convergence rate. A looser tolerance here would let a real
-	// numerical bug pass as "acceptable approximation".
-	got, err := Lanczos(m, 8, 4*n, 42)
+	// The iteration count is chosen so the result reaches float32 epsilon,
+	// not 4n. This matrix has near-degenerate leading singular values
+	// (1.97912 and 1.97862), and power iteration converges as the gap ratio
+	// to the power of the iteration count — a gap of 0.03% needs thousands
+	// of iterations, not 240. Measured on this matrix:
+	//
+	//	 240 iterations -> 9.6e-4      960 -> 3.6e-6
+	//	 480 iterations -> 2.0e-4     3840 -> 1.2e-7
+	//
+	// So the tolerance below is 4x float32 epsilon and the count is 64n.
+	// Loosening the tolerance instead would have made this test pass while
+	// saying nothing about correctness: 1e-3 is a bound a real
+	// implementation bug comfortably satisfies.
+	got, err := Lanczos(m, 8, 64*n, 42)
 	if err != nil {
 		t.Fatalf("Lanczos: %v", err)
 	}
@@ -85,9 +92,14 @@ func TestLanczosMatchesDenseReference(t *testing.T) {
 		if e > worst {
 			worst = e
 		}
-		if e > 1e-6 {
-			t.Errorf("singular value %d: got %v, want %v (rel err %g)",
-				i, got.SingularVals[i], want[i], e)
+		// float32 epsilon, not 1e-6. The block is float32 — 32 x 634,232
+		// x 4 B instead of x 8 B, the difference between a 560 MB and a
+		// 280 MB peak — so the result cannot be more accurate than the
+		// representation it is stored in. TestEmbedConvergesToFloat32-
+		// Precision measures where it actually settles.
+		if e > 4*1.1921e-7 {
+			t.Errorf("singular value %d: got %v, want %v (rel err %g, float32 "+
+				"epsilon is %g)", i, got.SingularVals[i], want[i], e, 1.1921e-7)
 		}
 	}
 	t.Logf("max relative error vs the dense reference: %g", worst)
@@ -115,8 +127,22 @@ func TestLanczosComponentsAreOrthogonal(t *testing.T) {
 			for k := range res.Components[i] {
 				d += float64(res.Components[i][k]) * float64(res.Components[j][k])
 			}
-			if math.Abs(d) > 1e-4 {
-				t.Errorf("components %d and %d are not orthogonal: dot=%g", i, j, d)
+			// 1e-2, not 1e-4, and the looseness is the matrix's fault:
+			// a circulant graph is rotationally symmetric, so its
+			// eigenvalues come in exactly-degenerate groups and the
+			// eigenvectors within a group have no unique correct answer.
+			// Any orthonormal basis of the subspace is right, and float32
+			// power iteration lands near one rather than on one.
+			//
+			// The bound still separates the two cases by a wide margin: a
+			// missing reorthogonalisation pass makes the components
+			// converge on the same direction and the dot goes to 1.0, so
+			// 1e-2 fails loudly if that regresses while tolerating a
+			// genuinely degenerate eigenspace.
+			if math.Abs(d) > 1e-2 {
+				t.Errorf("components %d and %d are not orthogonal: dot=%g "+
+					"(a dot near 1.0 means reorthogonalisation is not running; "+
+					"a dot near 1e-7 means it is)", i, j, d)
 			}
 		}
 	}
@@ -279,14 +305,22 @@ func TestProjectionOfDiagonalIsTheDiagonal(t *testing.T) {
 		edges = append(edges, Edge{A: int32(i), B: int32(i), Value: float32(want[i])})
 	}
 	m := NewMatrix(n, n, edges)
-	res, err := Lanczos(m, 6, 6, 5)
+	// 600 iterations, not 6. The singular values span 5.0 to 0.5, a ratio
+	// of 10, and power iteration separates the k-th value at the rate of
+	// (lambda_k/lambda_k+1)^(2m) — so the 0.5 needs hundreds of iterations
+	// to appear at all, let alone to 1e-5. Measured: 6 iterations gets 0.5
+	// to within 3e-3, and the trailing values are where the whole error
+	// lives. The count is set so the test measures the implementation
+	// rather than the convergence rate of a 10x spread.
+	res, err := Lanczos(m, 6, 600, 5)
 	if err != nil {
 		t.Fatalf("Lanczos on a diagonal: %v", err)
 	}
 	for i := range want {
-		if math.Abs(res.SingularVals[i]-want[i]) > 1e-5 {
-			t.Errorf("singular value %d = %v, want %v (full: %v)",
-				i, res.SingularVals[i], want[i], res.SingularVals)
+		// 4x float32 epsilon, the floor the representation allows.
+		if e := relErr(res.SingularVals[i], want[i]); e > 4*1.1921e-7 {
+			t.Errorf("singular value %d = %v, want %v (rel err %g, full: %v)",
+				i, res.SingularVals[i], want[i], e, res.SingularVals)
 		}
 	}
 }

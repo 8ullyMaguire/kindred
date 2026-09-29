@@ -40,6 +40,25 @@ type BuildResult struct {
 // its own, and this function's whole purpose is to stay inside a budget
 // that the ingest peak is already close to.
 func Build(ctx context.Context, db *sql.DB, nodeCount, dim, iters, topN int) ([][]float32, BuildResult, error) {
+	// Build holds every component in memory at once: k x Rows float32 is
+	// 32 x 634,232 x 4 = 81 MB, and it is live alongside the block the
+	// solver needed. BuildTo exists for the caller that can consume them
+	// one at a time; the store write is the obvious such caller.
+	return build(ctx, db, nodeCount, dim, iters, topN, nil)
+}
+
+// BuildTo computes the embeddings and hands each component to sink as it is
+// produced, so at most one component is live at a time.
+//
+// The difference is 81 MB of peak on the real corpus, and it is the same
+// lesson as the CSR: the caller's peak should be shaped by what it is
+// doing, not by the largest intermediate the library happened to produce.
+func BuildTo(ctx context.Context, db *sql.DB, nodeCount, dim, iters, topN int, sink func(i int, comp []float32) error) (BuildResult, error) {
+	_, res, err := build(ctx, db, nodeCount, dim, iters, topN, sink)
+	return res, err
+}
+
+func build(ctx context.Context, db *sql.DB, nodeCount, dim, iters, topN int, sink func(int, []float32) error) ([][]float32, BuildResult, error) {
 	var res BuildResult
 	if nodeCount <= 0 || dim <= 0 {
 		return nil, res, fmt.Errorf("embed: need a positive node count and dimension")
@@ -54,7 +73,7 @@ func Build(ctx context.Context, db *sql.DB, nodeCount, dim, iters, topN int) ([]
 	}
 	res.Entries = m.entries()
 
-	out, err := Embed(m, dim, iters)
+	out, err := EmbedTo(m, dim, iters, sink)
 	if err != nil {
 		return nil, res, err
 	}

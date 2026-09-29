@@ -106,7 +106,26 @@ func Open(ctx context.Context, path, corpusPath string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
+	// The pragmas that bound memory belong on the WRITING connection, not
+	// only the read-only corpus one.
+	//
+	// The state database is where the 634,231 embedding rows land, and it
+	// opened with only busy_timeout, journal_mode and foreign_keys. SQLite
+	// then used its default page cache — around 2,000 pages, but growing
+	// toward whatever the connection wants — and grew the WAL freely during
+	// the bulk insert. Measured: the store step added 46 MB on top of the
+	// eigensolver's 279, which is 325 against a 220 MB cap.
+	//
+	// mmap_size=0 matters most: a write connection that mmaps the database
+	// counts the mapped pages as resident, and this database reaches
+	// 216 MB. Every byte of that would be charged to the process.
+	db, err := sql.Open("sqlite", path+
+		"?_pragma=busy_timeout(5000)"+
+		"&_pragma=journal_mode(WAL)"+
+		"&_pragma=foreign_keys(ON)"+
+		"&_pragma=mmap_size(0)"+
+		"&_pragma=cache_size(-1024)"+
+		"&_pragma=temp_store(1)")
 	if err != nil {
 		return nil, fmt.Errorf("open kindred db: %w", err)
 	}
@@ -311,7 +330,66 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if _, err := s.DB.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
+	// `CREATE TABLE IF NOT EXISTS` does nothing for a table that already
+	// exists, so a schema change silently applies only to fresh databases.
+	// That is the worst shape for a migration: the code that reads the new
+	// column works against a new database and fails against an old one,
+	// which is a failure only operators upgrading ever see.
+	//
+	// So each shape change is applied to existing tables too, by rebuilding
+	// the table from itself. The cost is one table copy at startup; the
+	// alternative is a version skew that outlives the code.
+	return s.migrate(ctx)
+}
+
+// migrate brings an existing database up to the current schema.
+func (s *Store) migrate(ctx context.Context) error {
+	// embeddings gained a `kind` column: entity ids are per-kind, so work
+	// 1 and tag 1 must not share a primary key.
+	has, err := s.columnExists(ctx, "embeddings", "kind")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := s.DB.ExecContext(ctx, `
+			BEGIN;
+			CREATE TABLE embeddings_new (
+			  kind       TEXT NOT NULL DEFAULT 'tag',
+			  entity_id  INTEGER NOT NULL,
+			  dim        INTEGER NOT NULL,
+			  vec        BLOB NOT NULL,
+			  PRIMARY KEY (kind, entity_id)
+			);
+			INSERT INTO embeddings_new(kind, entity_id, dim, vec)
+			  SELECT 'tag', entity_id, dim, vec FROM embeddings;
+			DROP TABLE embeddings;
+			ALTER TABLE embeddings_new RENAME TO embeddings;
+			COMMIT;`); err != nil {
+			return fmt.Errorf("migrate embeddings: %w", err)
+		}
+	}
 	return nil
+}
+
+// columnExists reports whether a table has a column. It queries the table
+// rather than tracking a version number, so a database created by an older
+// build, a partial migration, or a manual edit is all handled the same way.
+func (s *Store) columnExists(ctx context.Context, table, column string) (bool, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, fmt.Errorf("inspect %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // ---------------------------------------------------------------- meta

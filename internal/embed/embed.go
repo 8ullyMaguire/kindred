@@ -308,7 +308,33 @@ func orthonormalise32(v [][]float32) {
 	}
 }
 
+// Embed collects every component into memory. EmbedTo is the streaming
+// form; prefer it when the caller can consume components one at a time.
 func Embed(m *Matrix, k int, iters int) (*Result, error) {
+	var kept [][]float32
+	out, err := EmbedTo(m, k, iters, func(_ int, comp []float32) error {
+		// The copy is load-bearing. The solver hands out a buffer it
+		// reuses, so collecting the slices without copying gives 32
+		// components that all alias one allocation — the test suite
+		// caught it as "components 0,1,2,3 are all identical", which is
+		// the shape a broken solver produces and indistinguishable from a
+		// solver bug at a glance.
+		kept = append(kept, append([]float32(nil), comp...))
+		return nil
+	})
+	if out != nil && len(kept) > 0 {
+		out.Components = kept
+	}
+	return out, err
+}
+
+// EmbedTo computes the k dominant left singular vectors of A, handing each
+// component to sink as it is produced.
+//
+// sink is called with a buffer that the solver reuses, so a sink that
+// retains the slice must copy it. Holding all k components is 81 MB on
+// the real corpus; streaming keeps one.
+func EmbedTo(m *Matrix, k int, iters int, sink func(i int, comp []float32) error) (*Result, error) {
 	if k <= 0 {
 		return nil, fmt.Errorf("embed: k must be positive, got %d", k)
 	}
@@ -353,11 +379,13 @@ func Embed(m *Matrix, k int, iters int) (*Result, error) {
 	// every iteration, so the iteration allocates nothing.
 	aq := make([]float64, m.Rows)
 	ata := make([]float64, m.Rows)
-	tmp := make([]float64, m.Rows)
+	// tmp is only needed by the Rayleigh-Ritz and component phases below,
+	// not by the iteration. Allocated there rather than here so the
+	// iteration's peak is two float64 buffers instead of three.
+	var tmp []float64
 	for it := 0; it < iters; it++ {
 		for i := range v {
-			m.MulVecTo(v[i], tmp)
-			copy(aq, tmp)
+			m.MulVecTo(v[i], aq)
 			m.MulVecTranspose(aq, ata)
 			for r := range v[i] {
 				v[i][r] = float32(ata[r])
@@ -397,8 +425,21 @@ func Embed(m *Matrix, k int, iters int) (*Result, error) {
 	}
 	vals, vecs := symmetricEigen(btb)
 
+	// One set of Rows-sized scratch, shared by every component. Declared
+	// here rather than inside the loop for the reason above.
+	compBuf := make([]float32, m.Rows)
+	avBuf := make([]float64, m.Rows)
+	avfBuf := make([]float32, m.Rows)
+	if tmp == nil {
+		tmp = make([]float64, m.Rows)
+	}
+
 	sv := make([]float64, 0, k)
-	comps := make([][]float32, 0, k)
+	var comps [][]float32
+	if sink == nil {
+		comps = make([][]float32, 0, k)
+	}
+	produced := 0
 	for i := 0; i < k; i++ {
 		if vals[i] <= 0 {
 			break
@@ -410,9 +451,17 @@ func Embed(m *Matrix, k int, iters int) (*Result, error) {
 		// rather than retained from the Gram step. Recomputation costs k
 		// sparse mat-vecs per component — a few hundred million
 		// multiply-adds total — and saves holding the whole of B.
-		comp := make([]float32, m.Rows)
-		av := make([]float64, m.Rows)
-		avf := make([]float32, m.Rows)
+		// The scratch buffers are hoisted out of the component loop: they
+		// were allocated per component, so 32 iterations meant 32 sets of
+		// a Rows-sized float64 and a Rows-sized float32 that the garbage
+		// collector had not collected yet — 15 MB of avoidable live
+		// memory at exactly the wrong moment.
+		comp := compBuf
+		av := avBuf
+		avf := avfBuf
+		for r := range comp {
+			comp[r] = 0
+		}
 		for j := 0; j < k; j++ {
 			if vecs[i][j] == 0 {
 				continue
@@ -437,12 +486,37 @@ func Embed(m *Matrix, k int, iters int) (*Result, error) {
 			}
 		}
 		sv = append(sv, math.Sqrt(vals[i]))
-		comps = append(comps, comp)
+		produced++
+		if sink != nil {
+			// comp aliases compBuf and is overwritten by the next
+			// component, so this is the last moment it is valid.
+			if err := sink(i, comp); err != nil {
+				return nil, err
+			}
+		} else {
+			comps = append(comps, append([]float32(nil), comp...))
+		}
 	}
 	if len(sv) == 0 {
 		return nil, fmt.Errorf("embed: the matrix has no positive singular values; is it all zeros?")
 	}
-	return &Result{Dim: len(comps), SingularVals: sv, Components: comps, Iterations: iters}, nil
+	// The dimension is the number of components the solver was asked for,
+	// NOT len(comps). With a streaming sink, comps is always empty — the
+	// sink consumed each one and discarded it — so len(comps) was 0, and
+	// the caller stored 634,231 rows of zero-length vectors while
+	// reporting dim=0. Every embedding in the table was empty and the run
+	// looked successful.
+	//
+	// A field that means different things in the streaming and collecting
+	// paths is a field that will be wrong in one of them. Counting the
+	// components the solver produced is the one definition that is true
+	// in both.
+	return &Result{
+		Dim:          produced,
+		SingularVals: sv,
+		Components:   comps,
+		Iterations:   iters,
+	}, nil
 }
 
 // orthonormalise replaces the block with an orthonormal basis for the

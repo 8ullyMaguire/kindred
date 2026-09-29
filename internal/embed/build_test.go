@@ -3,6 +3,7 @@ package embed
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"math"
 	"path/filepath"
 	"testing"
@@ -254,6 +255,144 @@ func TestBuildIsDeterministic(t *testing.T) {
 					"%v vs %v; an irreproducible index cannot be verified", i, r, a[i][r], b[i][r])
 			}
 		}
+	}
+}
+
+// TestEmbedComponentsAreDistinct guards the aliasing bug: Embed collects
+// the components the solver hands it, and the solver reuses one buffer. A
+// collection without a copy yields k components that all point at the same
+// memory, which looks exactly like a solver that failed to separate the
+// eigen-directions — the tests caught it as "components 0,1,2,3 are
+// identical".
+func TestEmbedComponentsAreDistinct(t *testing.T) {
+	n := 40
+	var edges []Edge
+	for i := 0; i < n; i++ {
+		edges = append(edges, Edge{A: int32(i), B: int32((i * 5) % n), Value: 1})
+		edges = append(edges, Edge{A: int32(i), B: int32((i + 7) % n), Value: 0.5})
+	}
+	m := NewMatrix(n, n, edges)
+	out, err := Embed(m, 6, 400)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Components) != 6 {
+		t.Fatalf("got %d components, want 6", len(out.Components))
+	}
+	for i := range out.Components {
+		for j := i + 1; j < len(out.Components); j++ {
+			a, b := out.Components[i], out.Components[j]
+			if len(a) == 0 || len(b) == 0 {
+				continue
+			}
+			same := true
+			for r := range a {
+				if a[r] != b[r] {
+					same = false
+					break
+				}
+			}
+			if same {
+				t.Fatalf("components %d and %d are byte-identical; they are "+
+					"aliasing one reused buffer, not being distinct", i, j)
+			}
+		}
+	}
+}
+
+// TestEmbedToReusesOneBuffer documents the streaming contract: the sink
+// receives a buffer the solver overwrites, so a sink that retains it must
+// copy. This is why the command's sink packs immediately.
+func TestEmbedToReusesOneBuffer(t *testing.T) {
+	n := 30
+	var edges []Edge
+	for i := 0; i < n; i++ {
+		edges = append(edges, Edge{A: int32(i), B: int32((i * 3) % n), Value: 1})
+	}
+	m := NewMatrix(n, n, edges)
+
+	seen := 0
+	var first []float32
+	_, err := EmbedTo(m, 4, 100, func(_ int, comp []float32) error {
+		if first == nil {
+			first = append([]float32(nil), comp...)
+		} else if &comp[0] == &first[0] {
+			t.Fatal("impossible: comparing against the copy")
+		}
+		seen++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen != 4 {
+		t.Fatalf("the sink was called %d times, want 4", seen)
+	}
+	if len(first) != n {
+		t.Fatalf("a component has %d entries, want %d", len(first), n)
+	}
+}
+
+// TestEmbedToReportsTheSameDimAsEmbed guards a field that meant two
+// things. Result.Dim was len(comps), and with a streaming sink comps is
+// always empty — so the command stored 634,231 rows of zero-length
+// vectors and printed dim=0, with no error anywhere. The run looked
+// completely successful.
+func TestEmbedToReportsTheSameDimAsEmbed(t *testing.T) {
+	n := 30
+	var edges []Edge
+	for i := 0; i < n; i++ {
+		edges = append(edges, Edge{A: int32(i), B: int32((i * 3) % n), Value: 1})
+		edges = append(edges, Edge{A: int32(i), B: int32((i + 11) % n), Value: 0.5})
+	}
+	m := NewMatrix(n, n, edges)
+	const k = 6
+
+	collected, err := Embed(m, k, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collected.Dim != k {
+		t.Fatalf("Embed reports Dim=%d, want %d", collected.Dim, k)
+	}
+
+	streamed, err := EmbedTo(m, k, 100, func(int, []float32) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streamed.Dim != collected.Dim {
+		t.Fatalf("EmbedTo reports Dim=%d, Embed reports %d; the streaming "+
+			"path must describe the same result as the collecting one",
+			streamed.Dim, collected.Dim)
+	}
+	if len(streamed.Components) != 0 {
+		t.Errorf("EmbedTo returned %d components; a streaming call should "+
+			"return none", len(streamed.Components))
+	}
+	if len(streamed.SingularVals) == 0 {
+		t.Error("EmbedTo returned no singular values")
+	}
+}
+
+func TestEmbedToPropagatesASinkError(t *testing.T) {
+	n := 20
+	var edges []Edge
+	for i := 0; i < n; i++ {
+		edges = append(edges, Edge{A: int32(i), B: int32((i + 1) % n), Value: 1})
+	}
+	m := NewMatrix(n, n, edges)
+	want := errors.New("sink said no")
+	calls := 0
+	_, err := EmbedTo(m, 4, 50, func(int, []float32) error {
+		calls++
+		return want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("err = %v, want the sink's error to propagate", err)
+	}
+	if calls != 1 {
+		t.Fatalf("the sink was called %d times after failing, want 1: a failing "+
+			"write must stop the run, not keep computing", calls)
 	}
 }
 
