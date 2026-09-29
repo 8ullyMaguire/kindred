@@ -165,7 +165,7 @@ func (s *Store) openCorpus(ctx context.Context, path string) error {
 	// The pragmas are the memory story, and mmap_size=0 is the one that
 	// matters: SQLite's default behaviour maps the database into the
 	// process address space, and on a 1.7 GB corpus that is a 1.7 GB
-	// mapping the kernel can fault in. Measured on the 16 GB host, the Go
+	// mapping the kernel can fault in. Measured on a 16 GB host, the Go
 	// heap never exceeded 73 MB while peak RSS reached 553 MB — the
 	// difference was the corpus mapping, not the program. cache_size is
 	// the page cache in KiB, negative for "kibibytes rather than pages".

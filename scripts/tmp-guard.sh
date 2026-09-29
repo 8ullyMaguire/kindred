@@ -7,7 +7,8 @@
 #
 #     x /tmp/kr-* - - - 5min
 #
-# On the 16 GB host that rule does nothing, and the reason is worth recording
+# On one Arch host tested (systemd 255, 4 GB tmpfs) it does nothing, and
+# the reason is worth recording
 # because it cost an hour to establish empirically:
 #
 #   - A bare `R /tmp/kr-probe - - -` with NO age also removes nothing.

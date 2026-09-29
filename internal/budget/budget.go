@@ -91,7 +91,7 @@ func Check(r Report, capKiB int) error {
 }
 
 // CapKiB is the steady-state cap for a mode, in KiB, from SPEC §6.
-// lite targets a 512 MB Pi; full targets the 16 GB host's 16 GB with twenty
+// lite targets a 512 MB Pi; full targets a 16 GB host running twenty
 // other services resident.
 func CapKiB(mode string) int {
 	if mode == "lite" {

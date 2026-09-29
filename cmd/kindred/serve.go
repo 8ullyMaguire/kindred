@@ -22,7 +22,7 @@ import (
 //
 // The index is memory-mapped, not loaded: mapping 26.8 MB of CSR and
 // touching it per request keeps the resident set near the pages actually
-// used, which is what lets the same binary serve a the 16 GB host and a
+// used, which is what lets the same binary serve a 16 GB host and a
 // 512 MB Pi. A missing index is not fatal — the work and tag endpoints
 // work without it, and the ones that need it answer 503 with a reason
 // rather than pretending the corpus is empty.

@@ -1,17 +1,31 @@
 [Unit]
 Description=kindred — entity recommender over a local mirror
-Documentation=file://~/code/kindred/README.md
+Documentation=https://github.com/polarisocial/kindred
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=kindre
-Group=kindre
 
-ExecStart=~/.local/bin/kindred serve \
-  --corpus ~/kindling-data/ao3_metadata.db \
-  --db ~/.local/share/kindred/kindred.db \
+# The service runs as whoever installs it. Set User= here if you want it
+# under a dedicated account; the default is to run as the invoking user,
+# because the corpus and the state directory are usually both under $HOME
+# and a service account cannot read them without being granted it.
+#
+# There is deliberately no hard-coded "User=" here, and none in any other
+# file. A unit in a public repository that names a person teaches every
+# reader that person's home directory layout, and there is nothing about
+# this service that needs it.
+
+# Adjust these four paths. $STATE is where the index and the embeddings
+# live; $CORPUS is the read-only mirror; the binary comes from the build.
+Environment=STATE=%h/.local/share/kindred
+Environment=CORPUS=%h/kindling-data/ao3_metadata.db
+Environment=KINDRED_BIN=%h/.local/bin/kindred
+
+ExecStart=${KINDRED_BIN} serve \
+  --corpus ${CORPUS} \
+  --db ${STATE}/kindred.db \
   --listen 127.0.0.1:8010 \
   --mode full
 
@@ -40,9 +54,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-# The corpus is under /home, so the state directory and the corpus must be
-# the only writable and readable paths.
-ReadWritePaths=~/.local/share/kindred
+# The corpus is under $HOME, so the state directory is the only writable
+# path and ProtectHome=read-only covers the reads.
+ReadWritePaths=%h/.local/share/kindred
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
