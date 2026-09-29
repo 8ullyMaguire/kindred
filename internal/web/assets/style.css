@@ -1,0 +1,270 @@
+/* kindred -- the web UI for a general entity recommender.
+ *
+ * Palette, type and spacing are taken from the Archive of Our Own's own
+ * stylesheets (public/stylesheets/site/2.0/), so this reads as a member of
+ * that family rather than as a generic light theme. This project is not
+ * affiliated with AO3 and does not reproduce its logo or wordmark.
+ *
+ * The two facts that decide whether it reads correctly:
+ *   - the body is SANS-serif, and only headings are Georgia;
+ *   - links are #900, a dark maroon, not blue.
+ */
+
+/* == TOKENS == */
+
+:root {
+  --bg: #fff;
+  --text: #2a2a2a;
+  --text-strong: #111;
+  --muted: #999;
+  --border: #ddd;
+  --hairline: #ccc;
+  --alt: #eee;
+  --warm: #f3efec;
+  --rose: #efd1d1;
+  --link: #900;
+
+  --sans: 'Lucida Grande', 'Lucida Sans Unicode', Verdana, Helvetica,
+          sans-serif, 'GNU Unifont';
+  --serif: Georgia, serif;
+}
+
+/* == BASE == */
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 100%/1.125 var(--sans);
+  margin: 0;
+  padding: 0;
+}
+
+h1, h2, h3, h4, h5, h6, .heading {
+  font-family: var(--serif);
+  font-weight: 400;
+  word-wrap: break-word;
+}
+
+h1 { font-size: 2.5em; line-height: 1; margin: 0.5em 0; }
+h2 { font-size: 1.75em; line-height: 1.2; margin: 0.6em 0; }
+h3 { font-size: 1.35em; line-height: 1.2; margin: 0.7em 0; }
+h4 { font-size: 1.1em;  line-height: 1.2; margin: 0.8em 0; }
+
+a, a:link, a:visited { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* The gutter is a real AO3 signature: 1em 3em on every page region. */
+#header, #main, #footer { padding: 1em 3em; }
+
+.hidden {
+  display: none;
+}
+
+.landmark {
+  font-size: 0;
+  opacity: 0;
+  position: absolute;
+}
+
+/* == BLOCKS == */
+
+.blurb, fieldset {
+  border: 1px solid var(--border);
+  padding: 1em;
+  overflow: hidden;
+}
+
+fieldset {
+  margin: 1em 0;
+}
+
+legend {
+  font-family: var(--serif);
+  font-size: 1.1em;
+  padding: 0 0.5em;
+}
+
+.warm {
+  background: var(--warm);
+  border: 1px solid var(--border);
+  padding: 0.75em 1em;
+  margin: 0.75em 0;
+}
+
+.note {
+  background: var(--rose);
+  border: 1px solid var(--border);
+  padding: 0.75em 1em;
+  margin: 0.75em 0;
+}
+
+/* == TAGS ==
+ * Not pills. AO3 renders a tag as body-coloured text with a dotted
+ * underline that inverts to maroon on hover. Pills are a Bootstrap
+ * habit and they are the fastest way to stop looking like AO3.
+ */
+
+.tags {
+  list-style: none;
+  margin: 0.5em 0;
+  padding: 0;
+}
+
+.tags li {
+  display: inline;
+  padding-left: 0;
+  padding-right: 0.25em;
+}
+
+a.tag {
+  color: var(--text-strong);
+  line-height: 1.5;
+  text-decoration: none;
+  padding: 0;
+  border-bottom: 1px dotted;
+}
+
+a.tag:hover {
+  background: var(--link);
+  color: #fff;
+}
+
+/* == STATS AND METADATA == */
+
+.stats, .meta {
+  background: var(--warm);
+}
+
+.stats dl, .meta dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15em 0.75em;
+}
+
+.stats dt, .meta dt {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.stats dd, .meta dd {
+  margin: 0;
+}
+
+.count {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.muted { color: var(--muted); }
+
+/* == SEARCH == */
+
+.search-form {
+  margin: 1.5em 0;
+}
+
+.search-form input[type="text"] {
+  border: 1px solid var(--hairline);
+  font: 100% var(--sans);
+  padding: 0.4em 0.6em;
+  width: 22em;
+  max-width: 60%;
+}
+
+.search-form input[type="submit"] {
+  border: 1px solid var(--hairline);
+  background: var(--alt);
+  color: var(--text);
+  font: 100% var(--sans);
+  padding: 0.4em 0.9em;
+  cursor: pointer;
+}
+
+.search-form input[type="submit"]:hover { background: var(--hairline); }
+
+/* == WORKS == */
+
+.work {
+  border-bottom: 1px solid var(--border);
+  padding: 1em 0;
+}
+
+.work:first-of-type { padding-top: 0; }
+
+.work h3 {
+  font-size: 1.35em;
+  margin: 0 0 0.15em;
+}
+
+.work .byline {
+  color: var(--muted);
+  font-size: 0.9em;
+  margin: 0 0 0.4em;
+}
+
+.work .summary {
+  margin: 0.4em 0;
+}
+
+.score {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+/* == RECOMMENDATIONS == */
+
+.recommend {
+  border-left: 3px solid var(--rose);
+  padding-left: 1em;
+}
+
+/* == EVIDENCE ==
+ * A recommendation is a claim, not a fact. Showing why it was made is
+ * the difference between a ranking you can argue with and one you can
+ * only distrust.
+ */
+
+.evidence {
+  color: var(--muted);
+  font-size: 0.9em;
+  margin: 0.3em 0;
+  list-style: none;
+  padding: 0;
+}
+
+.evidence li { padding: 0; }
+
+/* == FOOTER == */
+
+#footer {
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.9em;
+  margin-top: 2em;
+}
+
+#footer a { color: var(--link); }
+
+#header {
+  border-bottom: 1px solid var(--border);
+}
+
+#header .brand {
+  font-family: var(--serif);
+  font-size: 1.6em;
+  margin: 0.2em 0;
+}
+
+#header .tagline {
+  color: var(--muted);
+  margin: 0 0 0.8em;
+  font-size: 0.9em;
+}
+
+/* == NARROW == */
+
+@media screen and (max-width: 40em) {
+  #header, #main, #footer { padding: 1em 1.25em; }
+  .search-form input[type="text"] { width: 100%; max-width: 100%; }
+}

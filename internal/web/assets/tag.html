@@ -1,0 +1,42 @@
+{{define "content"}}
+<p class="count">
+  <strong>{{commas .Tag.WorkCount}}</strong>
+  work{{if ne .Tag.WorkCount 1}}s{{end}} carry this tag.
+</p>
+
+{{if .Neighbours}}
+<h2>Tags that travel with it</h2>
+<p class="count">
+  Scored by PMI: how much more often two tags co-occur than chance alone
+  would explain. Negative pairs are dropped, so a tag everybody uses
+  (like <em>general audiences</em>) correctly appears as a neighbour of
+  nothing.
+</p>
+{{template "taglist" .Neighbours}}
+<fieldset>
+  <dl class="stats">
+    {{range .Neighbours}}
+    {{template "stat" (dict
+        "Label" (printf "%s" .Name)
+        "Value" (printf "PMI %.2f, %s works" .PMI (commas .Count)))}}
+    {{end}}
+  </dl>
+</fieldset>
+{{else}}
+<p class="count">
+  No tag co-occurs with this one often enough to clear the PMI floor.
+  A tag on one or two works has nothing to travel with.
+</p>
+{{end}}
+
+<h2>Works</h2>
+{{if .Works}}
+  <p class="count">Most kudos first, of {{commas .Tag.WorkCount}}.</p>
+  {{range .Works}}{{template "workrow" .}}{{end}}
+  {{if .Limited}}
+  <p class="count">Showing the first {{len .Works}}. Raise <code>?n=</code> for more.</p>
+  {{end}}
+{{else}}
+  <p class="count">No works carry this tag in the mirror.</p>
+{{end}}
+{{end}}

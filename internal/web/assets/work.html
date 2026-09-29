@@ -1,0 +1,75 @@
+{{define "content"}}
+<p class="byline">
+  {{if .Work.URL}}<a href="{{.Work.URL}}" rel="noopener nofollow">{{.Work.Title}}</a> on AO3{{else}}{{.Work.Title}}{{end}}
+</p>
+
+{{if .Work.Summary}}<p class="summary">{{.Work.Summary}}</p>{{end}}
+
+{{/* Stats. A key that is absent prints nothing at all rather than a zero:
+     the corpus has NULL in several of these columns, and a page that
+     claims "0 kudos" is making a statement nobody can support. */}}
+<fieldset>
+  <legend>Details</legend>
+  <dl class="stats">
+    {{$w := .Work.Stats}}
+    {{range workstats}}
+      {{$v := stat $w .Key}}
+      {{if $v}}{{template "stat" (dict "Label" .Label "Value" $v)}}{{end}}
+    {{end}}
+  </dl>
+</fieldset>
+
+{{if .Tags}}
+<h2>Tags</h2>
+{{template "taglist" .Tags}}
+{{end}}
+
+<h2>Recommended because of this work</h2>
+
+{{if .RecommendErr}}
+  <p class="note">
+    The recommendation half failed while the work itself loaded:
+    {{.RecommendErr}}. The rest of this page is accurate.
+  </p>
+{{end}}
+
+{{if .Similar}}
+  <div class="recommend" data-seedable>
+    <form id="seed-form" method="get" action="/recommend" class="hidden">
+      <div data-seeds>
+        {{range .Similar}}<input type="hidden" name="seed" value="ao3_work:{{.ID}}">{{end}}
+      </div>
+    </form>
+    {{range .Similar}}
+      <div class="work">
+        <h3>
+          <a href="/work/{{.ID}}">{{.Title}}</a>
+          <span class="score">{{printf "%.2f" .Score}}</span>
+        </h3>
+        <p class="byline">
+          {{if .URL}}<a href="{{.URL}}" rel="noopener nofollow">on AO3</a> &middot;{{end}}
+          <button type="button" data-seed="ao3_work:{{.ID}}"
+                  class="muted">seed from this</button>
+        </p>
+        {{if .Summary}}<p class="summary">{{shorten .Summary 1}}</p>{{end}}
+        {{if .Evidence}}
+        <ul class="evidence">
+          {{range .Evidence}}<li>{{.Reason}}</li>{{end}}
+        </ul>
+        {{end}}
+        {{if .TagNames}}<p>{{template "taglist" (taghits .)}}</p>{{end}}
+      </div>
+    {{end}}
+    <p class="count">
+      Pick a second seed to rank the intersection &mdash; that is what
+      separates a recommender from a similarity lookup.
+    </p>
+  </div>
+{{else if not .RecommendErr}}
+  <p class="count">
+    Nothing scored above zero for this work. That is a real answer, not a
+    failure: PMI keeps only pairs that co-occur more often than chance
+    predicts, and a work nobody shares tags with has no such pair.
+  </p>
+{{end}}
+{{end}}

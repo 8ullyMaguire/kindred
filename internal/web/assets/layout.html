@@ -1,0 +1,70 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{.Title}} &middot; kindred</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <div id="header">
+      <p class="brand"><a href="/">kindred</a></p>
+      <p class="tagline">
+        A general entity recommender over a local mirror of
+        {{.CorpusWorks}} works. Not affiliated with Archive of Our Own.
+      </p>
+      {{/* Query lives on Base so every page can prefill the box, including
+           the ones that have no search results of their own. */}}
+      <form class="search-form" method="get" action="/search" role="search">
+        <label class="landmark" for="q">Search tags</label>
+        <input type="text" id="q" name="q" value="{{.Query}}" placeholder="search tags&hellip;">
+        <input type="submit" value="Search">
+      </form>
+    </div>
+
+    <div id="main">
+      {{if .Heading}}<h1>{{.Heading}}</h1>{{end}}
+      {{template "content" .}}
+    </div>
+
+    <div id="footer">
+      <p>
+        <a href="/">Search</a> &middot;
+        <a href="/stats">Stats</a> &middot;
+        <a href="/healthz">Health</a> &middot;
+        <a href="/api/v1/stats">JSON API</a>
+      </p>
+      <p>
+        kindred{{if .Version}} {{.Version}}{{end}}{{if .Mode}} &middot; {{.Mode}} mode{{end}}.
+        The API is the product; these pages are a front for it.
+      </p>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+{{end}}
+
+{{/* Shared fragments. Each takes exactly one value, so a caller with
+     several passes {{template "x" (dict "A" 1 "B" 2)}}. */}}
+
+{{define "stat"}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}
+
+{{define "taglist"}}
+<ul class="tags">
+  {{range .}}<li><a class="tag" href="/tag/{{.ID}}">{{.Name}}</a></li>{{end}}
+</ul>
+{{end}}
+
+{{define "workrow"}}
+<div class="work">
+  <h3><a href="/work/{{.ID}}">{{.Title}}</a></h3>
+  <p class="byline">
+    {{.Author}} &middot;
+    {{commas .Kudos}} kudos &middot;
+    {{commas .Hits}} hits{{if .Language}} &middot; {{.Language}}{{end}}
+    {{if .Complete}}<span class="count">(complete)</span>{{end}}
+    {{if .URL}} &middot; <a href="{{.URL}}" rel="noopener nofollow">on AO3</a>{{end}}
+  </p>
+  {{if .Summary}}<p class="summary">{{shorten .Summary 2}}</p>{{end}}
+</div>
+{{end}}

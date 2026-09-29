@@ -1,0 +1,41 @@
+{{define "content"}}
+{{if .Query}}
+  {{if .Results}}
+    <p class="count">{{len .Results}} tag{{if ne (len .Results) 1}}s{{end}} match &ldquo;{{.Query}}&rdquo;.</p>
+    <ul class="tags">
+      {{range .Results}}
+      <li><a class="tag" href="/tag/{{.ID}}">{{.Name}}</a></li>
+      {{end}}
+    </ul>
+  {{else}}
+    <p class="count">Nothing matches &ldquo;{{.Query}}&rdquo;.</p>
+    <p>Tags are matched as substrings, so a shorter word finds more.</p>
+  {{end}}
+{{else}}
+  <p>
+    Pick a tag, or open a work directly. A recommender needs somewhere to
+    start: give it one or two works you liked and it ranks the things that
+    travel with them.
+  </p>
+  <p class="count">
+    Try <a href="/search?q=harry">harry</a>,
+    <a href="/search?q=coffee">coffee</a>, or
+    <a href="/search?q=rivals">rivals</a>.
+  </p>
+
+  <fieldset>
+    <legend>What this is</legend>
+    <p>
+      kindred is a general entity recommender over a read-only local
+      mirror. It is a lightweight replacement for
+      <a href="https://concord.polarisocial.xyz">Concord</a>, which used
+      800&nbsp;MB to 1.2&nbsp;GB; kindred does the same job inside
+      {{if .Mode}}{{.Mode}} mode{{else}}a 220&nbsp;MB budget{{end}}.
+    </p>
+    <p class="count">
+      Every number on this site comes out of a local SQLite mirror. No
+      request leaves the host, and nothing here writes to the corpus.
+    </p>
+  </fieldset>
+{{end}}
+{{end}}

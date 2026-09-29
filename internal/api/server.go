@@ -27,6 +27,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
+	"git.polarisocial.xyz/kindred/kindred/internal/web"
 )
 
 // Server holds the handler dependencies.
@@ -73,7 +74,24 @@ func (s *Server) Routes() http.Handler {
 		writeErr(w, http.StatusNotFound, fmt.Errorf("no route for %s %s", r.Method, r.URL.Path))
 	})
 
-	return s.withLogging(s.withRecovery(mux))
+	api := s.withLogging(s.withRecovery(mux))
+
+	// The HTML frontend wraps the API rather than sitting beside it.
+	//
+	// A bare "/" pattern here would be LESS specific than every /api/v1/
+	// pattern above, so ServeMux would still route those correctly — but
+	// that is a claim about precedence, and web.Pages hands /api/, /stats
+	// and /healthz straight back to the handler above so it cannot be
+	// wrong. A browser asking for a page gets HTML; a client asking for
+	// the API gets exactly the JSON it got before, including the 404.
+	pages := web.Deps{
+		Engine:  s.Engine,
+		Version: s.Version,
+		Lite:    s.Lite,
+		Log:     s.Log,
+	}
+
+	return pages.Pages(api)
 }
 
 // withRecovery turns a panic into a 500 rather than a dropped connection,

@@ -1,0 +1,11 @@
+{{define "content"}}
+<p class="note">{{.Message}}</p>
+<p>
+  The page you asked for is <code>{{.Path}}</code>. The failure above is
+  from kindred itself, not from a missing page.
+</p>
+<p class="count">
+  If this keeps happening, <code>/healthz</code> says whether the service
+  is inside its memory budget, and the service log has the error in full.
+</p>
+{{end}}

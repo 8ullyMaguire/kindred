@@ -1,0 +1,41 @@
+{{define "content"}}
+{{if .Similar}}
+  <div class="recommend" data-seedable>
+    <form id="seed-form" method="get" action="/recommend" class="hidden">
+      <div data-seeds>
+        {{range .Similar}}<input type="hidden" name="seed" value="ao3_work:{{.ID}}">{{end}}
+      </div>
+    </form>
+    {{range .Similar}}
+      <div class="work">
+        <h3>
+          <a href="/work/{{.ID}}">{{.Title}}</a>
+          <span class="score">{{printf "%.2f" .Score}}</span>
+        </h3>
+        <p class="byline">
+          {{if .URL}}<a href="{{.URL}}" rel="noopener nofollow">on AO3</a> &middot;{{end}}
+          <button type="button" data-seed="ao3_work:{{.ID}}" class="muted">seed from this</button>
+        </p>
+        {{if .Summary}}<p class="summary">{{shorten .Summary 1}}</p>{{end}}
+        {{if .Evidence}}
+        <ul class="evidence">
+          {{range .Evidence}}<li>{{.Reason}}</li>{{end}}
+        </ul>
+        {{end}}
+        {{if .TagNames}}<p>{{template "taglist" (taghits .)}}</p>{{end}}
+      </div>
+    {{end}}
+    <p class="count">
+      Add another seed to rank the intersection. That is what separates a
+      recommender from a similarity lookup: one seed gives you what is
+      like this, two give you what is like <em>both</em> of these.
+    </p>
+  </div>
+{{else}}
+  <p class="count">
+    Nothing scored above zero for these seeds. That is a real answer
+    rather than a failure: PMI keeps only pairs that co-occur more often
+    than chance predicts.
+  </p>
+{{end}}
+{{end}}
