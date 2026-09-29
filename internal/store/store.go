@@ -323,6 +323,121 @@ CREATE TABLE IF NOT EXISTS build_log (
 	stage   TEXT NOT NULL,
 	detail  TEXT NOT NULL
 );
+
+-- ------------------------------------------------------------------ arena
+--
+-- The pairwise comparison arena. A user is shown two works, picks one or
+-- neither, and works acquire a Glicko-2 rating from those judgements.
+--
+-- TWO DESIGN CONSTRAINTS, both from the privacy requirement
+-- ("no username, work id or tag id in a snapshot"):
+--
+-- 1. owner_key is a HASH of whatever identifies the comparator, never the
+--    identifier itself. A session cookie would be fine in memory and a
+--    privacy leak in the database, and a dump of this file is the thing
+--    that travels. There is no table anywhere that can produce a list of
+--    users, by construction rather than by policy.
+--
+-- 2. A comparison records the SESSION it came from, and the session is
+--    discarded on expiry. The comparison rows are the durable evidence;
+--    the identity that made them is not retained past its usefulness.
+
+-- One judged comparison. Unrated: the presentation happened but no choice
+-- was recorded yet, so the row exists only to stop the same pair being
+-- shown twice. This is the fatigue record, and it is written at
+-- PRESENTATION time rather than at judgement time -- otherwise a user who
+-- abandons a pair is shown it again, which is the single most reliable way
+-- to make an arena feel broken.
+CREATE TABLE IF NOT EXISTS arena_comparisons (
+	id          INTEGER PRIMARY KEY,
+	work_a      INTEGER NOT NULL,
+	work_b      INTEGER NOT NULL,
+	choice      TEXT,              -- 'a', 'b', or NULL when unrated
+	session_key TEXT NOT NULL,
+	owner_key   TEXT NOT NULL,      -- hashed, never the identifier
+	strategy    TEXT NOT NULL,      -- how this pair was chosen
+	presented_at TEXT NOT NULL DEFAULT (datetime('now')),
+	judged_at   TEXT,
+	-- A pair is unordered, so the low id is stored in work_a. Enforced
+	-- here rather than trusted from the caller: the no-repeat query
+	-- depends on it, and a pair stored the other way round is a pair
+	-- shown twice.
+	CHECK (work_a < work_b),
+	CHECK (choice IS NULL OR choice IN ('a', 'b', 'neither'))
+);
+-- The no-repeat query. Covering, because it only needs these two columns
+-- and reading the whole row to check the choice is what makes it slow.
+CREATE INDEX IF NOT EXISTS idx_arena_pairs
+	ON arena_comparisons(owner_key, work_a, work_b);
+CREATE INDEX IF NOT EXISTS idx_arena_pending
+	ON arena_comparisons(session_key) WHERE judged_at IS NULL;
+
+-- Current Glicko-2 rating per work. One row per work, updated in batch.
+-- phi (the rating deviation) is the confidence and is what stops a single
+-- comparison from creating a celebrity.
+CREATE TABLE IF NOT EXISTS arena_ratings (
+	work_id     INTEGER PRIMARY KEY,
+	mu          REAL NOT NULL DEFAULT 1500.0,
+	phi         REAL NOT NULL DEFAULT 350.0,
+	sigma       REAL NOT NULL DEFAULT 0.06,
+	comparisons INTEGER NOT NULL DEFAULT 0,
+	wins        INTEGER NOT NULL DEFAULT 0,
+	losses      INTEGER NOT NULL DEFAULT 0,
+	draws       INTEGER NOT NULL DEFAULT 0,
+	-- The batch at the end of which this rating was computed. Ratings
+	-- from different periods must never be mixed in one Update, which is
+	-- the whole reason this column exists.
+	period      INTEGER NOT NULL DEFAULT 0,
+	updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_arena_ratings_top ON arena_ratings(mu DESC, phi ASC);
+-- The leaderboard filters on this, so it has to be indexed rather than
+-- sorted in Go over the whole table.
+CREATE INDEX IF NOT EXISTS idx_arena_ratings_confident
+	ON arena_ratings(comparisons, mu DESC);
+
+-- What one comparator has learned: how much they care about each tag.
+--
+-- This is the part that makes the arena personal rather than a global
+-- leaderboard, and it is the reason the arena exists next to the tag
+-- graph rather than instead of it. The graph knows which tags co-occur;
+-- this knows which tags THIS person discriminates on.
+--
+-- weight is a signed preference and n is the evidence behind it. Without
+-- n, a single lucky comparison would put a tag at full strength, and the
+-- recommender would then trust it as much as a hundred comparisons.
+CREATE TABLE IF NOT EXISTS arena_user_tag_weights (
+	owner_key TEXT NOT NULL,
+	tag_id    INTEGER NOT NULL,
+	weight    REAL NOT NULL DEFAULT 0.0,
+	n         INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (owner_key, tag_id)
+) WITHOUT ROWID;
+
+-- Sessions, so a pair can be resumed across a page reload and so fatigue
+-- can be counted. owner_key here too; session_key is the cookie value and
+-- is never logged or exported.
+CREATE TABLE IF NOT EXISTS arena_sessions (
+	session_key TEXT PRIMARY KEY,
+	owner_key   TEXT NOT NULL,
+	created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+	last_seen   TEXT NOT NULL DEFAULT (datetime('now')),
+	comparisons INTEGER NOT NULL DEFAULT 0,
+	skips       INTEGER NOT NULL DEFAULT 0
+);
+
+-- Append-only history, so a rating change can be explained. Without it,
+-- "why is this work ranked 4th" has no answer and a ranking that cannot
+-- explain itself is the first thing users stop trusting.
+CREATE TABLE IF NOT EXISTS arena_rating_history (
+	work_id  INTEGER NOT NULL,
+	period   INTEGER NOT NULL,
+	mu       REAL NOT NULL,
+	phi      REAL NOT NULL,
+	sigma    REAL NOT NULL,
+	at       TEXT NOT NULL DEFAULT (datetime('now')),
+	PRIMARY KEY (work_id, period)
+) WITHOUT ROWID;
 `
 
 // Migrate applies the schema. Idempotent, so it is safe on every start.
