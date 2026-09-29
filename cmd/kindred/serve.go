@@ -28,13 +28,12 @@ import (
 // rather than pretending the corpus is empty.
 func runServe(ctx context.Context, args []string) error {
 	fs := newFlagSet("serve")
-	c, err := loadConfig(fs, args)
+	c := bindConfig(fs)
+	c2, err := finishConfig(c, fs, args)
 	if err != nil {
 		return err
 	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
+	c = c2
 
 	lite := c.Mode == "lite"
 	capKiB := budget.CapKiB(c.Mode)
@@ -166,10 +165,7 @@ func runServe(ctx context.Context, args []string) error {
 // so the two cannot drift: both go through the engine.
 func runRecommend(ctx context.Context, args []string) error {
 	fs := newFlagSet("recommend")
-	c, err := loadConfig(fs, args)
-	if err != nil {
-		return err
-	}
+	c := bindConfig(fs)
 	var (
 		seedArg     = fs.String("seed", "", "seed as kind:id (repeatable via comma)")
 		kind        = fs.String("kind", "ao3_work", "the kind to recommend")
@@ -180,7 +176,8 @@ func runRecommend(ctx context.Context, args []string) error {
 		pool        = fs.Int("pool", 500, "candidate pool size")
 		asJSON      = fs.Bool("json", false, "print the raw JSON response")
 	)
-	if err := fs.Parse(args); err != nil {
+	c, err := finishConfig(c, fs, args)
+	if err != nil {
 		return err
 	}
 

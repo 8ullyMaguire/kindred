@@ -13,7 +13,9 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -30,6 +32,32 @@ var (
 	ErrDuplicate = errors.New("already exists")
 	ErrInvalid   = errors.New("invalid")
 )
+
+// StableSalt returns the operator's stable pseudonymisation salt,
+// generating and storing one on first use.
+//
+// It is opt-in via --stable-salt, and it is not a secret: the salt is
+// published in every manifest, so what it buys is cross-dump linkage, not
+// protection. Generating it lazily means enabling the mode once works
+// without a separate setup step, and every later dump reuses it.
+func (s *Store) StableSalt(ctx context.Context) ([]byte, error) {
+	raw, err := s.Meta(ctx, "stable_salt")
+	if err == nil && raw != "" {
+		decoded, derr := hex.DecodeString(raw)
+		if derr == nil && len(decoded) > 0 {
+			return decoded, nil
+		}
+	}
+	// No salt yet: create one and remember it.
+	salt := make([]byte, 32)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, fmt.Errorf("generate stable salt: %w", err)
+	}
+	if err := s.SetMeta(ctx, "stable_salt", hex.EncodeToString(salt)); err != nil {
+		return nil, err
+	}
+	return salt, nil
+}
 
 // EmbeddingCount reports how many embeddings are stored.
 func (s *Store) EmbeddingCount(ctx context.Context) (int, error) {

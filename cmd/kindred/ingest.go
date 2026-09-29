@@ -13,10 +13,7 @@ import (
 
 func runIngest(ctx context.Context, args []string) error {
 	fs := newFlagSet("ingest")
-	c, err := loadConfig(fs, args)
-	if err != nil {
-		return err
-	}
+	c := bindConfig(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -120,11 +117,9 @@ func corpusStamp(ctx context.Context, db *sql.DB) string {
 
 func runStats(ctx context.Context, args []string) error {
 	fs := newFlagSet("stats")
-	c, err := loadConfig(fs, args)
+	c := bindConfig(fs)
+	c, err := finishConfig(c, fs, args)
 	if err != nil {
-		return err
-	}
-	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	s, err := store.Open(ctx, c.DB, c.CorpusDB)

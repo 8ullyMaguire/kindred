@@ -3,18 +3,15 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 )
 
-// Placeholders for the subcommands implemented in later milestones.
-// Each is replaced by a real implementation with its own tests; a stub
-// that pretends to work is worse than one that refuses.
-
-var errNotImplemented = errors.New("not implemented yet")
-
-func runDump(ctx context.Context, args []string) error   { return errNotImplemented }
-func runVerify(ctx context.Context, args []string) error { return errNotImplemented }
-func runFetch(ctx context.Context, args []string) error  { return errNotImplemented }
-func runTune(ctx context.Context, args []string) error   { return errNotImplemented }
-
-var _ = fmt.Sprint
+// runTune inspects or sets the signal weights.
+//
+// The tune is a named weight vector over signals (SPEC §3.4), stored in
+// the state database so it survives a restart and can be changed without a
+// rebuild. It is the last subcommand still to land; the refusal is honest
+// rather than a partial implementation that would write weights nothing
+// reads.
+func runTune(ctx context.Context, args []string) error {
+	return errors.New("tune: not implemented yet; the default weights in engine.DefaultTune are in use")
+}

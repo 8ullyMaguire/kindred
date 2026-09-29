@@ -87,10 +87,26 @@ func newFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
-// loadConfig resolves config from a command's flag set.
-func loadConfig(fs *flag.FlagSet, args []string) (*config.Config, error) {
+// loadConfig binds the config flags and parses. It does NOT parse.
+//
+// The first version of this bound the config flags, parsed, and returned —
+// so every command that registered its own flags afterwards had them
+// rejected as "flag provided but not defined". `kindred dump --out` was
+// unusable, and the failure mode was silent in the worst way: `-k-anon`
+// was already bound by the config, so passing it appeared to work while
+// `dump`'s own -out did not.
+//
+// Commands now follow one order: register every flag, then call
+// finishConfig to parse and validate.
+func bindConfig(fs *flag.FlagSet) *config.Config {
 	c := config.Load()
 	c.Bind(fs)
+	return c
+}
+
+// finishConfig parses a flag set whose flags are all registered, and
+// checks the one setting every command needs.
+func finishConfig(c *config.Config, fs *flag.FlagSet, args []string) (*config.Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
