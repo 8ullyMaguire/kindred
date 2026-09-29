@@ -21,9 +21,16 @@ if [ ! -d "$backup" ]; then
 	echo "backed up .git to $backup"
 fi
 
-# The replacements are applied to every file in every commit, not just the
-# ones that currently contain them, so a future `git log -p` cannot surface
-# a version that does.
+# Two passes, because the two flags do different things and the first
+# attempt used only one:
+#
+#   --replace-text    rewrites file CONTENT
+#   --replace-message rewrites COMMIT MESSAGES
+#
+# The first run cleaned every file and left "the 16 GB host" in two commit
+# messages, which is the one place a reader is most likely to read it. A
+# history scrub that only does half the job is worse than none, because it
+# reports success.
 git-filter-repo --force \
 	--replace-text <(cat <<'EOF'
 ~/code/kindred==>~/code/kindred
@@ -31,6 +38,11 @@ git-filter-repo --force \
 ~/kindling-data==>~/kindling-data
 ~/.local/bin==>~/.local/bin
 $HOME==>$HOME
+the 16 GB host==>the 16 GB host
+the second host==>the second host
+EOF
+) \
+	--replace-message <(cat <<'EOF'
 the 16 GB host==>the 16 GB host
 the second host==>the second host
 EOF
