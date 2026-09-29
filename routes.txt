@@ -1,0 +1,10 @@
+# Routes exercised by the budget run. One "METHOD PATH" per line.
+# This file is the single source of truth for what `make budget` walks;
+# the API milestone appends to it and nothing else may.
+GET /v1/healthz
+GET /v1/version
+GET /v1/stats
+GET /v1/kinds
+GET /v1/works?per_page=2
+GET /v1/tags?q=&per_page=5
+GET /v1/recommend?kind=ao3_work&seed=ao3_work:1&n=5
