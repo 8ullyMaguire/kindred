@@ -1,39 +1,63 @@
-GO      ?= go
-BIN     ?= bin/kindred
-PORT    ?= 8010
-BUDGET  ?= 262144        # KiB; 256 MiB, the Pi cap (SPEC §6)
-CORPUS  ?=
-DB      ?=
+# kindred — build, test, and the memory budget gate.
+#
+# `make budget` is not a formality. It boots the real server against the
+# real corpus, walks the routes, and exits non-zero over the cap from
+# SPEC §6. The whole project is a memory budget, and a budget nobody
+# checks is a wish.
 
-.PHONY: verify fmt vet test build budget run ingest dump clean
+GO       ?= go
+BIN      := bin/kindred
+PKG      := ./...
+# Cross-compile for the deployment hosts; CGO off keeps the binary static.
+GOOS_TARGET ?= linux
+GOARCH_TARGET ?= amd64
+LDFLAGS  := -s -w
 
-verify: fmt vet test build
+CORPUS   ?= $(HOME)/kindling-data/ao3_metadata.db
+DB       ?= $(HOME)/.local/share/kindred/kindred.db
+PORT     ?= 8010
+MODE     ?= full
 
-fmt:
-	@out="$$(gofmt -l . )"; \
-	if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
+.PHONY: all
+all: build test
 
-vet:
-	$(GO) vet ./...
-
-test:
-	$(GO) test -timeout 300s ./...
-
+.PHONY: build
 build:
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '-s -w' -o $(BIN) ./cmd/kindred
+	$(GO) build ./...
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/kindred
+	@echo "built $(BIN) ($$(stat -c%s $(BIN) | numfmt --to=iec))"
 
-# The gate this project exists to satisfy (SPEC §1, §6).
-budget: build
-	./scripts/budget.sh
+.PHONY: test
+test:
+	$(GO) test -count=1 $(PKG)
 
-run: build
-	./$(BIN) serve --db $(DB) --corpus $(CORPUS)
+.PHONY: race
+race:
+	$(GO) test -count=1 -race $(PKG)
 
+.PHONY: vet
+vet:
+	$(GO) vet $(PKG)
+	@test -z "$$(gofmt -l . | tee /dev/stderr)" || (echo "gofmt: files above need formatting" && false)
+
+.PHONY: install
+install: build
+	install -Dm755 $(BIN) $(HOME)/.local/bin/kindred
+	@echo "installed to $(HOME)/.local/bin/kindred"
+
+# The index. Takes about 100 seconds against the real corpus, so it is
+# not part of `all`.
+.PHONY: ingest
 ingest: build
-	./$(BIN) ingest --corpus $(CORPUS) --db $(DB)
+	$(BIN) ingest --corpus $(CORPUS) --db $(DB) --mode $(MODE)
 
-dump: build
-	./$(BIN) dump --corpus $(CORPUS) --db $(DB) --out $(OUT)
+# The budget gate. Boots the server, exercises the routes, reads VmHWM
+# from the kernel, and fails if the peak is over the cap for the mode.
+.PHONY: budget
+budget: build
+	@./scripts/budget.sh $(BIN) $(CORPUS) $(DB) $(PORT) $(MODE)
 
+.PHONY: clean
 clean:
 	rm -rf bin
+	$(GO) clean -testcache

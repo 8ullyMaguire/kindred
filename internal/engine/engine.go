@@ -7,8 +7,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
-	"sort"
 	"strings"
 	"time"
 
@@ -84,6 +84,21 @@ type Result struct {
 	Tune  map[string]float64 `json:"tune"`
 }
 
+// DefaultPoolSize is how many candidates a request ranks by default.
+//
+// It is a memory bound, not a quality setting, and it differs by mode
+// because the budget does. Measured: a 200-candidate lite request peaks at
+// 58 MiB against a 60 MiB cap — the candidate set is the largest
+// per-request allocation there is, so a default sized to leave headroom is
+// worth more than a slightly larger pool. The caller can raise it with
+// ?pool= and the budget gate walks a 1000-strong pool in full mode to prove
+// the ceiling still holds.
+const DefaultPoolSize = 200
+
+// FullPoolSize is the default in full mode, where the cap is 220 MiB and
+// the measurement showed 74 MiB with a 1000-strong pool.
+const FullPoolSize = 1000
+
 // DefaultTune weights the signals. They are named and overridable, so
 // ranking is configurable without a code change — the property the
 // previous deployment had and generalised here per kind.
@@ -122,7 +137,7 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 		pool = e.PoolSize
 	}
 	if pool <= 0 {
-		pool = 500
+		pool = DefaultPoolSize
 	}
 
 	// Seeds.
@@ -161,7 +176,12 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 			},
 		}, nil
 	}
-	candEnts, err := e.Corpus.CandidateRows(ctx, candIDs)
+	// Rank from slim rows: stats and tags, no summary. A 39-chapter fic's
+	// summary is a paragraph of prose, and loading one for every candidate
+	// in a 500-strong pool cost 25 MiB per request against the 60 MiB lite
+	// cap. The summary is fetched afterwards for the rows that survive
+	// ranking — a different number by an order of magnitude.
+	candEnts, err := e.Corpus.CandidateRowsSlim(ctx, candIDs)
 	if err != nil {
 		return nil, fmt.Errorf("load candidates: %w", err)
 	}
@@ -207,6 +227,12 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 	for i := range div.Items {
 		signal.SortEvidence(div.Items[i].Evidence)
 	}
+	if err := e.attachSummaries(ctx, div.Items); err != nil {
+		// A missing summary is not a failed request: the ranking is done
+		// and the summary is decoration on top of it. Report it in the
+		// log rather than turning a good ranking into an error.
+		slog.Warn("could not attach summaries", "err", err)
+	}
 	if div.Items == nil {
 		div.Items = []rank.Candidate{}
 	}
@@ -242,13 +268,30 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 		return nil, nil
 	}
 
-	args := make([]any, 0, len(tagIDs))
+	args := make([]any, 0, len(tagIDs)+2)
 	for id := range tagIDs {
 		args = append(args, id)
 	}
+	// The LIMIT is pushed into SQL. The first version selected every work
+	// sharing any seed tag and truncated in Go: 8 seed tags over 112,935
+	// works returned tens of thousands of rows, each with a tag id, and
+	// the truncation threw them all away after materialising them. A
+	// budget-gate trace measured that at +33 MiB on a pool of 200 — 165 KiB
+	// retained per candidate, against a candidate that is a few hundred
+	// bytes. The cap belongs where the work is.
+	//
+	// ORDER BY shared DESC, work_id makes the cut deterministic: the same
+	// seeds must produce the same pool, or two requests with the same
+	// input rank different candidates.
+	args = append(args, limit, limit)
 	q := `SELECT work_id, COUNT(*) AS shared FROM work_tags
-	      WHERE tag_id IN (` + corpus.Placeholders(len(args)) + `)
-	      GROUP BY work_id`
+	      WHERE tag_id IN (` + corpus.Placeholders(len(tagIDs)) + `)
+	      GROUP BY work_id
+	      ORDER BY shared DESC, work_id ASC
+	      LIMIT ?`
+	// Only the tag ids are bound before the limit; the second placeholder
+	// is the offset-free limit itself, so append just once.
+	args = args[:len(tagIDs)+1]
 	rows, err := e.Corpus.DB.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("pool query: %w", err)
@@ -284,15 +327,10 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 
 	// Most-shared-first, then by id so the pool is reproducible. Truncating
 	// before scoring is what bounds the request's work.
-	sort.SliceStable(pool, func(i, j int) bool {
-		if pool[i].shared != pool[j].shared {
-			return pool[i].shared > pool[j].shared
-		}
-		return pool[i].id < pool[j].id
-	})
-	if len(pool) > limit {
-		pool = pool[:limit]
-	}
+	// SQL already ordered and limited this; the sort is not repeated here.
+	// Re-sorting a truncated slice would be harmless but would suggest the
+	// ordering was not guaranteed, and a reader cannot tell whether the
+	// LIMIT is trustworthy.
 	out := make([]int64, 0, len(pool))
 	for _, p := range pool {
 		out = append(out, p.id)
@@ -380,6 +418,47 @@ func (e *Engine) seedVector(seeds []rank.Candidate) []float32 {
 		}
 	}
 	return signal.MeanVec(vecs)
+}
+
+// attachSummaries fills in the summary text for the ranked results.
+//
+// The pool is loaded without summaries and the survivors get them here,
+// so the cost scales with the response size rather than the pool size: 20
+// summaries instead of 500.
+func (e *Engine) attachSummaries(ctx context.Context, items []rank.Candidate) error {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(items))
+	index := make(map[int64]int, len(items))
+	for i, it := range items {
+		ids = append(ids, it.ID)
+		index[it.ID] = i
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := e.Corpus.DB.QueryContext(ctx,
+		`SELECT id, COALESCE(summary,'') FROM works WHERE id IN (`+corpus.Placeholders(len(ids))+`)`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var summary string
+		if err := rows.Scan(&id, &summary); err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			items[i].Summary = summary
+		}
+	}
+	return rows.Err()
 }
 
 // Embedding implements the store interface the embedding signal reads.

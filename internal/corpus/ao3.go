@@ -211,6 +211,87 @@ func (a *AO3) TagPairs(ctx context.Context, ids []int64) (map[int64][]TagPair, e
 // CandidateRows loads works with their tags in one pass — no N+1. Ranking
 // pulls thousands of candidates per request, so a per-candidate tag
 // query is the single largest avoidable cost in the engine.
+// CandidateRowsSlim loads ranking fields only, omitting the summary.
+//
+// Ranking reads stats and tags. The summary is the corpus's largest text
+// field — a 39-chapter fic's summary is a paragraph of prose — and
+// loading it for every candidate in the pool is the difference between a
+// 25 MiB and a 7 MiB request. The engine ranks from the slim rows and
+// then loads the summary for the handful that survive, which is a
+// different number by an order of magnitude.
+func (a *AO3) CandidateRowsSlim(ctx context.Context, ids []int64) ([]Entity, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := a.DB.QueryContext(ctx, `
+		SELECT id, url, title, word_count, hits, kudos, bookmarks, language,
+		       complete, update_date, first_seen
+		FROM works WHERE id IN (`+makePlaceholders(len(args))+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Entity, 0, len(ids))
+	for rows.Next() {
+		var (
+			e          Entity
+			title      sql.NullString
+			url        sql.NullString
+			bookmarks  sql.NullInt64
+			language   sql.NullString
+			complete   sql.NullInt64
+			updateDate sql.NullString
+			firstSeen  sql.NullString
+			wordCount  sql.NullInt64
+			hits       sql.NullInt64
+			kudos      sql.NullInt64
+		)
+		if err := rows.Scan(&e.ID, &url, &title, &wordCount, &hits, &kudos,
+			&bookmarks, &language, &complete, &updateDate, &firstSeen); err != nil {
+			return nil, err
+		}
+		e.Kind = AO3Kind
+		e.Title = title.String
+		e.URL = url.String
+		e.Stats = map[string]float64{
+			"hits": float64(hits.Int64), "kudos": float64(kudos.Int64),
+			"word_count":    float64(wordCount.Int64),
+			"has_bookmarks": boolToFloat(bookmarks.Valid),
+		}
+		if bookmarks.Valid {
+			e.Stats["bookmarks"] = float64(bookmarks.Int64)
+		}
+		if language.Valid {
+			e.Stats["language_is_english"] = boolToFloat(language.String == "en")
+		}
+		if complete.Valid {
+			e.Stats["complete"] = float64(complete.Int64)
+		}
+		// parseDate is the one parser in this package, and the slim loader
+		// uses it too. A second parser is how a recency signal starts
+		// disagreeing with itself depending on which query loaded the row.
+		if updateDate.Valid {
+			e.Stats["update_date"] = parseDate(updateDate.String)
+		}
+		if firstSeen.Valid {
+			e.Stats["first_seen"] = parseDate(firstSeen.String)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func boolToFloat(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 func (a *AO3) CandidateRows(ctx context.Context, ids []int64) ([]Entity, error) {
 	if len(ids) == 0 {
 		return nil, nil

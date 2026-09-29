@@ -1,0 +1,63 @@
+[Unit]
+Description=kindred — entity recommender over a local mirror
+Documentation=file://~/code/kindred/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kindre
+Group=kindre
+
+ExecStart=~/.local/bin/kindred serve \
+  --corpus ~/kindling-data/ao3_metadata.db \
+  --db ~/.local/share/kindred/kindred.db \
+  --listen 127.0.0.1:8010 \
+  --mode full
+
+# The binary exits non-zero on SIGTERM, and a clean shutdown matters more
+# here than usual: the state database is WAL, and a killed process leaves
+# a -wal file the next start has to recover.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+Restart=on-failure
+RestartSec=5
+
+# Memory. The service's own cap is 220 MB (full) and it reports
+# over_budget at /healthz; these limits are the backstop for the case
+# where it is wrong. A restart under pressure beats an OOM kill of a
+# neighbouring service, and this one is the cheapest to lose.
+MemoryMax=512M
+MemoryHigh=400M
+# swap is not a substitute for fitting in RAM: a swapped recommender
+# answers in seconds instead of milliseconds.
+MemorySwapMax=0
+
+# Hardening. The service reads a corpus and answers queries; it needs
+# nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The corpus is under /home, so the state directory and the corpus must be
+# the only writable and readable paths.
+ReadWritePaths=~/.local/share/kindred
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# A recommender serving public data should not be reaching the network.
+# Tor is only used by `kindred fetch`, which is a separate invocation.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

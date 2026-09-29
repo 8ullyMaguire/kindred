@@ -93,6 +93,103 @@ func (g stubGraph) NeighbourScore(q int32, limit int, _ float64) []graph.ScoredN
 }
 func (g stubGraph) Name(id int32) string { return g.names[id] }
 
+// countingGraph records how many times NeighbourScore was called, so a
+// test can prove the vote map is built once per request rather than once
+// per candidate.
+type countingGraph struct {
+	stubGraph
+	calls int
+}
+
+func (g *countingGraph) NeighbourScore(q int32, limit int, total float64) []graph.ScoredNeighbour {
+	g.calls++
+	return g.stubGraph.NeighbourScore(q, limit, total)
+}
+
+func TestNeighbourhoodBuildsTheVoteMapOncePerRequest(t *testing.T) {
+	// The defect: the vote map was rebuilt for every candidate, so a
+	// 500-candidate request constructed 500 identical maps. A budget-gate
+	// trace attributed tens of megabytes to it.
+	resetVoteCache()
+	g := &countingGraph{stubGraph: stubGraph{
+		neighbours: map[int32][]graph.ScoredNeighbour{
+			1: {{TagID: 10, PMI: 3.0, Count: 50}, {TagID: 11, PMI: 1.0, Count: 5}},
+		},
+		names: map[int32]string{10: "slow burn"},
+	}}
+	s := Neighbourhood{G: g, SeedTags: []int32{1}, TotalWorks: 1000}
+
+	for i := 0; i < 20; i++ {
+		cand := rank.Candidate{ID: int64(i), TagIDs: []int32{10, 99}}
+		if _, _, err := s.Score(cand, nil, nil); err != nil {
+			t.Fatalf("candidate %d: %v", i, err)
+		}
+	}
+	// One seed tag, so one NeighbourScore call, no matter how many
+	// candidates were scored.
+	if g.calls != 1 {
+		t.Fatalf("NeighbourScore was called %d times for 20 candidates with 1 seed tag; "+
+			"the vote map is being rebuilt per candidate", g.calls)
+	}
+}
+
+func TestVoteCacheIsBounded(t *testing.T) {
+	// An unbounded cache keyed by seed set is a slow leak: every distinct
+	// request contributes an entry, and the previous deployment shipped
+	// exactly that as _neighborhood_cache.
+	resetVoteCache()
+	g := stubGraph{neighbours: map[int32][]graph.ScoredNeighbour{
+		1: {{TagID: 10, PMI: 1.0}},
+	}}
+	for i := 0; i < 200; i++ {
+		s := Neighbourhood{G: g, SeedTags: []int32{int32(i + 1)}, TotalWorks: 1000}
+		s.votesFor(4)
+	}
+	voteCache.mu.Lock()
+	n := voteCache.order.Len()
+	voteCache.mu.Unlock()
+	if n > voteCache.cap {
+		t.Fatalf("the vote cache holds %d entries for a capacity of %d; "+
+			"it is an unbounded cache, which is a leak on a long-lived process", n, voteCache.cap)
+	}
+}
+
+func TestVoteCacheEvictsLeastRecentlyUsed(t *testing.T) {
+	c := newLRU(2)
+	c.put("a", map[int32]float64{1: 1})
+	c.put("b", map[int32]float64{2: 1})
+	if _, ok := c.get("a"); !ok {
+		t.Fatal("a was evicted early")
+	}
+	// "a" is now most recently used, so "b" is the eviction candidate.
+	c.put("c", map[int32]float64{3: 1})
+	if _, ok := c.get("b"); ok {
+		t.Fatal("b survived; it was the least recently used")
+	}
+	if _, ok := c.get("a"); !ok {
+		t.Fatal("a was evicted; it was the most recently used")
+	}
+}
+
+func TestVoteKeyDistinguishesSeedSetsAndLimits(t *testing.T) {
+	a := voteKey([]int32{1, 2}, 4)
+	b := voteKey([]int32{1, 2}, 4)
+	if a != b {
+		t.Fatal("the same seed set produced two keys")
+	}
+	if a == voteKey([]int32{1, 3}, 4) {
+		t.Fatal("different seed sets produced the same key: one request's votes would answer another's")
+	}
+	if a == voteKey([]int32{1, 2}, 8) {
+		t.Fatal("different limits produced the same key")
+	}
+	// Order matters: a tag set is a set, but two requests that differ only
+	// in tag order are the same request.
+	if a != voteKey([]int32{1, 2}, 4) {
+		t.Fatal("unstable key")
+	}
+}
+
 func TestNeighbourhoodScoresReachableTags(t *testing.T) {
 	g := stubGraph{
 		neighbours: map[int32][]graph.ScoredNeighbour{
@@ -115,6 +212,7 @@ func TestNeighbourhoodScoresReachableTags(t *testing.T) {
 }
 
 func TestNeighbourhoodSkipsWhenUnreachable(t *testing.T) {
+	resetVoteCache()
 	g := stubGraph{neighbours: map[int32][]graph.ScoredNeighbour{
 		1: {{TagID: 10, PMI: 3.0}},
 	}}

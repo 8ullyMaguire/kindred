@@ -1,82 +1,180 @@
 # kindred
 
-A general entity recommender over a local mirror. One static Go binary, no
-runtime services. Recommends entities of any kind from a pluggable source,
-serves a read-only API over the index, and publishes anonymised signed
-snapshots for peers over Tor.
+A general entity recommender over a read-only local mirror, sized to run on
+a Raspberry Pi with 512 MB free and on a workstation with twenty other
+services resident.
 
-Replaces **kindling**, an AO3 fanfiction recommender that needed 6.4 GB
-across two gunicorn workers and was removed from the 16 GB host on
-2026-09-29 for memory. Same corpus, same shape of answer, a fraction of
-the footprint.
+Static Go binary, no CGO, no Python, no ML runtime. 11.7 MB.
 
-## Status
+```
+kindred serve      run the HTTP API (recommend + the unofficial AO3 read surface)
+kindred ingest     measure the corpus and build the index
+kindred recommend  recommend from seeds, from the shell
+kindred dump       write an anonymised, signed snapshot for peers
+kindred verify     verify a snapshot's signature and shard hashes
+kindred fetch      pull a snapshot from a peer's onion service
+kindred stats      print corpus and index statistics
+kindred tune       inspect or set signal weights
+```
 
-Milestones M0–M2 are implemented and tested. M3 (API), M4 (dumps) and M5
-(deploy, parity) are not yet written — see `docs/PLAN.md` for the
-ordering and the reasoning.
+## Measured
 
-## Why the memory is 24x smaller
+Against a 1.7 GB / 112,935-work / 634,231-tag / 7,750,334-edge AO3 mirror:
 
-The previous deployment held the tag co-occurrence graph as a Python
-dict-of-dicts: **3.0 GB resident for 7,750,334 edges over 123,047 tags**.
-A dict entry costs roughly 100 bytes of overhead against 8 bytes of
-payload. The same graph as three arrays — `offsets`, `neighbors`,
-`weights` — is **124 MB**. No algorithm changed; only the representation.
-
-| | kindling | kindred |
+| Path | Peak RSS | Cap |
 |---|---|---|
-| runtime | Python 3.12, 2 gunicorn workers | one Go binary |
-| graph | dict-of-dicts, 3.0 GB | CSR arrays, 124 MB |
-| ML stack | numpy, scipy, scikit-learn, pandas, `implicit` | Go, no ML runtime |
-| binary | — | 10.5 MB, `CGO_ENABLED=0` |
+| `ingest` (full) | 180 MB | 220 MB |
+| `serve` (lite, Pi) | 39.7 MB | 60 MB |
+| `serve` (full) | 67 MB | 220 MB |
 
-## Build and run
+500 candidates ranked in 0.93 s. `ingest` rebuilds the whole index in
+1 m 38 s.
 
-```bash
-make verify            # gofmt, vet, test, build — must be green
-make build
-./bin/kindred ingest --corpus /path/to/mirror.db --db ~/.local/share/kindred/kindred.db
-./bin/kindred stats  --corpus /path/to/mirror.db --db ~/.local/share/kindred/kindred.db
-make budget            # boots the server, walks every route, fails over the RSS cap
+## Quick start
+
+```sh
+# build the index once
+kindred ingest --corpus /path/to/ao3_metadata.db --db ~/.local/share/kindred/kindred.db
+
+# serve it
+kindred serve --corpus /path/to/ao3_metadata.db --db ~/.local/share/kindred/kindred.db \
+  --listen 127.0.0.1:8010 --mode full
+
+# ask it something
+curl 'http://127.0.0.1:8010/api/v1/recommend?seed=ao3_work:17249318&n=5'
 ```
 
-Cross-compile for a Pi — no C toolchain needed on the Pi at all, because
-`modernc.org/sqlite` is pure Go:
+On a Pi, add `--mode lite`: no embeddings, top-24 neighbours, and the
+weights are renormalised so the ranking keeps its balance without the
+dimension that was dropped.
 
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags '-s -w' -o bin/kindred-arm64 ./cmd/kindred
-```
-
-## The corpus is read-only
-
-kindred never writes to the mirror. It is attached with `mode=ro`, and
-`store.Open` fails fast with an actionable message if the file is not
-shaped like a corpus. All of kindred's own state goes to `kindred.db` on
-local disk — never the NFS pool, which is an 8-way mergerfs mount.
-
-## Offline by construction
-
-There is no code path from a request handler to an outbound HTTP client.
-Every request served is a request the upstream project never sees. This is
-the point, not a limitation: "take load off" is best served by not making
-the call.
-
-## Layout
+## The API
 
 ```
-cmd/kindred/        subcommands: serve, ingest, recommend, stats, dump, verify, fetch, tune
-internal/config/    env + flags, atomic kill switch
-internal/store/     two SQLite handles: read-only corpus, read-write kindred.db
-internal/corpus/    the kind-agnostic Entity and the AO3 source adapter
-internal/graph/     the CSR co-occurrence index — the memory story
-internal/embed/     block power iteration with Rayleigh-Ritz projection
-internal/budget/    RSS sampling; the cap the build fails over
-docs/PLAN.md        ordering, milestones, and what this plan got wrong
+POST|GET /api/v1/recommend     seeds -> ranked entities with evidence
+GET     /api/v1/tags/{id}/similar
+GET     /api/v1/ao3/works            list, ?tag= &sort=kudos|words|date|hits
+GET     /api/v1/ao3/works/{id}
+GET     /api/v1/ao3/works/{id}/recommend
+GET     /api/v1/ao3/tags
+GET     /api/v1/ao3/tags/{id}
+GET     /api/v1/ao3/tags/{id}/works
+GET     /healthz                 503 when over the memory budget
+GET     /stats
 ```
 
-## Documentation
+Seeds are `kind:id`, repeatable or comma-separated. `n` caps at 100,
+`limit` at 100, `pool` bounds the work per request.
 
-`docs/SPEC.md` (product and architecture) and `docs/PLAN.md`
-(implementation order and verification) are the design documents. The
-README describes the code.
+## What a response tells you
+
+```json
+{
+  "items": [{"id": 24943012, "title": "...", "score": 0.34,
+             "evidence": [{"signal": "tag_overlap", "value": 0.42,
+                           "weight": 0.28, "reason": "shares 12 tags with seed 1 (jaccard 0.19)"}]}],
+  "meta": {"seeds": 2, "candidates": 500, "tune": "default",
+           "degraded": ["recency"], "shortfall": {"requested": 100, "returned": 90,
+           "reason": "per-group cap of 3 reached"}}
+}
+```
+
+Three fields exist because the previous deployment's failure mode was a
+plausible-looking response built from signals that were quietly doing
+nothing:
+
+- **`degraded`** names every signal that had no opinion on this input. A
+  signal returns a skip, never a zero.
+- **`shortfall`** says how many results you got against how many you asked
+  for, and why. The list is never topped up from below a cap — doing that
+  restores exactly the concentration the cap removed.
+- **`evidence`** is on every item. A ranking you cannot argue with is not
+  one you can tune.
+
+## Memory
+
+The whole project exists to keep this small. The rules that got it there,
+each learned from a measurement that contradicted the obvious answer:
+
+- **Arrays, not maps.** The graph is a CSR. The previous deployment's dict
+  graph was 3.0 GB resident.
+- **Cap during construction.** The adjacency is allocated at its final
+  size, 26.8 MB, and never materialised unpruned at 118.3 MB first.
+- **Stream the index both ways.** Writing it through a length-tracked
+  buffer rather than an `Encode()` copy; reading it through a 256 KiB
+  buffer rather than `os.ReadFile` + `Decode`. Holding the file that
+  describes the graph cost more than the graph.
+- **No ML runtime.** A block power-iteration eigensolver, ~150 lines,
+  over the same sparse matrix.
+- **`/healthz` returns 503 when over budget.** A health check that reports
+  ok at 2× the cap is worse than none.
+
+`Builder.Trace` reports the peak RSS at each build stage. It is not
+scaffolding: the ingest's 571 MB spike survived three wrong theories
+(Go heap, corpus mmap, a `GROUP BY` sorter) and was only located by
+sampling per stage.
+
+## Peer snapshots
+
+Anonymised, content-addressed, signed, and served only over a Tor onion
+service.
+
+```sh
+kindred dump --corpus ... --db ... --out /srv/snapshots --k-anon 20
+kindred verify --dir /srv/snapshots/v0
+kindred fetch --from http://<56-char>.onion --into ./peersnap
+```
+
+What is published is decided per table, and the decisions are the point:
+`works`, `tags` and `work_tags` whole; `users` dropped and replaced by a
+`tag_affinity` table carrying tag weights and no work ids; every
+session and taste table dropped; `cooccurrence_edges` pruned. Rows exist
+only for readers with ≥ K distinct bookmarked works, filtered **before**
+pseudonymisation so the row count cannot reveal who clears the bar.
+
+`onion/` has no clearnet path. The dialer is SOCKS-only with no fallback,
+so a stopped Tor is a failure rather than a leak; `Proxy` is nil so an
+`HTTP_PROXY` in the environment cannot undo it; and a redirect from an
+onion to a clearnet host is refused, which is the vector a peer would
+otherwise use to observe the operator's IP.
+
+`--stable-salt` makes a reader linkable across dumps. It is a research
+affordance and a re-identification risk, and the manifest says which mode
+produced it. A salt in a published document is linkage, not secrecy.
+
+## Data facts this is built around
+
+All measured against the real mirror, not assumed:
+
+- `works.bookmarks` is NULL for 112,890 of 112,935 rows. It is scanned into
+  a `*int64` and a `has_bookmarks` stat is written, so a later sort cannot
+  mistake NULL for zero and rank the emptiest works highest. Nullable text
+  is emitted as `null`, not `""`.
+- `user_work_interactions` stores the same work more than once per user
+  (measured: 7 rows for 4 distinct works), so the k-anon threshold counts
+  `DISTINCT work_id`. Counting rows lets a user who bookmarked four works
+  seven times clear a threshold of seven alone.
+- `interaction_type` is `'bookmarked'` for 173,768 rows and `'bookmarker'`
+  for 9,982. The second is a row *about* a work carrying a user id;
+  counting it attributes one reader's history from another's action.
+- `cooccurrence_graph_meta` claims 20,262 nodes while the edges reference
+  123,047. It is stale, and a stale metadata row is a lie you inherit if
+  you read it. The builder measures the node space from the edges.
+
+## Tests
+
+```sh
+go test ./...
+```
+
+The ones that matter are refusal tests and golden-byte tests. A
+write-then-read round trip passed while the index writer and reader agreed
+on a layout that was wrong — the file was 101,032 bytes longer than its
+own header implied, and it was the loader's own invariant check that
+caught it. So the format tests pin the file size and the bytes at each
+array boundary against the documented layout, with the expected bytes
+built by hand rather than by the other implementation.
+
+## Licence
+
+AGPL-3.0, matching the corpus tooling it sits beside.

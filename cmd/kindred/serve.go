@@ -79,11 +79,15 @@ func runServe(ctx context.Context, args []string) error {
 			"hint", "run \"kindred ingest --embed\"")
 	}
 
+	poolSize := engine.DefaultPoolSize
+	if !lite {
+		poolSize = engine.FullPoolSize
+	}
 	eng := &engine.Engine{
 		Store:    s,
 		Corpus:   ao3,
 		Graph:    g,
-		PoolSize: 500,
+		PoolSize: poolSize,
 		TopN:     c.TopN,
 		Lite:     lite,
 		EmbedDim: embedDim,
@@ -173,7 +177,7 @@ func runRecommend(ctx context.Context, args []string) error {
 		groupBy     = fs.String("group_by", "", "cap per group: tag, author, or empty")
 		maxPerGroup = fs.Int("max_per_group", 0, "cap per group (0 disables)")
 		exclude     = fs.Bool("exclude_seeds", true, "drop the seeds from the results")
-		pool        = fs.Int("pool", 500, "candidate pool size")
+		pool        = fs.Int("pool", 0, "candidate pool size (0 = the mode's default)")
 		asJSON      = fs.Bool("json", false, "print the raw JSON response")
 	)
 	c, err := finishConfig(c, fs, args)

@@ -9,10 +9,15 @@
 package signal
 
 import (
+	"container/list"
 	"context"
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"sort"
+	"strconv"
+	"sync"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
@@ -42,11 +47,14 @@ func (s TagOverlap) Score(c rank.Candidate, seeds []rank.Candidate, _ rank.Store
 	if len(c.TagIDs) == 0 || len(seeds) == 0 {
 		return 0, "", rank.ErrSkip
 	}
-	own := make(corpus.TagSet, len(c.TagIDs))
 	ids := c.TagIDs
 	if s.MaxTags > 0 && len(ids) > s.MaxTags {
 		ids = ids[:s.MaxTags]
 	}
+	if len(ids) == 0 {
+		return 0, "", rank.ErrSkip
+	}
+	own := make(corpus.TagSet, len(ids))
 	for _, id := range ids {
 		own[id] = 1
 	}
@@ -54,14 +62,29 @@ func (s TagOverlap) Score(c rank.Candidate, seeds []rank.Candidate, _ rank.Store
 		return 0, "", rank.ErrSkip
 	}
 
+	// The seed tag sets are built once, outside the candidate loop, and
+	// reused. The first version built a map per seed per candidate: a
+	// budget-gate trace measured a 500-candidate request retaining tens of
+	// megabytes, and the pattern is the classic per-candidate
+	// recomputation the previous deployment's profile also found.
+	//
+	// They are built here rather than passed in because the set is
+	// per-request while the signal value is per-candidate, and a signal
+	// that recomputes an invariant per candidate is the thing being fixed.
+	seedSets := make([]corpus.TagSet, 0, len(seeds))
+	for _, seed := range seeds {
+		set := make(corpus.TagSet, len(seed.TagIDs))
+		for _, id := range seed.TagIDs {
+			set[id] = 1
+		}
+		seedSets = append(seedSets, set)
+	}
+
 	var best float64
 	var bestSeed int64 = -1
 	var bestShared int
-	for _, seed := range seeds {
-		sset := make(corpus.TagSet, len(seed.TagIDs))
-		for _, id := range seed.TagIDs {
-			sset[id] = 1
-		}
+	for si, seed := range seeds {
+		sset := seedSets[si]
 		shared, weight := corpus.Intersect(own, sset)
 		if shared == 0 {
 			continue
@@ -108,19 +131,8 @@ func (s Neighbourhood) Score(c rank.Candidate, _ []rank.Candidate, _ rank.Store)
 		limit = 24
 	}
 
-	// The seed tags vote for their strongest neighbours; a candidate is
-	// scored by the total vote its tags attract. Voting is a set
-	// intersection against a map, so this is O(tags x 1) per candidate
-	// rather than a scan of the neighbourhood per candidate — the
-	// per-candidate-recomputation cost class that dominates a naive
-	// implementation.
-	votes := make(map[int32]float64, 64)
-	for _, st := range s.SeedTags {
-		for _, nb := range s.G.NeighbourScore(st, limit, s.TotalWorks) {
-			votes[nb.TagID] += nb.PMI
-		}
-	}
-	if len(votes) == 0 {
+	votes, ok := s.votesFor(limit)
+	if !ok {
 		return 0, "", rank.ErrSkip
 	}
 
@@ -146,6 +158,108 @@ func (s Neighbourhood) Score(c rank.Candidate, _ []rank.Candidate, _ rank.Store)
 	return score, fmt.Sprintf("%d tags reach the seed neighbourhood; strongest is %q (pmi-weighted vote %.2f)",
 		hits, s.G.Name(bestTag), maxV), nil
 }
+
+// votes memoises the seed-tag vote map, which is identical for every
+// candidate in a request.
+//
+// Without the memo this ran per candidate: a map built from the seed tags'
+// neighbourhoods, discarded, and rebuilt. For 500 candidates with 8 seed
+// tags and 24 neighbours each that is 500 constructions of a 192-entry
+// map to produce one number per candidate. The memo makes it one.
+//
+// The memo is a bounded LRU, not a map that grows. A previous deployment
+// carried an unbounded _neighborhood_cache, which is a slow leak on a
+// long-lived process — the entries are keyed by seed set, and every
+// distinct request contributes one. Eight entries is enough for the
+// concurrent-request spread this serves and small enough that the worst
+// case is a kilobyte.
+func (s Neighbourhood) votesFor(limit int) (map[int32]float64, bool) {
+	key := voteKey(s.SeedTags, limit)
+	if v, ok := voteCache.get(key); ok {
+		return v, len(v) > 0
+	}
+	votes := make(map[int32]float64, 64)
+	for _, st := range s.SeedTags {
+		for _, nb := range s.G.NeighbourScore(st, limit, s.TotalWorks) {
+			votes[nb.TagID] += nb.PMI
+		}
+	}
+	voteCache.put(key, votes)
+	return votes, len(votes) > 0
+}
+
+// voteKey identifies a vote map: the seed tag set and the limit, because a
+// different seed set or a different cap is a different map. Two requests
+// with the same seeds share an entry; two with different seeds do not.
+func voteKey(tags []int32, limit int) string {
+	h := fnv.New64a()
+	var b [4]byte
+	for _, t := range tags {
+		binary.LittleEndian.PutUint32(b[:], uint32(t))
+		h.Write(b[:])
+	}
+	return strconv.FormatUint(h.Sum64(), 16) + ":" + strconv.Itoa(limit)
+}
+
+// voteCache is a small LRU over vote maps.
+var voteCache = newLRU(8)
+
+type lru struct {
+	mu      sync.Mutex
+	cap     int
+	entries map[string]*list.Element
+	order   *list.List
+}
+
+type lruEntry struct {
+	key   string
+	votes map[int32]float64
+}
+
+func newLRU(capacity int) *lru {
+	return &lru{
+		cap:     capacity,
+		entries: make(map[string]*list.Element, capacity),
+		order:   list.New(),
+	}
+}
+
+func (l *lru) get(key string) (map[int32]float64, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	el, ok := l.entries[key]
+	if !ok {
+		return nil, false
+	}
+	l.order.MoveToFront(el)
+	return el.Value.(*lruEntry).votes, true
+}
+
+func (l *lru) put(key string, votes map[int32]float64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if el, ok := l.entries[key]; ok {
+		el.Value.(*lruEntry).votes = votes
+		l.order.MoveToFront(el)
+		return
+	}
+	el := l.order.PushFront(&lruEntry{key: key, votes: votes})
+	l.entries[key] = el
+	// Evict the least recently used. Without a bound this is the unbounded
+	// cache the previous deployment had.
+	for l.order.Len() > l.cap {
+		oldest := l.order.Back()
+		if oldest == nil {
+			break
+		}
+		l.order.Remove(oldest)
+		delete(l.entries, oldest.Value.(*lruEntry).key)
+	}
+}
+
+// resetVoteCache clears the memo. Exported for tests: a shared cache
+// across tests makes one test's memo answer another's query.
+func resetVoteCache() { voteCache = newLRU(8) }
 
 // Quality scores kudos per 1k words, the "praise per effort" measure.
 //
