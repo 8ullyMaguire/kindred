@@ -467,18 +467,18 @@ func Static() http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")
-		switch name {
-		case "style.css":
-			w.Header().Set("Content-Type", "text/css; charset=utf-8")
-		case "app.js":
-			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		default:
-			// Only two files are reachable, so a request for anything
-			// else is a probe or a typo and gets a plain 404 rather than
-			// a directory listing of the embedded filesystem.
+		if name != "style.css" {
+			// Exactly one file is reachable. A request for anything else
+			// is a probe or a typo and gets a plain 404 rather than a
+			// directory listing of the embedded filesystem.
+			//
+			// There is no JavaScript to serve: the frontend is one
+			// stylesheet and plain links, so the whole thing works with
+			// scripting off.
 			http.NotFound(w, r)
 			return
 		}
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		data, err := fs.ReadFile(sub, name)
 		if err != nil {
 			http.NotFound(w, r)

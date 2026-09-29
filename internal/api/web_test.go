@@ -163,12 +163,28 @@ func TestStaticCSSAndJS(t *testing.T) {
 		t.Error("the stylesheet has lost the #900 link colour")
 	}
 
-	status, ct, _ = getText(t, ts, "/static/app.js")
-	if status != http.StatusOK {
-		t.Fatalf("GET /static/app.js -> %d", status)
+	// There is no JavaScript. The multi-seed recommender is a plain link,
+	// so the whole frontend works with scripting disabled -- which is what
+	// the first version got wrong.
+	status, _, _ = getText(t, ts, "/static/app.js")
+	if status != http.StatusNotFound {
+		t.Errorf("GET /static/app.js -> %d, want 404; there is no JS any more", status)
 	}
-	if !strings.Contains(ct, "javascript") {
-		t.Errorf("JS Content-Type is %q", ct)
+}
+
+func TestSeedLinksWorkWithoutJavaScript(t *testing.T) {
+	// The bug this guards: the "rank from this" control was a <button>
+	// that added a hidden input, and the hidden list was pre-filled with
+	// every recommendation already on the page -- so add() always refused
+	// and all ten buttons were inert. The page looked right and did
+	// nothing. A real link cannot have that failure.
+	ts := newTestServer(t)
+	_, _, body := getText(t, ts, "/work/1")
+	if strings.Contains(body, "data-seed=") {
+		t.Error("the page still uses a JS-driven seed button")
+	}
+	if !strings.Contains(body, "/recommend?seed=") {
+		t.Errorf("no seed link on the work page:\n%.400s", body)
 	}
 }
 

@@ -34,12 +34,7 @@
 {{end}}
 
 {{if .Similar}}
-  <div class="recommend" data-seedable>
-    <form id="seed-form" method="get" action="/recommend" class="hidden">
-      <div data-seeds>
-        {{range .Similar}}<input type="hidden" name="seed" value="ao3_work:{{.ID}}">{{end}}
-      </div>
-    </form>
+  <div class="recommend">
     {{range .Similar}}
       <div class="work">
         <h3>
@@ -48,8 +43,7 @@
         </h3>
         <p class="byline">
           {{if .URL}}<a href="{{.URL}}" rel="noopener nofollow">on AO3</a> &middot;{{end}}
-          <button type="button" data-seed="ao3_work:{{.ID}}"
-                  class="muted">seed from this</button>
+          <a class="seed-link" href="/recommend?seed=ao3_work:{{.ID}}">rank from this</a>
         </p>
         {{if .Summary}}<p class="summary">{{shorten .Summary 1}}</p>{{end}}
         {{if .Evidence}}

@@ -212,6 +212,15 @@ a.tag:hover {
   font-size: 0.9em;
 }
 
+/* "rank from this" -- a real link, so the multi-seed recommender works
+   with JavaScript disabled. It was a <button> plus a hidden form plus a
+   click handler, and the handler made it inert: the hidden list was
+   pre-filled with the very recommendations the buttons pointed at. */
+.seed-link {
+  font-size: 0.9em;
+  border-bottom: 1px dotted;
+}
+
 /* == RECOMMENDATIONS == */
 
 .recommend {
