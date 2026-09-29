@@ -1,6 +1,13 @@
 # Routes exercised by the budget run. One "METHOD PATH" per line.
-# This file is the single source of truth for what `make budget` walks;
-# the API milestone appends to it and nothing else may.
+#
+# HISTORICAL: this file claimed to be "the single source of truth for what
+# `make budget` walks" and nothing ever read it. scripts/budget.sh has its
+# own hardcoded probe list, so every route added here was silently outside
+# the memory budget -- which is how the arena shipped with no budget
+# coverage at all. Kept as a checklist for review; the gate is the script.
+#
+# Do not add to this file expecting coverage. Add the probe to
+# scripts/budget.sh, then add the route here so the two agree.
 GET /v1/healthz
 GET /v1/version
 GET /v1/stats
@@ -8,3 +15,14 @@ GET /v1/kinds
 GET /v1/works?per_page=2
 GET /v1/tags?q=&per_page=5
 GET /v1/recommend?kind=ao3_work&seed=ao3_work:1&n=5
+# The arena. The pair page is the heaviest read in the UI -- it loads the
+# tag list for BOTH works in a pair, more rows than any other page -- so it
+# is the one most likely to need the cap raised rather than the query
+# trimming, and the only way to know is to walk it.
+GET /arena
+GET /leaderboard
+GET /my-ranking
+GET /rank/1
+GET /api/v1/arena/leaderboard
+GET /api/v1/arena/my-ranking
+GET /api/v1/arena/rank/1

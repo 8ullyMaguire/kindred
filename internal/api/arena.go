@@ -360,20 +360,27 @@ func (a *ArenaService) tagStats(ctx context.Context) (map[int64]int, int, error)
 func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 	var res BatchResult
 
-	last, err := a.Store.MetaInt(ctx, "arena_last_period")
+	// arena_last_period is a WATERMARK, and it has to be a timestamp for
+	// JudgedSince to work at all. It is written as the period counter
+	// (1, 2, 3...) further down, which read back as time.Unix(1, 0) --
+	// 1970-01-01T00:00:01Z. Every batch therefore folded the ENTIRE
+	// history again, so period 2 double-counted period 1 and a rating
+	// moved further with every run that touched it.
+	//
+	// A rating period is the set of games since the last one; that is a
+	// statement about time, and the period NUMBER is derived from it
+	// afterwards. The two are different quantities and the table stores
+	// the time.
+	lastRun, err := a.Store.MetaInt(ctx, "arena_last_run")
 	if err != nil {
 		return res, err
 	}
-	// A period is bounded by the last run, not by a fixed duration: the
-	// number of games matters more than the wall-clock span, and a fixed
-	// window on a quiet night would produce a period of one game -- the
-	// regime the batch rule fits worst.
 	since := time.Unix(0, 0).UTC()
-	if last > 0 {
-		since = time.Unix(int64(last), 0).UTC()
+	if lastRun > 0 {
+		since = time.Unix(int64(lastRun), 0).UTC()
 	}
 
-	judged, err := a.Store.JudgedSince(ctx, since, 0)
+	judged, err := a.Store.JudgedAfter(ctx, since, 0)
 	if err != nil {
 		return res, err
 	}
@@ -419,7 +426,14 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 	decayed := arena.DecayIdle(preRatings, seen)
 	tally := arena.Tally(outcomes)
 
-	period := int64(last) + 1
+	// The period NUMBER is a counter, and is unrelated to the watermark
+	// time above. Reading one as the other is the bug that made every
+	// batch re-fold the whole history.
+	period, err := a.Store.MetaInt(ctx, "arena_period")
+	if err != nil {
+		return res, err
+	}
+	period++
 	tx, err := a.Store.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return res, fmt.Errorf("arena batch tx: %w", err)
@@ -441,34 +455,60 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 		}
 		t := tally[id]
 		next := store.RatingRow{
-			WorkID: id, Rating: newR, Period: period,
+			WorkID: id, Rating: newR, Period: int64(period),
 			Comparisons: base.Comparisons + t[0] + t[1] + t[2],
 			Wins:        base.Wins + t[0],
 			Losses:      base.Losses + t[1],
 			Draws:       base.Draws + t[2],
 		}
-		if _, err := tx.ExecContext(ctx, arenaUpsertRating, next); err != nil {
+		// The args are passed positionally, NOT as the RatingRow struct.
+		// database/sql has no way to marshal a struct, so a single struct
+		// argument is rejected by the driver before the statement is ever
+		// prepared -- and it failed the whole batch, every run, with a
+		// 500 that no test hit because the tests exercised the arithmetic
+		// rather than the write.
+		if _, err := tx.ExecContext(ctx, arenaUpsertRating,
+			next.WorkID, next.Rating.Mu, next.Rating.Phi, next.Rating.Sigma,
+			next.Comparisons, next.Wins, next.Losses, next.Draws, next.Period,
+		); err != nil {
 			tx.Rollback()
 			return res, fmt.Errorf("arena batch write %d: %w", id, err)
 		}
-		if _, err := tx.ExecContext(ctx, arenaUpsertHistory, next); err != nil {
+		if _, err := tx.ExecContext(ctx, arenaUpsertHistory,
+			next.WorkID, next.Period, next.Rating.Mu, next.Rating.Phi, next.Rating.Sigma,
+		); err != nil {
 			tx.Rollback()
 			return res, fmt.Errorf("arena batch history %d: %w", id, err)
 		}
 		res.Updated++
 	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO graph_meta (key, value) VALUES ('arena_last_period', ?)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		fmt.Sprint(period)); err != nil {
+	// Two different quantities, stored under two different keys because
+	// conflating them is what made every batch re-fold the history:
+	//
+	//   arena_period    the NUMBER of the period, for labelling history
+	//   arena_last_run  the TIME the previous period ended, which is the
+	//                   watermark JudgedSince reads on the next batch
+	//
+	// The watermark is taken as "now", not as the newest judged_at in this
+	// batch. Anything judged between the read and this write belongs to the
+	// NEXT period; taking now can therefore double-count a game judged
+	// during the run, and that is the lesser error, because Glicko's own
+	// guidance is that a repeated game costs a little accuracy while a
+	// dropped one silently biases a rating upward.
+	if _, err := tx.ExecContext(ctx, arenaSetMeta, "arena_period", fmt.Sprint(period)); err != nil {
 		tx.Rollback()
 		return res, fmt.Errorf("arena batch period: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, arenaSetMeta, "arena_last_run",
+		fmt.Sprint(time.Now().UTC().Unix())); err != nil {
+		tx.Rollback()
+		return res, fmt.Errorf("arena batch watermark: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return res, fmt.Errorf("arena batch commit: %w", err)
 	}
 
-	res.Period = period
+	res.Period = int64(period)
 	res.Comparisons = len(judged)
 	if a.Log != nil {
 		a.Log.Info("arena batch", "period", period, "comparisons", len(judged),
@@ -484,6 +524,10 @@ type BatchResult struct {
 	Updated     int
 	Skipped     string
 }
+
+const arenaSetMeta = `
+INSERT INTO graph_meta (key, value) VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value`
 
 const arenaUpsertRating = `
 INSERT INTO arena_ratings

@@ -295,16 +295,27 @@ func (s *Store) UnjudgedInSession(ctx context.Context, sessionKey string) (Compa
 	return c, true, nil
 }
 
-// JudgedSince returns comparisons judged at or after a time, for the batch
-// rating update. This is how a rating period is bounded in practice: the
-// batch takes everything since the last run and treats it as ONE period.
-func (s *Store) JudgedSince(ctx context.Context, since time.Time, limit int) ([]JudgedComparison, error) {
+// JudgedAfter returns comparisons judged STRICTLY AFTER a time.
+//
+// The bound is exclusive, and that is load-bearing rather than pedantic.
+// judged_at is written with datetime('now'), which has one-second
+// resolution, and the batch watermark is also whole seconds. An inclusive
+// `>=` bound therefore re-includes every comparison judged in the same
+// second the previous batch finished, so two batches in quick succession
+// fold the same game into two periods and the rating moves twice for one
+// judgement. It looked like a passing test and a leaderboard that drifted
+// further every time you looked at it.
+//
+// An exclusive bound cannot drop a game: a comparison judged in the same
+// second is either already folded in or picked up next time, and a period
+// is a set of games, not a set of timestamps.
+func (s *Store) JudgedAfter(ctx context.Context, since time.Time, limit int) ([]JudgedComparison, error) {
 	if limit <= 0 {
 		limit = 20000
 	}
 	rows, err := s.DB.QueryContext(ctx,
 		`SELECT work_a, work_b, choice FROM arena_comparisons
-		 WHERE judged_at IS NOT NULL AND judged_at >= ?
+		 WHERE judged_at IS NOT NULL AND judged_at > ?
 		 ORDER BY id LIMIT ?`, since.UTC().Format("2006-01-02 15:04:05"), limit)
 	if err != nil {
 		return nil, fmt.Errorf("judged since: %w", err)

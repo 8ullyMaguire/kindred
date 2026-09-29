@@ -191,6 +191,38 @@ esac
 step "stats"
 curl -fsS --max-time 20 "http://127.0.0.1:$PORT/stats" >/dev/null
 
+# The arena. Asserted on CONTENT, like the tag-similarity step above, and
+# for the same reason: a 200 with an empty body is invisible to a status
+# code. The arena page is the heaviest read in the UI -- it loads the tag
+# list for BOTH works in a pair, which is more rows than any other page --
+# so it is the step most likely to need the cap raised rather than the
+# query trimming, and the only way to know is to walk it.
+step "arena pair (both cards, with tags)"
+arena=$(curl -sS --max-time 60 "http://127.0.0.1:$PORT/arena" || echo '')
+code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 "http://127.0.0.1:$PORT/arena" || echo 000)
+if [ "$code" != "200" ]; then
+  echo "budget: FAIL /arena returned $code" >&2
+  exit 1
+fi
+# Two cards is the whole point of a comparison; one is a broken pair, and
+# zero is an empty pool that still has to render as a page.
+cards=$(printf '%s' "$arena" | grep -c 'class="arena-card"' || true)
+if [ "${cards:-0}" -lt 2 ] && [ "${cards:-0}" -ne 0 ]; then
+  echo "budget: FAIL /arena rendered $cards card(s); a comparison is two." >&2
+  exit 1
+fi
+if printf '%s' "$arena" | grep -q 'Something went wrong'; then
+  echo "budget: FAIL /arena rendered the error page" >&2
+  exit 1
+fi
+
+step "arena API (leaderboard + rank)"
+curl -fsS --max-time 20 "http://127.0.0.1:$PORT/api/v1/arena/leaderboard?limit=5" >/dev/null
+curl -fsS --max-time 20 "http://127.0.0.1:$PORT/api/v1/arena/rank/$SEED" >/dev/null
+
+step "my-ranking (the session-keyed page)"
+curl -fsS --max-time 20 "http://127.0.0.1:$PORT/my-ranking" >/dev/null
+
 # The number that decides it.
 PEAK_KIB=$(awk '/^VmHWM:/ {print $2}' "/proc/$PID/status" 2>/dev/null || echo 0)
 PEAK_MIB=$(( PEAK_KIB / 1024 ))
