@@ -103,7 +103,23 @@ func runDump(ctx context.Context, args []string) error {
 			return fmt.Errorf("shard %d: %w", shard, err)
 		}
 		hash := dump.HashBytes(blob)
-		name := fmt.Sprintf("shard-%03d.json.zst", shard)
+		// .json.zst, and the content is plain JSON.
+		//
+		// The first version of this wrote uncompressed JSON under a .zst
+		// name, on the assumption that a compression step would be added
+		// later. None ever was: the project carries no zstd dependency, on
+		// purpose, because the target is a Pi and a static 12 MB binary is
+		// the whole point. Nothing in the reader is fooled -- `fetch` moves
+		// shards as opaque bytes and `Verify` hashes them -- but any third
+		// party who sees the extension runs `zstd -d` and gets an error.
+		//
+		// Two honest options: add a pure-Go zstd (no cgo, but ~1 MB of
+		// code and a new dependency in a project that has three on
+		// purpose), or name the file for what it is. Compression here
+		// saves 7.0 MB to about 2 MB on a snapshot that is fetched over
+		// Tor, so it is worth doing eventually -- as its own decision with
+		// its own measurement, not as a lie in a filename.
+		name := fmt.Sprintf("shard-%03d.json", shard)
 		if err := os.WriteFile(filepath.Join(snapDir, name), blob, 0o644); err != nil {
 			return err
 		}
