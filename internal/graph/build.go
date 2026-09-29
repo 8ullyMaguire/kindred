@@ -13,6 +13,58 @@ import (
 // countTagFrequencies fills freq[tag_id] with the number of works carrying
 // that tag, streaming the work_tags table in id windows so no sort is ever
 // built and the driver's row buffer stays small.
+// TagFrequencies reads every tag's work count, for PMI.
+//
+// Exported because the server needs the same thing on load, and a second
+// implementation of "count the work_tags rows" is a second thing to be
+// wrong in the same way.
+func TagFrequencies(ctx context.Context, db *sql.DB) (map[int32]int64, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT tag_id, COUNT(*) FROM work_tags GROUP BY tag_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[int32]int64, 1<<16)
+	for rows.Next() {
+		var id int32
+		var n int64
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
+// TagNames reads the tag-name table, indexed by tag id.
+//
+// `count` is the node count, which is one past the highest id: ids run from
+// 1, and a sparse slice with a leading empty entry is what lets Name() be a
+// slice lookup rather than a map lookup over 634,232 entries.
+func TagNames(ctx context.Context, db *sql.DB, count int) ([]string, error) {
+	if count <= 0 {
+		return nil, nil
+	}
+	out := make([]string, count)
+	rows, err := db.QueryContext(ctx, `SELECT id, name FROM tags`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int32
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		if id >= 0 && int(id) < count {
+			out[id] = name
+		}
+	}
+	return out, rows.Err()
+}
+
 func countTagFrequencies(ctx context.Context, db *sql.DB, nodeCount int, freq []int64) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT tag_id, COUNT(*) FROM work_tags GROUP BY tag_id ORDER BY tag_id`)

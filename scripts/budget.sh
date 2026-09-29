@@ -136,9 +136,55 @@ curl -fsS --max-time 20 "http://127.0.0.1:$PORT/api/v1/ao3/tags/1/works?limit=50
 step "tag similarity (the graph-backed path)"
 # 503 is a correct answer when no index is loaded, so this step only fails
 # on a connection error or a 5xx that is not that specific 503.
-code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "http://127.0.0.1:$PORT/api/v1/tags/1/similar" || echo 000)
+# Status AND content.
+#
+# The status check was here first and it was not enough: the server
+# answered 200 with `"returned": 0` for every tag, for as long as the
+# graph loaded without its tag frequencies -- because a PMI of 0 is
+# dropped, and a graph with no frequencies has a PMI of 0 everywhere. The
+# gate called that a pass, which is the exact failure this gate exists to
+# catch.
+#
+# So the assertion is a response that parses and carries a non-empty
+# `similar` array. A route answering 200 with nothing in it is invisible to
+# a status code, and it is the most expensive kind of bug there is: the
+# service looks healthy and every answer it gives is wrong.
+#
+# Tag 363, not tag 1. PMI is
+#
+#     log( P(a and b) / (P(a) P(b)) )
+#
+# and tag 1 is "general audiences" with 8,377 of the corpus's 112,935
+# works, so P(a) is enormous and the ratio is below 1 against every other
+# tag: measured on the real mirror, its five strongest co-occurrences have
+# PMI -1.78, -1.24, -2.40, -2.07, -1.99. An empty list is the
+# mathematically CORRECT answer for the most common tag in the corpus.
+#
+# The first version of this assertion used tag 1 and reported a failure
+# against a server that was working. A gate that fails on correct
+# behaviour gets disabled, and a disabled gate catches nothing -- so the
+# tag choice is part of the assertion, not a detail. Tag 363 is a Naruto
+# character tag: 391 works, and a strongest neighbour at PMI 3.58.
+body=$(curl -sS --max-time 20 "http://127.0.0.1:$PORT/api/v1/tags/363/similar?n=5" || echo '{}')
+code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "http://127.0.0.1:$PORT/api/v1/tags/363/similar" || echo 000)
 case "$code" in
-  200|503) : ;;
+  # 503 means no index was loaded at all, which is a correct answer for a
+  # host that has not been ingested -- there is nothing to check.
+  503) : ;;
+  # 200 means the graph IS loaded, so an empty list is now a wrong answer
+  # rather than an absent one. This is the case the status check alone
+  # let through.
+  200)
+    returned=$(printf '%s' "$body" | sed -n 's/.*"returned":\([0-9]*\).*/\1/p')
+    if [ "${returned:-0}" -lt 1 ]; then
+      echo "budget: FAIL tag similarity answered 200 with ${returned:-no} neighbours." >&2
+      echo "budget:   the graph is loaded, so this is a wrong answer and not an" >&2
+      echo "budget:   absent one. A graph with no tag frequencies has a PMI of 0" >&2
+      echo "budget:   everywhere, every pair is dropped, and the empty list is" >&2
+      echo "budget:   the CORRECT output for that graph. body: $body" >&2
+      exit 1
+    fi
+    ;;
   *) echo "budget: FAIL tag similarity returned $code" >&2; exit 1 ;;
 esac
 

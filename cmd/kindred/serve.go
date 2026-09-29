@@ -49,9 +49,30 @@ func runServe(ctx context.Context, args []string) error {
 
 	// Load the graph if it is there.
 	var g *graph.CSR
+	// The names and the frequencies come from the CORPUS, not from the
+	// index file. Passing nil callbacks here is the bug this replaces: the
+	// graph loaded with 634,232 nodes and 2,884,447 edges and answered
+	// every tag-similarity request with an empty list.
+	//
+	// The reason it hid: PMI is
+	//
+	//	log(P(co|occur) / (P(a) P(b)))
+	//
+	// and with every Frequency() returning 0 both marginals are 0, so
+	// every PMI is 0, and the handler drops every pair whose PMI is not
+	// positive. An empty list is the *correct* output of a graph with no
+	// frequencies. The endpoints returned 200 with `returned: 0` and the
+	// budget gate -- which walks routes and checks status codes -- called
+	// it a pass.
+	//
+	// So: two callbacks that read what the graph needs from the only place
+	// it exists. Tag names are 634,231 strings, which is why they are read
+	// here rather than stored in the index file: the corpus already holds
+	// them and a second copy in the index is a second thing to keep
+	// consistent.
 	g, err = graph.LoadCSR(ctx, c.DB, s.Corpus,
-		func() (map[int32]int64, error) { return nil, nil },
-		func() ([]string, error) { return nil, nil },
+		func() (map[int32]int64, error) { return graph.TagFrequencies(ctx, s.Corpus) },
+		func() ([]string, error) { return graph.TagNames(ctx, s.Corpus, lenFromMeta(ctx, s, "node_count")) },
 	)
 	if err != nil {
 		// A missing or unreadable index degrades the service, it does not
@@ -193,9 +214,30 @@ func runRecommend(ctx context.Context, args []string) error {
 
 	ao3 := corpus.NewAO3(s.Corpus)
 	var g *graph.CSR
+	// The names and the frequencies come from the CORPUS, not from the
+	// index file. Passing nil callbacks here is the bug this replaces: the
+	// graph loaded with 634,232 nodes and 2,884,447 edges and answered
+	// every tag-similarity request with an empty list.
+	//
+	// The reason it hid: PMI is
+	//
+	//	log(P(co|occur) / (P(a) P(b)))
+	//
+	// and with every Frequency() returning 0 both marginals are 0, so
+	// every PMI is 0, and the handler drops every pair whose PMI is not
+	// positive. An empty list is the *correct* output of a graph with no
+	// frequencies. The endpoints returned 200 with `returned: 0` and the
+	// budget gate -- which walks routes and checks status codes -- called
+	// it a pass.
+	//
+	// So: two callbacks that read what the graph needs from the only place
+	// it exists. Tag names are 634,231 strings, which is why they are read
+	// here rather than stored in the index file: the corpus already holds
+	// them and a second copy in the index is a second thing to keep
+	// consistent.
 	g, err = graph.LoadCSR(ctx, c.DB, s.Corpus,
-		func() (map[int32]int64, error) { return nil, nil },
-		func() ([]string, error) { return nil, nil },
+		func() (map[int32]int64, error) { return graph.TagFrequencies(ctx, s.Corpus) },
+		func() ([]string, error) { return graph.TagNames(ctx, s.Corpus, lenFromMeta(ctx, s, "node_count")) },
 	)
 	if err != nil {
 		g = nil
@@ -285,4 +327,13 @@ func truncate(s string, n int) string {
 		return s[:n]
 	}
 	return s[:n-3] + "..."
+}
+
+// lenFromMeta reads a numeric graph_meta value, returning 0 when absent.
+func lenFromMeta(ctx context.Context, s *store.Store, key string) int {
+	v, err := s.MetaInt(ctx, key)
+	if err != nil {
+		return 0
+	}
+	return v
 }
