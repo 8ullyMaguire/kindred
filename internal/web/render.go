@@ -139,6 +139,7 @@ func init() {
 	for _, page := range []string{
 		"layout.html", "search.html", "work.html", "tag.html",
 		"recommend.html", "notfound.html", "error.html",
+		"arena.html", "leaderboard.html", "rank.html", "myranking.html",
 	} {
 		pages[page] = template.Must(template.New(page).
 			Funcs(funcMap).

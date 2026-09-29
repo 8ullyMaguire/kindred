@@ -1,0 +1,55 @@
+{{define "content"}}
+{{/* The judge is a plain form with radio inputs, POSTing to /arena/judge.
+
+     The first version of this control was a <button> plus a hidden form
+     plus a click handler, and the handler made it inert: the hidden seed
+     list was pre-filled with every work the buttons pointed at, so
+     add() always refused and all ten controls did nothing. The page
+     looked right and was dead. A form with radios cannot have that
+     failure, and it works with scripting off.
+
+     Session is on the page struct, not a cookie template function: no
+     such function exists, and {{cookie ...}} renders as an execution
+     error rather than a missing value. */}}
+{{if .Cards}}
+<form method="post" action="/arena/judge" class="arena">
+  <input type="hidden" name="session" value="{{.Session}}">
+
+  <div class="arena-pair">
+    {{range $i, $c := .Cards}}
+    <div class="arena-card">
+      <h3><a href="{{$c.URL}}">{{$c.Title}}</a></h3>
+      {{if $c.Author}}<p class="byline">{{$c.Author}}</p>{{end}}
+      {{if $c.Summary}}<p class="summary">{{shorten $c.Summary 3}}</p>{{end}}
+      <ul class="tags">
+        {{range $c.TagURL}}<li><a class="tag" href="{{.URL}}">{{.Name}}</a></li>{{end}}
+      </ul>
+      <p class="rating">
+        {{if $c.Rated}}
+          <span class="score">{{printf "%.0f" $c.Rating}}</span>
+          <span class="muted">&plusmn;{{printf "%.0f" $c.RD}}</span>
+        {{else}}
+          <span class="muted">not yet compared</span>
+        {{end}}
+      </p>
+      <label class="arena-pick">
+        <input type="radio" name="choice" value="{{if eq $i 0}}a{{else}}b{{end}}" required>
+        <span>Prefer this</span>
+      </label>
+    </div>
+    {{end}}
+  </div>
+
+  <p class="arena-actions">
+    <button type="submit" name="choice" value="neither">Neither</button>
+    <span class="muted">
+      {{if .Resumed}}You still owe this comparison. {{end}}
+      Chosen by the <code>{{.Strategy}}</code> policy{{if .Explored}}, deliberately against your profile{{end}}.
+      {{.TotalJudged}} judged in the arena so far.
+    </span>
+  </p>
+</form>
+{{else}}
+<p class="empty">{{.Message}}</p>
+{{end}}
+{{end}}

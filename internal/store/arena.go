@@ -638,3 +638,165 @@ func nullString(s string) any {
 func isFinite(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0)
 }
+
+// ------------------------------------------------------- corpus-side reads
+
+// CandidateWorkIDs returns the works eligible to be presented.
+//
+// tagID of 0 means "no filter": the most-commented works, which is the
+// right default for an arena because a work nobody has read cannot win a
+// comparison and would only waste a presentation. With a tag filter, the
+// tag's own works instead, so the arena can be scoped to a fandom.
+//
+// The ORDER matters: a stable order makes the pool reproducible, and a
+// random one would make the fatigue set depend on a coin flip rather than
+// on what the user has actually been shown.
+func (s *Store) CandidateWorkIDs(ctx context.Context, tagID int64, limit int) ([]int64, error) {
+	if limit <= 0 {
+		limit = 300
+	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if tagID > 0 {
+		// hits is the popularity field this mirror actually populates.
+		// Ordering by it keeps the pool biased toward works a reader has
+		// plausibly heard of, which is what stops the arena from opening
+		// on two 12-hit fics nobody will ever compare.
+		rows, err = s.Corpus.QueryContext(ctx,
+			`SELECT w.id FROM works w
+			 JOIN work_tags wt ON wt.work_id = w.id
+			 WHERE wt.tag_id = ?
+			 GROUP BY w.id
+			 ORDER BY COALESCE(w.hits, 0) DESC, w.id
+			 LIMIT ?`, tagID, limit)
+	} else {
+		rows, err = s.Corpus.QueryContext(ctx,
+			`SELECT id FROM works
+			 ORDER BY COALESCE(hits, 0) DESC, id
+			 LIMIT ?`, limit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("arena candidates: %w", err)
+	}
+	defer rows.Close()
+
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("arena candidates scan: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// TagsForWorks returns each work's tags, in one query.
+//
+// One query for the whole pool, not one per candidate. This is the
+// single largest cost class in this codebase and I have measured it: a
+// per-candidate query turns a 40 ms pair into seconds.
+func (s *Store) TagsForWorks(ctx context.Context, workIDs []int64) (map[int64][]int64, error) {
+	out := make(map[int64][]int64, len(workIDs))
+	if len(workIDs) == 0 {
+		return out, nil
+	}
+	// Chunked because SQLite caps statement variables at 999 by default,
+	// and silently truncating would learn preferences from a partial pool
+	// while appearing to learn from all of it.
+	const chunk = 400
+	for start := 0; start < len(workIDs); start += chunk {
+		end := start + chunk
+		if end > len(workIDs) {
+			end = len(workIDs)
+		}
+		batch := workIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		rows, err := s.Corpus.QueryContext(ctx,
+			`SELECT work_id, tag_id FROM work_tags
+			 WHERE work_id IN (?`+strings.Repeat(", ?", len(batch)-1)+`)
+			 ORDER BY work_id`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("arena work tags: %w", err)
+		}
+		for rows.Next() {
+			var work, tag int64
+			if err := rows.Scan(&work, &tag); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("arena work tags scan: %w", err)
+			}
+			out[work] = append(out[work], tag)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("arena work tags rows: %w", err)
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
+// TagCounts returns per-tag work counts and the total work count, for the
+// rarity weighting in tag learning.
+//
+// The total is COUNT(*) on works, not the number of tagged works: rarity is
+// a share of the corpus a user is choosing from, and using the tagged
+// count as the denominator would make every tag look rarer than it is.
+func (s *Store) TagCounts(ctx context.Context) (map[int64]int, int, error) {
+	counts := make(map[int64]int, 20000)
+	rows, err := s.Corpus.QueryContext(ctx,
+		`SELECT tag_id, COUNT(DISTINCT work_id) FROM work_tags GROUP BY tag_id`)
+	if err != nil {
+		return nil, 0, fmt.Errorf("arena tag counts: %w", err)
+	}
+	for rows.Next() {
+		var tag, n int64
+		if err := rows.Scan(&tag, &n); err != nil {
+			rows.Close()
+			return nil, 0, fmt.Errorf("arena tag counts scan: %w", err)
+		}
+		counts[tag] = int(n)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("arena tag counts rows: %w", err)
+	}
+
+	var total int
+	if err := s.Corpus.QueryRowContext(ctx, `SELECT COUNT(*) FROM works`).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("arena work count: %w", err)
+	}
+	return counts, total, nil
+}
+
+// LastJudgedInSession returns the most recent judged comparison in a
+// session, so tag learning can resolve a choice to work ids.
+//
+// The choice is stored as the SIDE ('a' or 'b'), never as a work id, and
+// this is the single place that mapping is applied. Keeping it in one
+// function is what stops the two sides from being mapped inconsistently --
+// which would learn every preference against the work the user actually
+// preferred.
+func (s *Store) LastJudgedInSession(ctx context.Context, sessionKey string) (Comparison, bool, error) {
+	var c Comparison
+	var choice string
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT id, work_a, work_b, choice, session_key, owner_key, strategy
+		 FROM arena_comparisons
+		 WHERE session_key = ? AND judged_at IS NOT NULL
+		 ORDER BY id DESC LIMIT 1`, sessionKey).
+		Scan(&c.ID, &c.WorkA, &c.WorkB, &choice, &c.SessionKey, &c.OwnerKey, &c.Strategy)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, false, nil
+	}
+	if err != nil {
+		return c, false, fmt.Errorf("last judged in session: %w", err)
+	}
+	c.Choice = choice
+	return c, true, nil
+}

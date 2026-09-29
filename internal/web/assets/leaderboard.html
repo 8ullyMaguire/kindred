@@ -1,0 +1,32 @@
+{{define "content"}}
+{{if .Empty}}
+<p class="empty">{{.Note}}</p>
+{{else}}
+<table class="ratings">
+  <thead>
+    <tr>
+      <th class="num">#</th><th>Work</th>
+      <th class="num">Rating</th><th class="num">RD</th>
+      <th class="num">W/L/D</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Rows}}
+    <tr>
+      <td class="num">{{.Rank}}</td>
+      <td>
+        <a href="{{.URL}}">{{.Title}}</a>
+        {{if .Author}}<span class="byline">{{.Author}}</span>{{end}}
+      </td>
+      <td class="num">{{printf "%.0f" .Rating}}</td>
+      <td class="num muted">{{printf "%.0f" .RD}}</td>
+      <td class="num muted">{{.Wins}}/{{.Losses}}/{{.Draws}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+
+<p class="count">{{len .Rows}} rated works{{if .MinCompare}}, each compared at least {{.MinCompare}} times{{end}}.</p>
+<p class="empty">{{.Note}}</p>
+{{end}}
+{{end}}

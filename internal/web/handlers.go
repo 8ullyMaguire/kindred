@@ -60,9 +60,19 @@ func (d Deps) guardAPI(api http.Handler, pages http.Handler) http.Handler {
 }
 
 func (d Deps) route(w http.ResponseWriter, r *http.Request) {
-	// Only GET and HEAD render a page. A POST to a page URL is not a page,
-	// and answering it with HTML answers a different question than the one
-	// asked. Writes go to the API under /api/v1/, and the API takes them.
+	// The judge is the one POST a page accepts. It is a write, but it is
+	// the completion of a form the arena itself rendered, and a form
+	// cannot POST to a JSON API and land the user back on a page. It
+	// records exactly the same thing /api/v1/arena/compare records.
+	if r.Method == http.MethodPost && r.URL.Path == "/arena/judge" {
+		d.postJudge(w, r)
+		return
+	}
+
+	// Only GET and HEAD otherwise render a page. A POST to a page URL is
+	// not a page, and answering it with HTML answers a different question
+	// than the one asked. Writes go to /arena/judge or the API under
+	// /api/v1/.
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		d.fail(w, r, http.StatusMethodNotAllowed,
 			fmt.Errorf("%s is not a page method; writes go to the API under /api/v1/", r.Method))
@@ -81,6 +91,14 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 		d.renderTag(w, r, strings.TrimPrefix(p, "/tag/"))
 	case p == "/recommend":
 		d.renderRecommend(w, r)
+	case p == "/arena":
+		d.renderArena(w, r)
+	case p == "/leaderboard":
+		d.renderLeaderboard(w, r)
+	case p == "/my-ranking":
+		d.renderMyRanking(w, r)
+	case strings.HasPrefix(p, "/rank/"):
+		d.renderRank(w, r, strings.TrimPrefix(p, "/rank/"))
 	default:
 		d.notFound(w, r)
 	}

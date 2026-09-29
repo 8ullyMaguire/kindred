@@ -277,3 +277,54 @@ a.tag:hover {
   #header, #main, #footer { padding: 1em 1.25em; }
   .search-form input[type="text"] { width: 100%; max-width: 100%; }
 }
+
+/* Arena. The pairing cards sit side by side and stay that way on a
+   narrow screen too, because a comparison is meaningless once the
+   candidate you are judging is scrolled out of sight. */
+.arena-pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  margin: 1.5rem 0;
+}
+.arena-card {
+  flex: 1 1 20rem;
+  border: 1px solid #ccc;
+  padding: 1rem 1.25rem;
+}
+.arena-pick {
+  display: block;
+  margin-top: 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #900;
+  color: #900;
+  cursor: pointer;
+  text-align: center;
+}
+.arena-pick:hover { background: #fdf3f3; }
+.arena-pick input { margin-right: 0.5rem; }
+.arena-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.arena-actions .muted { flex: 1 1 20rem; }
+
+.rating-head { margin: 1rem 0 1.5rem; }
+.score.big { font-size: 3rem; font-weight: bold; margin: 0; }
+.record {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  margin: 1rem 0 2rem;
+}
+.taste {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+  margin: 1.5rem 0;
+}
+.taste > div { flex: 1 1 18rem; }

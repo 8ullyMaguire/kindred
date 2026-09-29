@@ -1,0 +1,31 @@
+{{define "content"}}
+{{/* Below the threshold the page says WHY it is thin, rather than showing
+     an empty panel that reads as "the arena thinks you have no taste". */}}
+{{if lt .Judged .MinimumForView}}
+<p class="empty">{{.Note}}</p>
+{{else}}
+<div class="taste">
+  <div>
+    <h3>What you gravitate toward</h3>
+    <ul class="tags">
+      {{range .Liked}}<li><a class="tag" href="{{.URL}}">{{.Name}}</a></li>{{end}}
+    </ul>
+    {{if not .Liked}}<p class="muted">nothing strong enough yet</p>{{end}}
+  </div>
+  <div>
+    <h3>What you pass over</h3>
+    <ul class="tags">
+      {{range .Disliked}}<li><a class="tag" href="{{.URL}}">{{.Name}}</a></li>{{end}}
+    </ul>
+    {{if not .Disliked}}<p class="muted">nothing strong enough yet</p>{{end}}
+  </div>
+</div>
+{{end}}
+
+<p class="count">
+  {{.Judged}} tag{{if ne .Judged 1}}s{{end}} learned from your comparisons &middot;
+  {{.RatedWorks}} works rated in the arena &middot;
+  {{.TotalJudged}} comparisons judged
+</p>
+<p class="empty">{{.Note}}</p>
+{{end}}

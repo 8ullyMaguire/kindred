@@ -1,0 +1,33 @@
+{{define "content"}}
+<div class="rating-head">
+  <p class="score big">{{printf "%.0f" .Rating}}</p>
+  <p class="muted">&plusmn;{{printf "%.0f" .RD}} &mdash; read the deviation before the rating.</p>
+</div>
+
+{{if .Note}}<p class="empty">{{.Note}}</p>{{end}}
+
+<ul class="record">
+  <li><span class="muted">Comparisons</span> {{.Comparisons}}</li>
+  <li><span class="muted">Wins</span> {{.Wins}}</li>
+  <li><span class="muted">Losses</span> {{.Losses}}</li>
+  <li><span class="muted">Draws</span> {{.Draws}}</li>
+</ul>
+
+{{if .History}}
+<h3>How it got here</h3>
+<table class="ratings">
+  <thead><tr><th class="num">Period</th><th class="num">Rating</th><th class="num">RD</th></tr></thead>
+  <tbody>
+    {{range .History}}
+    <tr>
+      <td class="num">{{.Period}}</td>
+      <td class="num">{{printf "%.0f" .Rating}}</td>
+      <td class="num muted">{{printf "%.0f" .RD}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="empty">No rating periods yet.</p>
+{{end}}
+{{end}}

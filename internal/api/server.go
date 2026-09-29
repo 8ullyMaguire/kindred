@@ -40,6 +40,9 @@ type Server struct {
 	StartedAt time.Time
 	// Lite is reported so a client can tell a full run from a Pi run.
 	Lite bool
+	// arenaSvc is built on first use, so adding the arena did not have to
+	// change this struct's shape for every caller and every test.
+	arenaSvc *ArenaService
 }
 
 // Routes builds the router.
@@ -59,6 +62,14 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/ao3/tags", s.handleAO3Tags)
 	mux.HandleFunc("GET /api/v1/ao3/tags/{id}", s.handleAO3Tag)
 	mux.HandleFunc("GET /api/v1/ao3/tags/{id}/works", s.handleAO3TagWorks)
+
+	// The arena: pairwise comparison and Glicko-2 ratings.
+	mux.HandleFunc("GET /api/v1/arena/pair", s.handleArenaPair)
+	mux.HandleFunc("POST /api/v1/arena/compare", s.handleArenaJudge)
+	mux.HandleFunc("GET /api/v1/arena/leaderboard", s.handleArenaLeaderboard)
+	mux.HandleFunc("GET /api/v1/arena/rank/{id}", s.handleArenaRank)
+	mux.HandleFunc("GET /api/v1/arena/my-ranking", s.handleArenaMyRanking)
+	mux.HandleFunc("POST /api/v1/arena/batch", s.handleArenaBatch)
 
 	// Operations.
 	mux.HandleFunc("GET /healthz", s.handleHealth)
