@@ -95,6 +95,21 @@ func TestBlockAndUnblockRoundTrip(t *testing.T) {
 // Idempotence, and why: a toggle flips a block straight back off on a
 // double-submit. The form posts an explicit action instead, so re-posting is
 // harmless.
+//
+// The repeat count is EVEN, and that is the load-bearing detail. The first
+// version of this test posted THREE times and counted unblock controls — which
+// is exactly the check a toggle passes. A toggle flips state per call, so
+// three flips land back on "blocked" and the page looks correct: three
+// unblock controls, one tag, no visible difference from idempotent. The count
+// of controls can only distinguish the two behaviours at an even number of
+// calls, where a toggle has flipped itself back to unblocked and shows zero.
+//
+// Two mutations confirmed this reading: replacing the unblock button with
+// inert text, and discarding the read result, both go red. Replacing BlockTag's
+// upsert with delete-then-insert does NOT — that mutation is equivalent, since
+// action=block only ever reaches BlockTag, and a delete immediately followed
+// by an insert is the same end state. The gap was in the parity, not the
+// assertion.
 func TestBlockIsIdempotentAndNotAToggle(t *testing.T) {
 	ts := newTestServer(t)
 	// jarClient, not ts.Client(): httptest's client has Jar == nil, so the
@@ -105,7 +120,8 @@ func TestBlockIsIdempotentAndNotAToggle(t *testing.T) {
 	c := jarClient(t, ts)
 	takeSession(t, c, ts.URL)
 
-	for i := 0; i < 3; i++ {
+	const repeats = 2 // even — see above
+	for i := 0; i < repeats; i++ {
 		if code := postBlockForm(t, c, ts.URL, "block", 3); code != http.StatusSeeOther {
 			t.Fatalf("block #%d -> %d, want 303", i, code)
 		}
@@ -114,8 +130,45 @@ func TestBlockIsIdempotentAndNotAToggle(t *testing.T) {
 	resp := mustGet(t, c, ts.URL+"/block")
 	body := readAll(t, resp)
 	if n := strings.Count(body, ">Unblock</button>"); n != 1 {
-		t.Errorf("three identical blocks produced %d unblock controls, want 1; "+
-			"the endpoint is behaving as a toggle", n)
+		t.Errorf("%d identical blocks produced %d unblock controls, want 1; "+
+			"the endpoint is behaving as a toggle", repeats, n)
+	}
+}
+
+// The other half of "not a toggle": an explicit action is obeyed in both
+// directions, and in any order. A toggle passes the test above for an odd
+// number of same-action posts, so the sequence has to be checked too — this is
+// the case that separates "idempotent" from "happens to end up right".
+func TestBlockHonoursEachActionRegardlessOfPriorState(t *testing.T) {
+	ts := newTestServer(t)
+	c := jarClient(t, ts)
+	takeSession(t, c, ts.URL)
+
+	controls := func() int {
+		resp := mustGet(t, c, ts.URL+"/block")
+		return strings.Count(readAll(t, resp), ">Unblock</button>")
+	}
+
+	// block, unblock, block — ends blocked, and a toggle would end unblocked
+	// after an odd number of calls.
+	for _, step := range []struct {
+		action string
+		want   int
+	}{
+		{"block", 1},
+		{"unblock", 0},
+		{"block", 1},
+		{"unblock", 0},
+		{"unblock", 0}, // unblocking twice is still unblocked
+		{"block", 1},
+	} {
+		if code := postBlockForm(t, c, ts.URL, step.action, 4); code != http.StatusSeeOther {
+			t.Fatalf("%s -> %d, want 303", step.action, code)
+		}
+		if n := controls(); n != step.want {
+			t.Errorf("after %s, page shows %d unblock controls, want %d",
+				step.action, n, step.want)
+		}
 	}
 }
 
