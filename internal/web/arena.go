@@ -112,6 +112,309 @@ type MyRankingPage struct {
 	Note           string
 }
 
+// BlockRow is one tag offered for blocking, with the reason it is a
+// candidate at all.
+type BlockRow struct {
+	TagID   int64
+	Name    string
+	URL     string
+	Reason  string
+	Weight  float64
+	N       int
+	Blocked bool
+}
+
+// BlockPage is the quick-block surface: tags this reader probably does not
+// want, one click each.
+type BlockPage struct {
+	Base
+	// Candidates are the tags worth offering now, best reason first.
+	Candidates []BlockRow
+	// Blocked is what they have already blocked, so it is visible and
+	// reversible. A block the reader cannot see or undo is a decision made
+	// for them.
+	Blocked []BlockRow
+	// Judged is how many comparisons back the inference, which is the
+	// difference between "you keep passing these over" and "one comparison
+	// made this look bad".
+	Judged         int
+	MinimumForView int
+	Note           string
+	Empty          bool
+}
+
+// renderBlock offers the tags this reader probably does not want, each one
+// click to block.
+//
+// Two sources, and the second is the reason this page is worth building.
+//
+//  1. Tags the arena has learned are negative (a negative weight in
+//     arena_user_tag_weights). Direct evidence: the reader chose against a
+//     work carrying that tag.
+//
+//  2. Tags that appear on every work the reader has passed over. This is not
+//     in the weight table at all, and it is the case that matters most. A tag
+//     is only learned as negative if it happened to DIFFER between two works
+//     the reader was shown — the arena learns from the tag that discriminates,
+//     and LearnTags ignores tags present on both. So a tag shared by every
+//     work the reader rejects teaches nothing, ever, no matter how many
+//     comparisons they make. The inference is a consequence of how the learning
+//     works, not of the reader's taste, and it is invisible for exactly that
+//     reason.
+//
+// Without source 2, the page would show a reader nothing at all until the
+// arena happened to isolate their disliked tag, and the fix for that is more
+// arena play — which is a strange response to "I do not want this tag".
+func (d Deps) renderBlock(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	page := BlockPage{
+		Base:           d.base("Block tags", "Tags you probably do not want"),
+		MinimumForView: 3,
+	}
+
+	_, ownerKey, err := d.arenaSession(ctx, w, r)
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+
+	// Already blocked, so the page can show and reverse them.
+	blockedRows, err := d.Engine.Store.BlockedTags(ctx, ownerKey)
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	blockedSet := make(map[int64]bool, len(blockedRows))
+	for _, bt := range blockedRows {
+		blockedSet[bt.TagID] = true
+		page.Blocked = append(page.Blocked, BlockRow{
+			TagID:   bt.TagID,
+			Name:    tagName(d, ctx, bt.TagID),
+			URL:     fmt.Sprintf("/tag/%d", bt.TagID),
+			Blocked: true,
+		})
+	}
+
+	// Source 1: learned-negative tags.
+	weights, err := d.Engine.Store.TagWeights(ctx, ownerKey, 40)
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	page.Judged = len(weights)
+
+	// Only tags with real evidence behind them. A weight from one comparison is
+	// a coincidence, and offering it as "you probably do not want this" invites
+	// a block the reader does not actually want — which is the one mistake this
+	// page must not make, because a block is a statement and statements are
+	// believed.
+	const minEvidence = 2
+	seen := make(map[int64]bool, len(blockedSet))
+	candidates := make([]BlockRow, 0, 16)
+	for _, tw := range weights {
+		if tw.Weight >= 0 || tw.N < minEvidence || blockedSet[tw.TagID] || seen[tw.TagID] {
+			continue
+		}
+		seen[tw.TagID] = true
+		candidates = append(candidates, BlockRow{
+			TagID:  tw.TagID,
+			Name:   tagName(d, ctx, tw.TagID),
+			URL:    fmt.Sprintf("/tag/%d", tw.TagID),
+			Weight: tw.Weight,
+			N:      tw.N,
+			Reason: fmt.Sprintf("you have chosen against %d works carrying it", tw.N),
+		})
+	}
+	// Strongest dislike first, then better-evidenced.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Weight != candidates[j].Weight {
+			return candidates[i].Weight < candidates[j].Weight
+		}
+		return candidates[i].N > candidates[j].N
+	})
+
+	// Source 2: tags common to the works this reader passed over.
+	if passed, ok := d.passedOverTags(ctx, ownerKey, minEvidence); ok {
+		for _, cand := range passed {
+			if blockedSet[cand.TagID] || seen[cand.TagID] {
+				continue
+			}
+			seen[cand.TagID] = true
+			candidates = append(candidates, cand)
+		}
+	}
+
+	if len(candidates) == 0 {
+		page.Empty = true
+		page.Note = "Nothing to suggest yet. A tag becomes a candidate when the " +
+			"arena learns you choose against it, or when it turns up on every " +
+			"work you pass over. Both need a few comparisons — see /arena."
+	} else {
+		page.Note = "Tags you have chosen against, or that appear on every work " +
+			"you have passed over. Blocking removes them from the arena and from " +
+			"recommendations — it is not a suggestion, it is a rule."
+		if page.Judged < page.MinimumForView {
+			page.Note = fmt.Sprintf("Early days: %d comparisons so far, so these "+
+				"are first impressions rather than firm conclusions.",
+				page.Judged)
+		}
+	}
+	page.Candidates = candidates
+	d.page(w, "block.html", page, http.StatusOK)
+}
+
+// passedOverTags returns tags shared by every work this reader passed over.
+//
+// "Passed over" means the reader was shown a comparison and did not pick this
+// work: choice 'b' means they chose work_a, 'neither' means they rejected
+// both. So the rejected side is work_a for 'b', and BOTH works for 'neither' —
+// and a "neither" contributes two, because the reader said no to each of them
+// separately. Getting this wrong would make the query silently return the
+// winner's tags, which is the exact opposite of the intent.
+//
+// Requiring the tag on EVERY passed-over work is what makes a candidate: a tag
+// on one of four is a coincidence, and a tag on all four is a pattern the
+// reader has never had to articulate. It is also why this cannot come from
+// arena_user_tag_weights: LearnTags only teaches on tags that DIFFER between
+// the two works, so a tag on every work the reader rejects is invisible to
+// the weight table no matter how many comparisons they make.
+//
+// The bool return is false when there is too little to infer from, so the
+// caller can say so instead of showing an empty list that reads as "nothing
+// to block".
+func (d Deps) passedOverTags(ctx context.Context, ownerKey string, minLost int) ([]BlockRow, bool) {
+	const maxLost = 200
+	// Two arms because "neither" rejects BOTH works, and one arm cannot return
+	// two rows. The other choices reject exactly one: 'a' means they took
+	// work_a, so work_b was passed over; 'b' is the mirror.
+	rows, err := d.Engine.Store.DB.QueryContext(ctx,
+		`SELECT rejected FROM (
+		   SELECT work_b AS rejected FROM arena_comparisons
+		     WHERE owner_key = ? AND choice = 'a'
+		   UNION ALL
+		   SELECT work_a AS rejected FROM arena_comparisons
+		     WHERE owner_key = ? AND choice IN ('b', 'neither')
+		 ) ORDER BY rejected DESC LIMIT ?`, ownerKey, ownerKey, maxLost)
+	if err != nil {
+		return nil, false
+	}
+	defer rows.Close()
+
+	// Deduplicated, because a reader who often says "neither" rejects the same
+	// work repeatedly and counting it twice would inflate every ratio here.
+	seenWork := make(map[int64]bool, maxLost)
+	var lost []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, false
+		}
+		if !seenWork[id] {
+			seenWork[id] = true
+			lost = append(lost, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false
+	}
+	if len(lost) < minLost {
+		return nil, false
+	}
+
+	// Placeholders are generated from len(lost), never from user input, so this
+	// is not an injection point. The cap keeps the statement under SQLite's
+	// variable limit, which is why maxLost is 200 and not "however many".
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(lost)), ",")
+	args := make([]any, 0, len(lost)+1)
+	for _, id := range lost {
+		args = append(args, id)
+	}
+	args = append(args, len(lost))
+	trows, err := d.Engine.Store.DB.QueryContext(ctx,
+		// work_tags, not entity_tags. The AO3 mirror reads work_tags
+		// (internal/corpus/ao3.go) and so does the arena's own tagStats
+		// (internal/store/arena.go:1022); entity_tags is the index store's
+		// table and is empty for a corpus that was ingested rather than
+		// indexed. Querying the wrong one returns zero rows and the page
+		// reads as "nothing to suggest" — a silent wrong answer, not an error.
+		`SELECT wt.tag_id, COUNT(DISTINCT wt.work_id) FROM work_tags wt
+		 WHERE wt.work_id IN (`+ph+`)
+		 GROUP BY wt.tag_id
+		 HAVING COUNT(DISTINCT wt.work_id) >= ?
+		 ORDER BY COUNT(DISTINCT wt.work_id) DESC, wt.tag_id ASC
+		 LIMIT 20`, args...)
+	if err != nil {
+		return nil, false
+	}
+	defer trows.Close()
+
+	var out []BlockRow
+	for trows.Next() {
+		var id, count int64
+		if err := trows.Scan(&id, &count); err != nil {
+			return nil, false
+		}
+		out = append(out, BlockRow{
+			TagID:  id,
+			Name:   tagName(d, ctx, id),
+			URL:    fmt.Sprintf("/tag/%d", id),
+			Weight: 0,
+			N:      int(count),
+			Reason: fmt.Sprintf("on all %d works you have passed over", count),
+		})
+	}
+	if err := trows.Err(); err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// postBlock records or removes a block and redirects back to the page.
+//
+// A 303 for the same reason the judge does: after a POST the browser should
+// GET, and a 302 lets some clients re-POST, which here would toggle the block
+// straight back off.
+func (d Deps) postBlock(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if err := r.ParseForm(); err != nil {
+		d.fail(w, r, http.StatusBadRequest, fmt.Errorf("parse form: %w", err))
+		return
+	}
+	raw := r.PostFormValue("tag_id")
+	tagID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		d.fail(w, r, http.StatusBadRequest, fmt.Errorf("tag_id must be a number, got %q", raw))
+		return
+	}
+
+	_, ownerKey, err := d.arenaSession(ctx, w, r)
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+
+	// Explicit rather than a toggle: a toggle makes the outcome depend on
+	// state this request does not carry, so a double-submit flips a block off.
+	// "action=block" and "action=unblock" are idempotent instead.
+	var opErr error
+	switch r.PostFormValue("action") {
+	case "block":
+		opErr = d.Engine.Store.BlockTag(ctx, ownerKey, tagID)
+	case "unblock":
+		opErr = d.Engine.Store.UnblockTag(ctx, ownerKey, tagID)
+	default:
+		d.fail(w, r, http.StatusBadRequest,
+			fmt.Errorf("action must be block or unblock, got %q", r.PostFormValue("action")))
+		return
+	}
+	if opErr != nil {
+		d.fail(w, r, http.StatusInternalServerError, opErr)
+		return
+	}
+
+	http.Redirect(w, r, "/block", http.StatusSeeOther)
+}
+
 // renderArena presents a comparison.
 func (d Deps) renderArena(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

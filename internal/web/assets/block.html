@@ -1,0 +1,44 @@
+{{define "content"}}
+<p class="count">{{.Judged}} tag{{if ne .Judged 1}}s{{end}} learned from your comparisons</p>
+
+{{if .Candidates}}
+<ul class="block-list">
+  {{range .Candidates}}
+  <li class="block-row">
+    <a class="tag" href="{{.URL}}">{{.Name}}</a>
+    <span class="muted block-reason">{{.Reason}}</span>
+    <form method="post" action="/block" class="block-form">
+      <input type="hidden" name="tag_id" value="{{.TagID}}">
+      <input type="hidden" name="action" value="block">
+      <button type="submit" class="block-btn">Block this</button>
+    </form>
+  </li>
+  {{end}}
+</ul>
+{{else}}
+<p class="empty">{{.Note}}</p>
+{{end}}
+
+{{if .Blocked}}
+<h2>Blocked</h2>
+<p class="muted">
+  These are removed from the arena and from recommendations. Unblocking
+  restores whatever the arena had inferred about them &mdash; a block is a
+  rule, and removing it does not pretend you ever liked the tag.
+</p>
+<ul class="block-list">
+  {{range .Blocked}}
+  <li class="block-row is-blocked">
+    <a class="tag" href="{{.URL}}">{{.Name}}</a>
+    <form method="post" action="/block" class="block-form">
+      <input type="hidden" name="tag_id" value="{{.TagID}}">
+      <input type="hidden" name="action" value="unblock">
+      <button type="submit" class="block-btn unblock">Unblock</button>
+    </form>
+  </li>
+  {{end}}
+</ul>
+{{end}}
+
+<p class="empty">{{.Note}}</p>
+{{end}}

@@ -438,6 +438,29 @@ CREATE TABLE IF NOT EXISTS arena_rating_history (
 	at       TEXT NOT NULL DEFAULT (datetime('now')),
 	PRIMARY KEY (work_id, period)
 ) WITHOUT ROWID;
+
+-- Explicit blocks, separate from the learned weights above.
+--
+-- arena_user_tag_weights says what the arena INFERRED. A negative weight is a
+-- guess from a handful of pairwise choices, and it is lossy: a tag the reader
+-- has never been shown a reason to reject will have no weight, and a tag they
+-- mildly dislike can sit near zero forever because nothing in a ranking period
+-- forces the question.
+--
+-- A block is a statement, not an inference. It needs no evidence and is not
+-- damped by n. The two must not be conflated: folding a block into the weight
+-- table would make "block" mean "decide this is very negative", so unblocking
+-- could not restore a tag the reader actually likes, and a block would be
+-- silently overwritten by the next batch.
+--
+-- at is kept so the page can say when it was blocked, and so a future
+-- "unblock what I have not touched in a year" sweep has something to read.
+CREATE TABLE IF NOT EXISTS arena_user_blocked_tags (
+	owner_key TEXT NOT NULL,
+	tag_id    INTEGER NOT NULL,
+	at        TEXT NOT NULL DEFAULT (datetime('now')),
+	PRIMARY KEY (owner_key, tag_id)
+) WITHOUT ROWID;
 `
 
 // Migrate applies the schema. Idempotent, so it is safe on every start.

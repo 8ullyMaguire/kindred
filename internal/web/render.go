@@ -140,6 +140,7 @@ func init() {
 		"layout.html", "search.html", "work.html", "tag.html",
 		"recommend.html", "notfound.html", "error.html",
 		"arena.html", "leaderboard.html", "rank.html", "myranking.html",
+		"block.html",
 	} {
 		pages[page] = template.Must(template.New(page).
 			Funcs(funcMap).

@@ -69,6 +69,15 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Blocking is the same shape: a one-button form the /block page
+	// rendered. A page POST is completed by the browser, not typed by
+	// hand, so this does not widen the set of URLs that accept writes --
+	// the guard below still rejects a POST to any other page URL.
+	if r.Method == http.MethodPost && r.URL.Path == "/block" {
+		d.postBlock(w, r)
+		return
+	}
+
 	// Only GET and HEAD otherwise render a page. A POST to a page URL is
 	// not a page, and answering it with HTML answers a different question
 	// than the one asked. Writes go to /arena/judge or the API under
@@ -97,6 +106,8 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 		d.renderLeaderboard(w, r)
 	case p == "/my-ranking":
 		d.renderMyRanking(w, r)
+	case p == "/block":
+		d.renderBlock(w, r)
 	case strings.HasPrefix(p, "/rank/"):
 		d.renderRank(w, r, strings.TrimPrefix(p, "/rank/"))
 	default:

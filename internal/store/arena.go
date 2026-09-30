@@ -643,6 +643,101 @@ func (s *Store) Leaderboard(ctx context.Context, limit int, minComparisons int) 
 	return out, nil
 }
 
+// ---------------------------------------------------------- blocked tags
+
+// BlockedTag is one explicitly blocked tag and when it was blocked.
+type BlockedTag struct {
+	TagID int64
+	At    string
+}
+
+// BlockedTags returns the tags this comparator has explicitly blocked, most
+// recent first.
+//
+// A dedicated table rather than a very negative weight: blocking is a
+// statement, a weight is an inference. They are separate so that unblocking
+// restores whatever the arena had actually inferred, and so a batch can never
+// overwrite a block by nudging a weight.
+func (s *Store) BlockedTags(ctx context.Context, ownerKey string) ([]BlockedTag, error) {
+	rows, err := s.DB.QueryContext(ctx,
+		`SELECT tag_id, at FROM arena_user_blocked_tags
+		 WHERE owner_key = ?
+		 ORDER BY at DESC, tag_id ASC`, ownerKey)
+	if err != nil {
+		return nil, fmt.Errorf("blocked tags: %w", err)
+	}
+	defer rows.Close()
+
+	var out []BlockedTag
+	for rows.Next() {
+		var bt BlockedTag
+		if err := rows.Scan(&bt.TagID, &bt.At); err != nil {
+			return nil, fmt.Errorf("blocked tags scan: %w", err)
+		}
+		out = append(out, bt)
+	}
+	return out, rows.Err()
+}
+
+// BlockTag blocks a tag for a comparator. Idempotent: re-blocking updates the
+// timestamp rather than failing, so a double-click is harmless instead of a
+// 500 the reader sees.
+func (s *Store) BlockTag(ctx context.Context, ownerKey string, tagID int64) error {
+	_, err := s.DB.ExecContext(ctx,
+		`DELETE FROM arena_user_blocked_tags WHERE owner_key = ? AND tag_id = ?`,
+		ownerKey, tagID)
+	if err == nil {
+		_, err = s.DB.ExecContext(ctx,
+			`INSERT INTO arena_user_blocked_tags (owner_key, tag_id, at)
+			 VALUES (?, ?, datetime('now'))`, ownerKey, tagID)
+	}
+	if err != nil {
+		return fmt.Errorf("block tag: %w", err)
+	}
+	return nil
+}
+
+// UnblockTag removes a block. Idempotent, and a no-op for a tag that was never
+// blocked — unblocking something you did not block is not an error the reader
+// needs to see.
+func (s *Store) UnblockTag(ctx context.Context, ownerKey string, tagID int64) error {
+	_, err := s.DB.ExecContext(ctx,
+		`DELETE FROM arena_user_blocked_tags WHERE owner_key = ? AND tag_id = ?`,
+		ownerKey, tagID)
+	if err != nil {
+		return fmt.Errorf("unblock tag: %w", err)
+	}
+	return nil
+}
+
+// IsBlocked reports whether a tag is explicitly blocked. Used by the
+// recommender and the arena's pair chooser so a block is actually honoured
+// rather than merely displayed.
+func (s *Store) IsBlocked(ctx context.Context, ownerKey string, tagID int64) (bool, error) {
+	var n int
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM arena_user_blocked_tags WHERE owner_key = ? AND tag_id = ?`,
+		ownerKey, tagID).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("is blocked: %w", err)
+	}
+	return n > 0, nil
+}
+
+// BlockedTagIDs returns just the ids, for the callers that need the set
+// rather than the rows.
+func (s *Store) BlockedTagIDs(ctx context.Context, ownerKey string) (map[int64]bool, error) {
+	rows, err := s.BlockedTags(ctx, ownerKey)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]bool, len(rows))
+	for _, bt := range rows {
+		out[bt.TagID] = true
+	}
+	return out, nil
+}
+
 // ---------------------------------------------------------- user tag weights
 
 // TagWeight is one comparator's learned preference for one tag.

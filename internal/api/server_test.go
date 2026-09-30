@@ -29,6 +29,16 @@ CREATE TABLE cooccurrence_edges(tag_a_id INTEGER, tag_b_id INTEGER, cooccur_coun
 
 // newTestServer builds a server over a small corpus: 4 works sharing tags,
 // which is enough for a pool, a ranking and a diversified list.
+//
+// The returned client HAS a cookie jar, and that is load-bearing rather than
+// incidental. httptest.NewServer's own ts.Client() has Jar == nil, so the
+// kindred_arena cookie set by the first response is never sent back: every
+// request mints a fresh session, OwnerKey returns a different HMAC each time,
+// and a test that writes with one request and reads with another looks at two
+// different owners. The symptom is a write that demonstrably lands — the row is
+// in the table — paired with a page that lists nothing, which reads as a store
+// bug and is not one. It is the fixture, not the handler: a real browser sends
+// the cookie, so production is correct and needs no change here.
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	dir := t.TempDir()
