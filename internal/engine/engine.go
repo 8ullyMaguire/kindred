@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -84,14 +85,22 @@ type Seed struct {
 }
 
 // ParseSeed parses "kind:id".
+//
+// The id is rejected unless it is entirely digits. `fmt.Sscanf(id, "%d", &n)` was
+// not enough: Sscanf stops at the first non-digit and reports no error, so
+// `?seed=ao3_work:12abc` resolved to work 12, `?seed=ao3_work:1.5` to work 1, and
+// `?seed=ao3_work: 5` to work 5. A seed is a public query parameter
+// (internal/web/handlers.go, `?seed=ao3_work:1&seed=ao3_work:2`), so silently
+// truncating what someone typed means the ranking is computed for an entity the
+// request never named -- and the response looks entirely normal.
 func ParseSeed(s string) (Seed, error) {
 	kind, id, ok := strings.Cut(strings.TrimSpace(s), ":")
 	if !ok || kind == "" || id == "" {
 		return Seed{}, fmt.Errorf("seed %q must be kind:id, e.g. ao3_work:1234", s)
 	}
-	var n int64
-	if _, err := fmt.Sscanf(id, "%d", &n); err != nil {
-		return Seed{}, fmt.Errorf("seed %q has a non-numeric id: %v", s, err)
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return Seed{}, fmt.Errorf("seed %q has a non-numeric id %q", s, id)
 	}
 	return Seed{Kind: kind, ID: n}, nil
 }
