@@ -1,0 +1,35 @@
+name: goal-check
+
+# Runs the repository's definition of done -- docs/goal-check.py -- on every push
+# and pull request.
+#
+# The predicate is strictly stronger than `go test ./...`: it runs the suite, but
+# it also fails when the suite cannot run and when a package that should be tested
+# has no tests at all. That second clause is the reason this file exists --
+# internal/engine had 617 lines and no test file while the suite stayed green.
+#
+# No database is needed. The predicate's own DB clauses, if any, would report
+# UNKNOWN and fail loudly rather than passing silently.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  goal-check:
+    runs-on: docker
+    steps:
+      - name: Check out
+        uses: https://git.polarisocial.xyz/forgejo/forgejo-actions-checkout@v4
+
+      - name: Set up Go
+        uses: https://git.polarisocial.xyz/forgejo/forgejo-actions-setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Run the goal-check predicate
+        env:
+          CI: "true"
+        run: python3 docs/goal-check.py
