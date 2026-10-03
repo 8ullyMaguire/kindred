@@ -29,11 +29,11 @@ type ArenaPage struct {
 	// A and B are nil together, and Message explains why. An exhausted
 	// pool is a normal outcome, and rendering it as an invitation is the
 	// difference between a feature and a dead end.
-	A, B     *WorkCard
+	A, B *WorkCard
 	// Cards is A and B as a flat slice. Two pointer fields cannot be
 	// ranged over, and the form needs each card to know which side it is
 	// so the radio can carry 'a' or 'b'.
-	Cards    []WorkCard
+	Cards []WorkCard
 	// Session names the comparison this page is judging. Without it the
 	// form cannot be attributed and the judgement updates nothing.
 	Session  string
