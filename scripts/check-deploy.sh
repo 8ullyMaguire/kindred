@@ -87,17 +87,191 @@ echo "deploy-drift gate: $TARGET"
 # fails, fall back to /tag/1 so a fixture-backed instance still works.
 echo
 echo "discovering a tag to test against..."
-TAG=""
-for q in general dark angst; do
-  TAG=$(curl -fsS --max-time 20 "$TARGET/search?q=$q" 2>/dev/null \
-        | grep -oE '/tag/[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
-  [ -n "$TAG" ] && break
+# A tag with one work cannot prove a filter works: every filter would return
+# either 0 or 1, and both are what a broken filter returns. So the discovery
+# prefers a tag with enough works to discriminate, and says which it picked.
+#
+# /search?q=general&sort=kudos is used rather than the plain search, because
+# the plain one's first hit on the real mirror is a tag with a single work.
+# How many works a filtered tag page reports.
+#
+# NOT by counting the rendered cards: the page limit is 100, so every filter on
+# a tag with 100+ works renders exactly 100 cards and all of them look inert.
+# The first version of this gate counted cards, picked a 100-work tag, and
+# reported "the filter is inert" on a filter that works perfectly.
+#
+# The heading's total is the FILTERED COUNT and is not limited by n -- which is
+# exactly the property these checks want, since a count that ignores the filters
+# is separately gated by TestTagTotalCountsTheFilteredSet.
+#
+# Two sources, in order: the explicit total, then the fallback of rendered
+# cards. The fallback keeps the check working on a page too small to show a
+# total.
+count_works () {
+  local page total
+  page=$(curl -fsS --max-time 25 "$1" 2>/dev/null) || { echo 0; return; }
+  total=$(printf '%s' "$page" \
+    | tr '\n' ' ' \
+    | grep -oE 'of [0-9,]+' \
+    | head -1 \
+    | tr -d ',' \
+    | grep -oE '[0-9]+')
+  if [ -n "${total:-}" ] && [ "$total" != "0" ]; then
+    echo "$total"
+    return
+  fi
+  # No works heading (empty result, or an error page): count what rendered.
+  printf '%s' "$page" | grep -c '<div class="work">' || true
+}
+# Does this tag discriminate on both axes the gate tests?
+#
+# A tag whose rating distribution is single-valued cannot test a rating filter:
+# on the real mirror, tag 26 is "explicit" and all 42,796 of its works are
+# Explicit, so rating=E returns every one and rating=G returns none. Both are
+# CORRECT, and both look exactly like a filter that does nothing. The first
+# version of this gate picked the biggest tag, hit that, and reported two
+# failures on working code.
+discriminates () {
+  local t=$1 base ct cf rg re
+  base=$(count_works "$TARGET/tag/$t?n=100")
+  [ "${base:-0}" -lt 10 ] && return 1
+  ct=$(count_works "$TARGET/tag/$t?n=100&complete=true")
+  cf=$(count_works "$TARGET/tag/$t?n=100&complete=false")
+  # Both completion states present and different.
+  [ "${ct:-0}" -ge 1 ] && [ "${cf:-0}" -ge 1 ] || return 1
+  [ "$ct" = "$cf" ] && return 1
+  # At least two distinct ratings present, none of which is everything.
+  rg=$(count_works "$TARGET/tag/$t?n=100&rating=G")
+  re=$(count_works "$TARGET/tag/$t?n=100&rating=E")
+  [ "${rg:-0}" -ge 1 ] && [ "${re:-0}" -ge 1 ] || return 1
+  [ "$re" = "$base" ] && return 1   # every work is E: cannot discriminate
+  return 0
+}
+
+TAG="${KINDRED_GATE_TAG:-}"
+TAG_WORKS=0
+if [ -n "$TAG" ]; then
+  TAG_WORKS=$(count_works "$TARGET/tag/$TAG?n=100")
+  discriminates "$TAG" || note "KINDRED_GATE_TAG=$TAG cannot discriminate on every "\
+"axis, so the filter checks below may report false failures"
+fi
+for q in general explicit angst relationship; do
+  for cand in $(curl -fsS --max-time 20 "$TARGET/search?q=$q&n=100" 2>/dev/null \
+                 | grep -oE '/tag/[0-9]+' | grep -oE '[0-9]+' | sort -un); do
+    n=$(count_works "$TARGET/tag/$cand?n=100")
+    if [ "${n:-0}" -gt "$TAG_WORKS" ]; then
+      TAG=$cand
+      TAG_WORKS=$n
+    fi
+  done
+  # Only a tag that discriminates on both axes is usable. Keep the biggest
+  # candidate seen so far, but stop as soon as one qualifies.
+  if [ -n "$TAG" ] && discriminates "$TAG"; then
+    echo "  tag/$TAG discriminates on completion and rating"
+    break
+  fi
 done
 if [ -z "$TAG" ]; then
   TAG=1
-  note "search found no tag; falling back to /tag/1 (fine for a fixture instance)"
+  TAG_WORKS=$(count_works "$TARGET/tag/1?n=100")
+  note "found no tag with works; falling back to /tag/1 (fine for a fixture instance)"
 fi
-echo "  using /tag/$TAG"
+echo "  using /tag/$TAG ($TAG_WORKS works)"
+
+# --- filters: the controls must be there AND must work --------------------
+#
+# Presence is not behaviour. A control can render perfectly while the query
+# ignores the parameter, which is exactly the defect these shipped with: the API
+# honoured complete/rating/lang and the page ignored them, with no message.
+# Each check therefore runs the filter and asserts the RESULT moved.
+echo
+echo "filters:"
+ctl=$(curl -fsS --max-time 20 "$TARGET/tag/$TAG" || true)
+for name in complete rating lang; do
+  if printf '%s' "$ctl" | grep -qE "name=\"$name\""; then
+    ok "$name control is present"
+  else
+    bad "$name control is MISSING from the tag page"
+  fi
+done
+
+base_count=$TAG_WORKS
+[ "${base_count:-0}" -eq 0 ] && base_count=$(count_works "$TARGET/tag/$TAG?n=100")
+if [ "${base_count:-0}" -gt 0 ]; then
+  ok "tag has $base_count works to filter"
+
+  # complete: both states must be non-empty and different.
+  ct=$(count_works "$TARGET/tag/$TAG?n=100&complete=true")
+  cf=$(count_works "$TARGET/tag/$TAG?n=100&complete=false")
+  if [ "${ct:-0}" -gt 0 ] && [ "${cf:-0}" -gt 0 ] && [ "$ct" != "$cf" ]; then
+    ok "complete filter works ($ct complete, $cf in progress)"
+  else
+    bad "complete=true gave $ct, complete=false gave $cf (base $base_count). "\
+"Both states must be non-empty and different, or the filter is inert."
+  fi
+
+  # The union must equal the base: the two states partition the tag.
+  if [ $(( ct + cf )) -eq "$base_count" ]; then
+    ok "the two completion states partition the tag ($ct + $cf = $base_count)"
+  else
+    bad "the completion states cover $(( ct + cf )) of $base_count works. "\
+"A duplicated join row or a NULL complete makes these disagree."
+  fi
+
+  # rating: at least one letter must select a different, non-empty set.
+  rG=$(count_works "$TARGET/tag/$TAG?n=100&rating=G")
+  rE=$(count_works "$TARGET/tag/$TAG?n=100&rating=E")
+  if [ "${rG:-0}" -gt 0 ] && [ "${rE:-0}" -gt 0 ] && [ "$rG" != "$rE" ]; then
+    ok "rating filter works (G: $rG, E: $rE)"
+  else
+    bad "rating=G gave $rG and rating=E gave $rE; both must be non-empty and "\
+"different. The mirror stores FULL rating names, so the letters must be "\
+"translated."
+  fi
+
+  # A rating letter the mirror does not contain must match NOTHING, never
+  # something nearby. Z is explicit in some storefronts; mapping it to Mature
+  # would be confidently wrong.
+  rZ=$(count_works "$TARGET/tag/$TAG?n=100&rating=Z")
+  if [ "${rZ:-1}" -eq 0 ]; then
+    ok "?rating=Z matches nothing, as it must"
+  else
+    bad "?rating=Z matched $rZ works. Only AO3's G/T/M/E may be translated; "\
+"anything else has to match nothing."
+  fi
+
+  # lang: English vs a language the tag may not have. Only asserted when the
+  # mirror has more than one language at all, or the check is theatre.
+  lE=$(count_works "$TARGET/tag/$TAG?n=100&lang=English")
+  lK=$(count_works "$TARGET/tag/$TAG?n=100&lang=Klingon")
+  if [ "${lE:-0}" -gt 0 ] && [ "${lK:-1}" -eq 0 ]; then
+    ok "language filter works (English: $lE, Klingon: 0)"
+  elif [ "${lE:-0}" -le "$base_count" ] && [ "${lK:-1}" -eq 0 ]; then
+    ok "language filter present (English: $lE)"
+  else
+    bad "language filter looks wrong: English $lE, Klingon $lK (must be 0)"
+  fi
+
+  # No work may be listed twice.
+  dupes=$(curl -fsS --max-time 20 "$TARGET/tag/$TAG?n=100" \
+    | grep -oE '<div class="work">\s*<h3><a href="/work/[0-9]+"' \
+    | grep -oE '[0-9]+' | sort | uniq -d | wc -l)
+  if [ "${dupes:-0}" -eq 0 ]; then
+    ok "no work is listed twice (work_tags is keyed on work_id, tag_id, tag_type)"
+  else
+    bad "$dupes work(s) are listed twice; the list query needs SELECT DISTINCT"
+  fi
+else
+  bad "the discovered tag has no works, so the filters cannot be checked"
+fi
+
+# The filter checks need a tag big enough to discriminate. Saying so is better
+# than reporting a pass that means nothing.
+if [ "${TAG_WORKS:-0}" -lt 10 ] && [ "${base_count:-0}" -lt 10 ]; then
+  bad "tag/$TAG has only ${TAG_WORKS:-0} works. A filter over one work returns "\
+"0 or 1 either way, so the checks above cannot distinguish a working filter "\
+"from an inert one -- they are NOT a pass. Point KINDRED_GATE_TAG at a larger tag."
+fi
 
 # --- 1. is it up at all -------------------------------------------------
 if ! curl -fsS --max-time 10 "$TARGET/healthz" >/dev/null 2>&1; then
