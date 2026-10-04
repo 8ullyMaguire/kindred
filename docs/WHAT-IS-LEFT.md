@@ -1,15 +1,106 @@
 # kindred — what is left
 
-**Created 2026-10-04.** Written after measuring the tree, not after reading
-the plan. `docs/PLAN.md` says "Status: 2026-09-29, written before any code"
-and never says which of M0–M6 shipped, so every row below was checked against
-the filesystem, `go test`, and the running instance.
+Written 2026-10-05, from measurement. Every claim below was checked against the
+tree or the running service, not against a plan.
 
-Rule for this file: a row moves to DONE only with the command that proves it
-and the output that was observed. A row that says "shipped" because a plan
-says so is not done.
+## Where it stands
 
----
+| | |
+|---|---|
+| Go | 21 packages, `go test ./... -count=1` exit 0, `go vet` clean, `gofmt` clean |
+| Browser | 79 Playwright tests pass (69 pre-existing + 10 new for the filters) |
+| Spec gate | `docs/goal-check.py` — all 7 clauses pass |
+| Deployment | live on thinkcentre `:8010`, binary sha256 matches the build, unit restarted 2026-10-05 01:02 |
+| Deploy gate | `scripts/check-deploy.sh` — **32 checks, all pass** |
+| Index age | **128h.** Correct: the index was built 2026-09-29, and the header reports the age of the *data*. A deploy does not rebuild an index — `kindred ingest` does. |
+
+## Done this session
+
+- **Deployed.** The instance had been serving a Sep 29 binary for six days.
+  Rebuilt, deployed behind a pre-flight gate on a scratch port, verified on the
+  wire.
+- **A deploy-drift gate**, because every other gate runs against the repo and a
+  deploy is the one step where the code under test and the code being run are
+  different objects. Mutation-checked twice by building the pre-headers
+  revision and serving it: 20 of 22 checks fail, then 28 of 32.
+- **SPEC §4.4 row 1 implemented**, as a source-level AST gate rather than the
+  `dump verify --no-clearnet` flag the spec named — this project has no
+  snapshot-serving code at all, so the guarantee is a property of the codebase.
+  Rows 3 and 4 are marked **NOT IMPLEMENTED** rather than left aspirational.
+- **`complete` / `rating` / `lang` on the tag page.** Three real bugs fixed
+  (see below), and the fixture that had been hiding one of them rewritten.
+- **PLAN and SPEC corrected** where they named commands and files that do not
+  exist — `dump verify --in` is `verify --dir`, and all eight filenames in
+  PLAN §6.1 are fiction.
+
+## Still open, in the order I would do it
+
+### 1. SPEC §4.2 retention and §4.3 delta log — the largest functional gap
+
+`grep -rn 'retention|delta' internal/dump/ cmd/kindred/` returns nothing. Every
+dump is a full 7 MB rebuild, so §4.3's "peers pull a few hundred KB per day" is
+false by three orders of magnitude. `Manifest` carries no version-chain field.
+
+- [ ] retention: keep the three most recent versions, then delete
+- [ ] delta: a parent pointer plus a changed-rows-only shard
+- [ ] the retention gate needs a mutation too, or it will be a comment
+
+### 2. SPEC §4.4 row 3 — the `go list -deps` assertion
+
+The serving binary's link graph is never asserted to contain no outbound HTTP
+client. Named in the spec since it was written, never implemented.
+`TestTransportHasNoPlainDialFallback` covers the fetch transport, which is a
+different claim. This is the only §4.4 row still named-but-unwritten.
+
+### 3. A CI check that every command in the docs parses
+
+Two documents in a row (`PLAN` §6.4 and `SPEC` §4.4) named a `kindred` command
+that does not exist, and the failure mode reads as "the feature is broken"
+rather than "the document is wrong".
+
+- [ ] extract every `kindred …` line from the docs, run `--help`-level parsing
+      on each
+- [ ] it will fail today. That is the point — it is a real list of errors
+
+### 4. Docs-command drift, root cause
+
+The docs were written before the CLI settled. Worth one pass to make the
+command surface the source of truth, or the check in item 3 becomes a permanent
+allowlist.
+
+## Three bugs worth remembering
+
+1. **`?rating=Z` returned Mature works.** The mapping had P/S/D/Z from other
+   systems' age-rating tables. Those letters mean different things elsewhere. A
+   filter that confidently answers a different question is worse than one that
+   admits ignorance.
+
+2. **"The tag has 0 works in total" whenever a filter matched nothing.** The
+   message read `Tag.WorkCount`, which is the *filtered* count. Found by a
+   Playwright assertion on the sentence — the Go test for that branch asserted
+   the filters were NAMED and never looked at the number beside them.
+
+3. **Work 1 listed twice, "of 29" over 28 distinct works.** `work_tags` is
+   keyed on `(work_id, tag_id, tag_type)`. `internal/api` had a private copy of
+   the corpus schema with the PK as `(work_id, tag_id)` — without `tag_type` —
+   so the copy could not express the bug and every test passed. That private
+   copy also lacked `users` and the `NOT NULL`s on `works.title`/`authors`,
+   which is why three fixtures were writing rows production would reject.
+
+## Two lessons about gates, from this session
+
+**A gate that cannot discriminate produces false failures, and a false failure
+gets a gate ignored.** The deploy gate twice reported working code as broken —
+once by counting rendered cards against a 100-row page limit, once by picking
+the "explicit" tag where all 42,796 works are Explicit so `rating=E` returns
+everything and `rating=G` returns nothing. Both are *correct*. It now requires
+a tag that discriminates on every axis it checks, and says which tag it chose.
+
+**A fixture can remove a bug from the tests while leaving it in the product.**
+The old `testcorpus` made every work "Explicit" with no language or completion,
+so `rating=G` and `lang=English` each returned either everything or nothing —
+and a missing filter produces the same two answers. Every filter test written
+against it passed unconditionally.
 
 ## Current state
 
@@ -144,7 +235,13 @@ it does not exist under that name or any other.
 - [x] row 3 (`go list -deps` assertion that no HTTP client is linked into the
       serving path) is still genuinely missing — see item 9 below
 
-### 9. SPEC §4.4 row 3: the `go list -deps` assertion (still open)
+### 9. SPEC §4.4 row 3: the `go list -deps` assertion — STILL OPEN, and the
+last unverified privacy claim
+
+- [ ] the serving binary's link graph is never asserted to contain no outbound
+      HTTP client. `TestTransportHasNoPlainDialFallback` covers the *fetch*
+      transport, which is a different claim.
+- [ ] this is the only row of §4.4 still named-but-unwritten
 
 - [ ] assert the serving binary's link graph contains no outbound HTTP client
       beyond what the onion transport needs. Named in the spec, never written.
