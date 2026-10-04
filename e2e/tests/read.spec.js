@@ -50,6 +50,120 @@ test.describe('public read surface', () => {
     await expect(page.locator('div.work').first()).toBeVisible();
   });
 
+  test('search finds a WORK by its title, not only a tag', async ({ page }) => {
+    // The gap this closes. /search used to query the tags table ONLY, so a
+    // work that exists in the mirror could not be found by its title. The
+    // search box even said "Search tags" -- an honest label for a limitation
+    // a reader feels at once, because the work you can name is the work you
+    // most want to seed a recommendation from.
+    //
+    // The query is taken from a work the suite has already proven exists, so
+    // this cannot pass by searching for something that is not there.
+    await page.goto('/work/1');
+    const title = (await page.locator('h1').innerText()).trim();
+    expect(title.length).toBeGreaterThan(0);
+
+    const word = title.split(/\s+/)[0];
+    await page.goto(`/search?q=${encodeURIComponent(word)}`);
+    await expect(page).toHaveURL(/\/search\?q=/);
+
+    const works = page.locator('[data-testid="works"] a[href^="/work/"]');
+    await expect(works.first()).toBeVisible();
+
+    // The result must be a LINK to the work page, and must reach it.
+    const href = await works.first().getAttribute('href');
+    expect(href).toMatch(/^\/work\/\d+$/);
+    await works.first().click();
+    await page.waitForURL(/\/work\/\d+/);
+    await expect(page.locator('h1')).toBeVisible();
+  });
+
+  test('a work found by search can seed a ranking in one click', async ({ page }) => {
+    // The purpose of the whole feature: finding a work is only useful if the
+    // next action is ranking from it. Without the seed link, search finds
+    // things the reader then has to copy an ID out of the URL to use.
+    await page.goto('/work/1');
+    const title = (await page.locator('h1').innerText()).trim();
+    const word = title.split(/\s+/)[0];
+
+    await page.goto(`/search?q=${encodeURIComponent(word)}`);
+    const seedLink = page
+      .locator('[data-testid="works"] a.seed-link')
+      .first();
+    await expect(seedLink).toBeVisible();
+
+    const href = await seedLink.getAttribute('href');
+    expect(href).toMatch(/^\/recommend\?seed=ao3_work:\d+$/);
+
+    await seedLink.click();
+    await page.waitForURL(/\/recommend\?seed=ao3_work:/);
+    // The ranking page must accept the seed rather than reject it.
+    await expect(page.locator('form[action="/recommend"]')).toBeVisible();
+  });
+
+  test('a search matching nothing says so in BOTH halves', async ({ page }) => {
+    // Two sections, two messages. One message would leave the reader unable
+    // to tell whether the other half of the search ran at all -- the same
+    // "is this empty or broken?" ambiguity this repo keeps fixing elsewhere.
+    await page.goto('/search?q=zzz-definitely-not-in-the-corpus-zzz');
+    await expect(page.locator('[data-testid="no-works"]')).toBeVisible();
+    await expect(page.locator('[data-testid="no-tags"]')).toBeVisible();
+  });
+
+  test('a search that matches a tag but no work says which is empty', async ({ page }) => {
+    // The discriminating case. 'dark' is a tag in the fixture and is not a
+    // substring of any fixture title ("Fixture Work 0NN"), so this separates
+    // the two halves: a page that showed only one message would pass a test
+    // that checked nothing.
+    await page.goto('/search?q=dark');
+    await expect(page.locator('[data-testid="tag-count"]')).toBeVisible();
+    await expect(page.locator('[data-testid="no-works"]')).toBeVisible();
+  });
+
+  test('the search box does not claim to search only tags', async ({ page }) => {
+    // The label was the honest admission of the limitation. Now that works
+    // are searched, a label still reading "Search tags" understates the
+    // page and would send readers looking only for tags.
+    await page.goto('/');
+    const label = await page.locator('label[for="q"]').innerText();
+    expect(label.trim().toLowerCase()).not.toContain('tags only');
+  });
+
+  test('every page states how old the data is, or that it is unknown', async ({ page }) => {
+    // The footer must never be silent about freshness. The ingest command
+    // writes index_built_at into the store's meta table and, before this,
+    // nothing read it -- so the age of the data behind every recommendation
+    // was invisible, and a stale index answered confidently from old data.
+    //
+    // Either branch is acceptable; silence is not. The e2e server's store has
+    // no build stamp, so in practice this asserts the "not recorded" branch,
+    // which is the one that must never degrade into a numeric age.
+    await page.goto('/');
+    const freshness = page.locator('[data-testid="freshness"]');
+    await expect(freshness).toBeVisible();
+
+    const text = (await freshness.innerText()).trim();
+    expect(text.length).toBeGreaterThan(0);
+
+    // It must say something about age, not just repeat the version line.
+    expect(text.toLowerCase()).toMatch(
+      /not recorded|built (today|\d+ day)|future/);
+
+    // An unknown age must NOT be rendered as a number. This is the specific
+    // lie the three-state design exists to prevent.
+    if (/not recorded/i.test(text)) {
+      expect(text).not.toMatch(/\d+\s*days?\s+ago/);
+      expect(text).not.toContain('built today');
+    }
+
+    // And it appears on every page, not just the home page, because Base is
+    // shared. A footer on one page is a footer on one page.
+    for (const href of ['/arena', '/leaderboard']) {
+      await page.goto(href);
+      await expect(page.locator('[data-testid="freshness"]')).toBeVisible();
+    }
+  });
+
   test('a work page shows its title, tags and recommendations', async ({ page }) => {
     await page.goto('/work/1');
 

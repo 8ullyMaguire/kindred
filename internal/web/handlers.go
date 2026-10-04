@@ -875,6 +875,20 @@ func cloneWeights(m map[int32]float64) map[int32]float64 {
 	return out
 }
 
+// renderSearch answers one query against BOTH tags and works.
+//
+// It used to search tags only, and the search box was labelled "Search tags"
+// to match -- an honest label for an honest limitation, and a limitation a
+// reader feels immediately: a work that exists in the mirror cannot be found
+// by its title, and a work you can name is the one work you most want to
+// seed a recommendation from.
+//
+// Tags and works are searched separately and reported separately rather than
+// merged into one ranked list. The two have no comparable score -- a tag
+// match is a substring hit, a work match is a title hit -- so any combined
+// ordering would be arbitrary, and an arbitrary ordering presented as "best
+// matches" is worse than two honest lists. Both sections state which one is
+// empty and why.
 func (d Deps) renderSearch(w http.ResponseWriter, r *http.Request, q string) {
 	ctx := r.Context()
 	base := d.base("kindred", "")
@@ -882,29 +896,91 @@ func (d Deps) renderSearch(w http.ResponseWriter, r *http.Request, q string) {
 	page := SearchPage{Base: base}
 
 	if q != "" {
-		const stmt = `SELECT id, name FROM tags WHERE name LIKE ? ESCAPE '\' ORDER BY name LIMIT ?`
-		rows, err := d.Engine.Corpus.DB.QueryContext(ctx, stmt, "%"+likeEscape(q)+"%", 100)
-		if err != nil {
-			d.fail(w, r, http.StatusInternalServerError, err)
-			return
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var h TagHit
-			if err := rows.Scan(&h.ID, &h.Name); err != nil {
-				d.fail(w, r, http.StatusInternalServerError, err)
-				return
-			}
-			page.Results = append(page.Results, h)
-		}
-		if err := rows.Err(); err != nil {
-			d.fail(w, r, http.StatusInternalServerError, err)
-			return
-		}
-		page.Total = len(page.Results)
-		page.Limited = len(page.Results) == 100
+		d.searchTags(ctx, q, &page)
+		d.searchWorks(ctx, q, &page)
 	}
 	d.page(w, "search.html", page, http.StatusOK)
+}
+
+// searchTags fills the tag half of the results.
+func (d Deps) searchTags(ctx context.Context, q string, page *SearchPage) {
+	const stmt = `SELECT id, name FROM tags WHERE name LIKE ? ESCAPE '\' ORDER BY name LIMIT ?`
+	rows, err := d.Engine.Corpus.DB.QueryContext(ctx, stmt, "%"+likeEscape(q)+"%", 100)
+	if err != nil {
+		// A tag search that fails must not take the work half down with
+		// it: the work results are still worth showing, and the page says
+		// what it could not do rather than pretending the query was empty.
+		page.TagError = err.Error()
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h TagHit
+		if err := rows.Scan(&h.ID, &h.Name); err != nil {
+			page.TagError = err.Error()
+			return
+		}
+		page.Results = append(page.Results, h)
+	}
+	if err := rows.Err(); err != nil {
+		page.TagError = err.Error()
+		return
+	}
+	page.Total = len(page.Results)
+	page.Limited = len(page.Results) == 100
+}
+
+// searchWorks fills the work half of the results, matching the title.
+//
+// LIKE '%q%' is a table scan. That is the right trade at this size: the
+// corpus is 112,935 works, a scan is a few tens of milliseconds, and an
+// index on a leading-wildcard LIKE is not something SQLite can use anyway.
+// The LIMIT is what keeps the response bounded, and it is applied in SQL
+// rather than by counting a full result set in Go.
+//
+// Title and author are both searched. AO3 readers know a fic by its author at
+// least as often as by its title, and `authors` is a comma-separated column
+// in this corpus, so a substring match there finds a person by name.
+func (d Deps) searchWorks(ctx context.Context, q string, page *SearchPage) {
+	needle := "%" + likeEscape(q) + "%"
+	const stmt = `
+		SELECT w.id, w.title, w.authors, w.url, w.summary,
+		       w.kudos, w.hits, w.word_count, w.language, w.complete
+		FROM works w
+		WHERE w.title LIKE ? ESCAPE '\' OR w.authors LIKE ? ESCAPE '\'
+		ORDER BY w.kudos DESC, w.id
+		LIMIT ?`
+	rows, err := d.Engine.Corpus.DB.QueryContext(ctx, stmt, needle, needle, 50)
+	if err != nil {
+		page.WorkError = err.Error()
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h WorkHit
+		// Every one of these is NULLable in the real corpus, and scanning
+		// NULL into a string takes out the whole page. The tag handler
+		// learned this one column at a time; here they are all nullable
+		// up front.
+		var author, url, summary, language sql.NullString
+		var kudos, hits, words, complete sql.NullInt64
+		if err := rows.Scan(&h.ID, &h.Title, &author, &url, &summary,
+			&kudos, &hits, &words, &language, &complete); err != nil {
+			page.WorkError = err.Error()
+			return
+		}
+		h.Author, h.URL, h.Summary, h.Language =
+			author.String, url.String, summary.String, language.String
+		h.Kudos, h.Hits, h.WordCount, h.Complete =
+			kudos.Int64, hits.Int64, words.Int64, complete.Int64
+		page.Works = append(page.Works, h)
+	}
+	if err := rows.Err(); err != nil {
+		page.WorkError = err.Error()
+		return
+	}
+	page.WorkTotal = len(page.Works)
+	page.WorkLimited = len(page.Works) == 50
 }
 
 func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
@@ -1315,12 +1391,109 @@ func (d Deps) base(title, heading string) Base {
 	} else {
 		b.Mode = "full"
 	}
+	ctx := context.Background()
 	if d.Engine != nil && d.Engine.Corpus != nil && d.Engine.Corpus.DB != nil {
-		if n, err := d.Engine.Corpus.CountWorks(context.Background()); err == nil {
+		if n, err := d.Engine.Corpus.CountWorks(ctx); err == nil {
 			b.CorpusWorks = n
 		}
 	}
+	d.fillFreshness(ctx, &b)
 	return b
+}
+
+// fillFreshness reads the build timestamps the ingest command already writes
+// and puts the age on the page.
+//
+// The point is that these keys have existed in the meta table all along
+// (`index_built_at`, `corpus_built_at`) and nothing has ever read them, so
+// the one fact that most changes what a recommendation is worth -- how old
+// the data is -- was invisible. A stale index does not fail; it answers
+// confidently from old data.
+//
+// Three states, kept distinct because each needs different words:
+//
+//	no timestamp recorded -> AgeKnown false. Say the age is unknown.
+//	                    -> "0 days old" is a freshness claim from no data.
+//	timestamp in the future -> negative age. A clock problem, named as one.
+//	otherwise -> the age in days.
+//
+// An unreadable or absent timestamp leaves AgeKnown false, and the page then
+// says the age is not recorded. It is never fatal: a corrupt meta row must not
+// take every page on the site down, and the footer is the least important
+// thing any page renders.
+//
+// An ABSENT key is not a warning. Store.Meta returns ("", nil) for a key
+// that does not exist, so treating the empty string as an unreadable
+// timestamp logged a warning on every page render of a server that had
+// never been ingested -- the log said "unreadable" about a value that was
+// never written. Three states, and the middle one is ordinary:
+//
+//	key missing         -> no warning. AgeKnown stays false; the page says
+//	                      the age is unknown, which is honest.
+//	key present, empty  -> warning. Something wrote an empty value.
+//	key present,
+//	  unparseable       -> warning. Same.
+func (d Deps) fillFreshness(ctx context.Context, b *Base) {
+	if d.Engine == nil || d.Engine.Store == nil {
+		return
+	}
+	if raw, err := d.Engine.Store.Meta(ctx, "index_built_at"); err != nil {
+		d.log().Warn("reading index_built_at failed", "err", err)
+	} else if raw != "" {
+		t, perr := parseBuildTime(raw)
+		if perr != nil {
+			d.log().Warn("index_built_at is unreadable", "value", raw, "err", perr)
+			return
+		}
+		b.IndexBuiltAt = raw
+		b.AgeKnown = true
+		b.IndexAgeDays = int(time.Since(t).Hours() / 24)
+		b.IndexAgeAbsDays = b.IndexAgeDays
+		if b.IndexAgeAbsDays < 0 {
+			b.IndexAgeAbsDays = -b.IndexAgeAbsDays
+			b.AgeInFuture = true
+		}
+	}
+	// The mirror's own stamp is a separate fact from the index build: an
+	// index built today from a mirror written in March is three months out
+	// of date however fresh the index is.
+	if raw, err := d.Engine.Store.Meta(ctx, "corpus_built_at"); err != nil {
+		d.log().Warn("reading corpus_built_at failed", "err", err)
+	} else if raw != "" {
+		if _, perr := parseBuildTime(raw); perr != nil {
+			d.log().Warn("corpus_built_at is unreadable", "value", raw, "err", perr)
+			return
+		}
+		b.CorpusBuiltAt = raw
+	}
+}
+
+// parseBuildTime reads a build timestamp.
+//
+// store.Now() writes RFC3339, but a timestamp written by an older build, by
+// hand, or by a different tool is often date-only or has a space instead of
+// a T. Those are accepted rather than reported as corrupt, because the
+// distinction between "not parseable" and "parseable but coarse" does not
+// change what the page says, and refusing to show an age you can compute is
+// the worse failure.
+func parseBuildTime(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, errors.New("empty timestamp")
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+	}
+	for _, l := range layouts {
+		if t, err := time.Parse(l, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("%q is not a timestamp this understands", s)
 }
 
 // page renders a template into a buffer, then writes it.

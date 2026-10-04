@@ -16,8 +16,9 @@
       {{/* Query lives on Base so every page can prefill the box, including
            the ones that have no search results of their own. */}}
       <form class="search-form" method="get" action="/search" role="search">
-        <label class="landmark" for="q">Search tags</label>
-        <input type="text" id="q" name="q" value="{{.Query}}" placeholder="search tags&hellip;">
+        <label class="landmark" for="q">Search</label>
+        <input type="text" id="q" name="q" value="{{.Query}}"
+               placeholder="a tag, a work, or an author&hellip;">
         <input type="submit" value="Search">
       </form>
     </div>
@@ -59,6 +60,37 @@
         kindred{{if .Version}} {{.Version}}{{end}}{{if .Mode}} &middot; {{.Mode}} mode{{end}}.
         The API is the product; these pages are a front for it.
       </p>
+      {{/* Freshness. The ingest command writes index_built_at and
+           corpus_built_at into the store's meta table and, until this, nothing
+           read them -- so the age of the data, the fact that most changes what
+           a recommendation is worth, was invisible. A stale index does not
+           error; it answers confidently from old data.
+
+           Three states, and each needs different words:
+             - age unknown (no timestamp recorded): say so. Rendering "0 days
+               old" would be a freshness claim made from no data.
+             - the timestamp is in the FUTURE: that is a clock problem, and
+               saying "built in -2 days" would read as a data error.
+             - otherwise the age itself. */}}
+      <p class="count" data-testid="freshness">
+        {{if .AgeKnown}}
+          {{if .AgeInFuture}}
+            The index reports a build time {{commas .IndexAgeAbsDays}} day(s) in the
+            future, which means this host&rsquo;s clock disagrees with the one that built it.
+            Treat the data&rsquo;s age as unknown.
+          {{else if eq .IndexAgeDays 0}}
+            Index built today
+            {{if .CorpusBuiltAt}}(from a mirror stamped {{.CorpusBuiltAt}}){{end}}.
+          {{else}}
+            Index built {{commas .IndexAgeDays}} day{{if ne .IndexAgeDays 1}}s{{end}} ago
+            {{if .CorpusBuiltAt}}(from a mirror stamped {{.CorpusBuiltAt}}){{end}}.
+            {{if gt .IndexAgeDays 30}}That is old enough that recent fics are probably missing entirely.{{end}}
+          {{end}}
+        {{else}}
+          The age of this mirror is not recorded, so how current these results are
+          cannot be stated.
+        {{end}}
+      </p>
     </div>
   </body>
 </html>
@@ -82,8 +114,17 @@
     {{.Author}} &middot;
     {{commas .Kudos}} kudos &middot;
     {{commas .Hits}} hits{{if .Language}} &middot; {{.Language}}{{end}}
+    {{/* Word count is the number a reader actually decides on before
+         clicking, and it was in the corpus and in this struct the whole
+         time, unrendered. A NULL word_count prints nothing rather than 0,
+         because "0 words" is a claim and "no count recorded" is a fact. */}}
+    {{if .WordCount}} &middot; {{commas .WordCount}} words{{end}}
     {{if .Complete}}<span class="count">(complete)</span>{{end}}
     {{if .URL}} &middot; <a href="{{.URL}}" rel="noopener nofollow">on AO3</a>{{end}}
+    {{/* One click from any work to a ranking seeded by it. This is the
+         whole engine's purpose, so it belongs on every card rather than
+         only on the work page. */}}
+    &middot; <a class="seed-link" href="/recommend?seed=ao3_work:{{.ID}}">rank from this</a>
   </p>
   {{if .Summary}}<p class="summary">{{shorten .Summary 2}}</p>{{end}}
 </div>

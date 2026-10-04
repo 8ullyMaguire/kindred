@@ -1,19 +1,61 @@
 {{define "content"}}
 {{if .Query}}
-  {{if .Results}}
-    <p class="count">{{len .Results}} tag{{if ne (len .Results) 1}}s{{end}} match &ldquo;{{.Query}}&rdquo;.</p>
+  {{/* Two separate lists, never one merged ranking.
+
+       A tag match and a title match are not comparable scores, so a single
+       ordered list would be arbitrarily ordered while claiming to be "best
+       matches". Each section names what it searched, and an empty one says
+       so rather than leaving the reader to wonder whether the other kind
+       was searched at all. */}}
+
+  <h2>Works</h2>
+  {{if .WorkError}}
+    <p class="note" data-testid="work-search-error">
+      The work search failed: {{.WorkError}}. Tag results below are unaffected.
+    </p>
+  {{else if .Works}}
+    <p class="count" data-testid="work-count">
+      {{.WorkTotal}} work{{if ne .WorkTotal 1}}s{{end}} match &ldquo;{{.Query}}&rdquo; by title or author.
+      {{if .WorkLimited}}That is the most this page shows.{{end}}
+    </p>
+    <div class="recommend" data-testid="works">
+      {{range .Works}}
+        {{/* The shared workrow card, so a work found by search looks exactly
+             like a work found anywhere else. A second card style would be a
+             second thing to keep in step. */}}
+        {{template "workrow" .}}
+      {{end}}
+    </div>
+  {{else}}
+    <p class="count" data-testid="no-works">
+      No work&rsquo;s title or author matches &ldquo;{{.Query}}&rdquo;.
+    </p>
+  {{end}}
+
+  <h2>Tags</h2>
+  {{if .TagError}}
+    <p class="note" data-testid="tag-search-error">
+      The tag search failed: {{.TagError}}. Work results above are unaffected.
+    </p>
+  {{else if .Results}}
+    <p class="count" data-testid="tag-count">
+      {{.Total}} tag{{if ne .Total 1}}s{{end}} match &ldquo;{{.Query}}&rdquo;.
+      {{if .Limited}}That is the most this page shows.{{end}}
+    </p>
     <ul class="tags">
       {{range .Results}}
       <li><a class="tag" href="/tag/{{.ID}}">{{.Name}}</a></li>
       {{end}}
     </ul>
   {{else}}
-    <p class="count">Nothing matches &ldquo;{{.Query}}&rdquo;.</p>
-    <p>Tags are matched as substrings, so a shorter word finds more.</p>
+    <p class="count" data-testid="no-tags">
+      No tag matches &ldquo;{{.Query}}&rdquo;. Tags are matched as substrings,
+      so a shorter word finds more.
+    </p>
   {{end}}
 {{else}}
   <p>
-    Pick a tag, or open a work directly. A recommender needs somewhere to
+    Pick a tag, a work, or an author. A recommender needs somewhere to
     start: give it one or two works you liked and it ranks the things that
     travel with them.
   </p>

@@ -96,6 +96,30 @@ func sampleRows(n int) []corpusquery.Row {
 	return out
 }
 
+// sampleWorkHits builds populated work rows for the search page's work half.
+//
+// Every optional field is populated, including the ones a real corpus row
+// often lacks, because a `{{if}}` that skips its body hides every expression
+// inside it -- the reason this whole file exists.
+func sampleWorkHits(n int) []WorkHit {
+	out := make([]WorkHit, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, WorkHit{
+			ID:        int64(100 + i),
+			Title:     "A Work & <Title>",
+			Author:    "somebody",
+			URL:       "https://example.invalid/works/1",
+			Summary:   "A summary. With two sentences. And a third, for shorten().",
+			Kudos:     1620, // > 999, so commas() is exercised
+			Hits:      9000,
+			WordCount: 45000, // > 999, so commas() is exercised
+			Language:  "English",
+			Complete:  1,
+		})
+	}
+	return out
+}
+
 func sampleCandidates(n int) []rank.Candidate {
 	out := make([]rank.Candidate, 0, n)
 	for i := 0; i < n; i++ {
@@ -134,6 +158,12 @@ func TestEveryPageTemplateRenders(t *testing.T) {
 		name         string
 		data         any
 		wantContains []string
+		// wantNotContains asserts the page makes no claim it cannot
+		// support. It exists because the failure this file hunts -- a page
+		// that renders successfully while stating something false -- is
+		// invisible to wantContains alone: an absent word_count rendered as
+		// "0 words" satisfies every other assertion in the case.
+		wantNotContains []string
 	}{
 		{
 			tpl:  "fandoms.html",
@@ -319,13 +349,92 @@ func TestEveryPageTemplateRenders(t *testing.T) {
 			// this is" pitch otherwise. Filling Results without Query produces
 			// a page with no results and no explanation, which is a third
 			// distinct state neither the handler nor a test ever exercises.
+			//
+			// Works are populated here because the page searches BOTH tags
+			// and works. A test that only filled Results would exercise the
+			// tag branch and nothing inside the work branch, which is how a
+			// wrong-typed field in the work list hides -- the same trap this
+			// whole file exists for, in the branch added most recently.
 			data: SearchPage{
-				Base:    Base{Title: "T", Heading: "H", Query: "dark"},
-				Results: []TagHit{{ID: 7, Name: "dark & light"}, {ID: 8, Name: "angst"}},
-				Total:   2,
-				Limited: true,
+				Base:        Base{Title: "T", Heading: "H", Query: "dark"},
+				Results:     []TagHit{{ID: 7, Name: "dark & light"}, {ID: 8, Name: "angst"}},
+				Total:       2,
+				Limited:     true,
+				Works:       sampleWorkHits(2),
+				WorkTotal:   2,
+				WorkLimited: true,
 			},
-			wantContains: []string{"/tag/7", "dark &amp; light", "angst", "2 tags match"},
+			wantContains: []string{"/tag/7", "dark &amp; light", "angst", "2 tags match",
+				// The work half, and the link that makes a search result
+				// actionable: one click to a ranking seeded by that work.
+				`href="/work/100"`, "rank from this",
+				// Word count is rendered (idea: data present, not displayed).
+				"words",
+			},
+		},
+		{
+			// Both halves empty is the honest "nothing matched" state and it
+			// must SAY SO per half. A page that rendered neither message would
+			// leave the reader unable to tell "no matches" from "the search
+			// did not run".
+			name: "search.html no matches in either half",
+			tpl:  "search.html",
+			data: SearchPage{
+				Base: Base{Title: "T", Heading: "H", Query: "zzzznothing"},
+			},
+			wantContains: []string{
+				"No work&rsquo;s title or author matches",
+				"No tag matches",
+			},
+		},
+		{
+			// A failing work search must not hide working tag results, and
+			// must not read as "no matches".
+			name: "search.html work search failed, tags still shown",
+			tpl:  "search.html",
+			data: SearchPage{
+				Base:      Base{Title: "T", Heading: "H", Query: "dark"},
+				Results:   []TagHit{{ID: 7, Name: "dark"}},
+				Total:     1,
+				WorkError: "no such table: works",
+			},
+			wantContains: []string{
+				"The work search failed", "no such table: works",
+				"Tag results below are unaffected",
+				"/tag/7",
+			},
+		},
+		{
+			// And the mirror image.
+			name: "search.html tag search failed, works still shown",
+			tpl:  "search.html",
+			data: SearchPage{
+				Base:      Base{Title: "T", Heading: "H", Query: "dark"},
+				Works:     sampleWorkHits(1),
+				WorkTotal: 1,
+				TagError:  "no such table: tags",
+			},
+			wantContains: []string{
+				"The tag search failed", "no such table: tags",
+				"Work results above are unaffected",
+				`href="/work/100"`,
+			},
+		},
+		{
+			// A work with NO author, summary, url or word count must render
+			// without inventing values. The corpus has NULL in all of these
+			// columns, and scanning NULL into a string is what took out the
+			// tag page one column at a time.
+			name: "search.html a work with every optional field empty",
+			tpl:  "search.html",
+			data: SearchPage{
+				Base:      Base{Title: "T", Heading: "H", Query: "untitled"},
+				Works:     []WorkHit{{ID: 5, Title: "Untitled Fic"}},
+				WorkTotal: 1,
+			},
+			wantContains: []string{`href="/work/5"`, "Untitled Fic"},
+			// Nothing that would be a fabricated claim.
+			wantNotContains: []string{"0 words", "on AO3"},
 		},
 		{
 			name: "search.html empty",
@@ -505,6 +614,13 @@ func TestEveryPageTemplateRenders(t *testing.T) {
 				if !strings.Contains(got, want) {
 					t.Errorf("%s rendered without %q\n--- rendered ---\n%s",
 						tc.name, want, truncate(got, 1200))
+				}
+			}
+			for _, unwanted := range tc.wantNotContains {
+				if strings.Contains(got, unwanted) {
+					t.Errorf("%s rendered %q, which is a claim the data "+
+						"does not support\n--- rendered ---\n%s",
+						tc.name, unwanted, truncate(got, 1200))
 				}
 			}
 		})

@@ -28,16 +28,75 @@ type Base struct {
 	// fail at execution with "can't evaluate field Query", which reads as
 	// a template bug rather than a struct one.
 	Query string
+
+	// IndexBuiltAt is when the co-occurrence index was built, RFC3339, or
+	// empty if unknown.
+	//
+	// The ingest command has always written this into the store's meta table
+	// and nothing has ever read it, so the mirror's age -- the single fact
+	// that most changes what a recommendation is worth -- was invisible to
+	// every reader. A stale index does not error; it answers confidently
+	// from last month's data.
+	IndexBuiltAt string
+	// CorpusBuiltAt is the mirror's own timestamp, which is a DIFFERENT fact
+	// from the index build: an index built today from a mirror written in
+	// March is three months out of date however fresh the index is.
+	CorpusBuiltAt string
+	// IndexAgeDays is how stale the data is, in whole days.
+	//
+	// Separate from the timestamps so the template does no date arithmetic.
+	// Negative when the recorded time is in the future, which is a clock
+	// problem rather than a data problem and is rendered as such.
+	IndexAgeDays int
+	// AgeKnown is false when no build time is recorded at all, which is a
+	// THIRD state distinct from "built now" and "built long ago". A page
+	// must not render "0 days old" for a mirror of unknown vintage -- that
+	// is a fresh-looking claim made from no data.
+	AgeKnown bool
+	// IndexAgeAbsDays is |IndexAgeDays|, so a build time in the future can
+	// be rendered as a magnitude rather than as a negative number of days.
+	//
+	// The alternative is a `negate` template helper used in exactly one
+	// place, which would be a function on the template namespace forever to
+	// avoid one subtraction in Go.
+	IndexAgeAbsDays int
+	// AgeInFuture is true when the recorded build time is later than now --
+	// a clock problem, not a data problem, and worth naming as one.
+	AgeInFuture bool
 }
 
-// SearchPage is the root page and the result of a tag search. There is no
-// separate home page: a recommender with nothing to seed from has nothing
-// to say, so the search box IS the home page.
+// SearchPage is one query's results, in two lists. It is also the home page:
+// there is no separate one, because a recommender with nothing to seed from
+// has nothing to say, so the search box IS the home page.
+//
+// Tags and works are separate rather than merged. A tag match and a title
+// match are not comparable scores, so a single ranked list would be ordered
+// arbitrarily while claiming to be the best matches. Two honest lists, each
+// labelled, beat one dishonest ordering.
+//
+// Works exist here because the page used to search tags ONLY: a work in the
+// mirror could not be found by its title, and a work the reader can name is
+// the one they most want to seed a recommendation from.
 type SearchPage struct {
 	Base
 	Results []TagHit
 	Total   int
 	Limited bool
+
+	// Works, matching title OR author.
+	Works []WorkHit
+	// WorkTotal is the number of works RETURNED, which is not the number
+	// that exist. With a LIMIT of 50 a query matching 900 works says 50.
+	WorkTotal   int
+	WorkLimited bool
+
+	// TagError and WorkError are set when one half of the search failed.
+	// They are separate so a failing tag search does not hide working work
+	// results, and neither failure is rendered as an empty result: "your
+	// query found nothing" and "the search failed" are different facts and
+	// a reader acting on the first would be wrong about the second.
+	TagError  string
+	WorkError string
 }
 
 // TagHit is one row of a tag search.
