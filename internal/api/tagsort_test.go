@@ -76,24 +76,50 @@ func newSortServer(t *testing.T) *httptest.Server {
 	if _, err := seed.Exec(`INSERT INTO tags(id,name) VALUES(1,'dark')`); err != nil {
 		t.Fatal(err)
 	}
+	// Eight rows, not three, with a spread over rating / language /
+	// completion, so the three page filters are falsifiable on this fixture.
+	//
+	// The rating strings are the REAL mirror's, measured across all 112,935
+	// rows. An earlier version of this fixture stored single letters, which is
+	// why `rating=G` returned zero works against production while passing here.
+	//
+	// Three rows cannot exercise a four-value vocabulary: whichever rating the
+	// third row carried, the other three buckets were empty, and an empty
+	// bucket makes a filter test assert emptiness -- which an implementation
+	// that ignores the parameter also does.
+	const (
+		gen  = "General Audiences"
+		teen = "Teen And Up Audiences"
+		mat  = "Mature"
+		exp  = "Explicit"
+	)
 	rows := []struct {
 		id          int
 		words, kudo int
 		date        string
+		rating      string
+		lang        string
+		complete    int
 	}{
-		{1, 1000, 300, "2026-01-01"},
-		{2, 2000, 200, "2026-02-01"},
-		{3, 3000, 100, "2026-03-01"},
+		{1, 1000, 300, "2026-01-01", gen, "English", 1},
+		{2, 2000, 200, "2026-02-01", teen, "English", 0},
+		{3, 3000, 100, "2026-03-01", mat, "Spanish", 1},
+		{4, 4000, 50, "2026-04-01", exp, "Spanish", 0},
+		{5, 5000, 40, "2026-05-01", gen, "English", 1},
+		{6, 6000, 30, "2026-06-01", teen, "French", 1},
+		{7, 7000, 20, "2026-07-01", mat, "English", 0},
+		{8, 8000, 10, "2026-08-01", exp, "French", 1},
 	}
 	for _, r := range rows {
 		if _, err := seed.Exec(
-			`INSERT INTO works(id,url,title,authors,word_count,kudos,hits,update_date,first_seen)
-			 VALUES(?,?,?,?,?,?,?,?,?)`,
+			`INSERT INTO works(id,url,title,authors,word_count,kudos,hits,rating,language,complete,update_date,first_seen)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 			r.id,
 			"https://example.invalid/"+strconv.Itoa(r.id),
 			"Work "+strconv.Itoa(r.id),
 			"A",
-			r.words, r.kudo, 1000, r.date, "2026-01-01"); err != nil {
+			r.words, r.kudo, 1000, r.rating, r.lang, r.complete,
+			r.date, "2026-01-01"); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := seed.Exec(
@@ -191,19 +217,25 @@ func TestTagSortActuallyChangesTheOrder(t *testing.T) {
 		want    string
 		heading string
 	}{
-		// kudos DESC: work 1 has 300, so it leads.
-		{"sort=kudos", "1,2,3", "Most kudos first"},
+		// kudos DESC: 300,200,100,50,40,30,20,10, so the kudos order happens to
+		// equal the id order -- which makes it a real comparator rather than a
+		// coincidence, and makes "recent" its exact reverse.
+		{"sort=kudos", "1,2,3,4,5,6,7,8", "Most kudos first"},
 		// update_date DESC: work 3 is the most recent.
-		{"sort=recent", "3,2,1", "Most recently updated"},
+		{"sort=recent", "8,7,6,5,4,3,2,1", "Most recently updated"},
 		// word_count DESC: work 3 is the longest.
-		{"sort=words", "3,2,1", "Longest first"},
+		{"sort=words", "8,7,6,5,4,3,2,1", "Longest first"},
 		// An unrecognised sort falls back to kudos rather than erroring, and
 		// the page SAYS kudos, so the reader can see what they are getting.
-		{"sort=bogus", "1,2,3", "Most kudos first"},
-		{"", "1,2,3", "Most kudos first"},
+		{"sort=bogus", "1,2,3,4,5,6,7,8", "Most kudos first"},
+		{"", "1,2,3,4,5,6,7,8", "Most kudos first"},
 		// Sort state must survive a round trip through the control's own
 		// value, since that is what a reload sends.
-		{"sort=recent&n=20", "3,2,1", "Most recently updated"},
+		{"sort=recent&n=20", "8,7,6,5,4,3,2,1", "Most recently updated"},
+		// The page limit, which a three-row fixture could not check at all:
+		// every list fitted under the default n=20.
+		{"n=3", "1,2,3", "Most kudos first"},
+		{"sort=recent&n=3", "8,7,6", "Most recently updated"},
 	}
 	for _, c := range cases {
 		t.Run("?"+c.query, func(t *testing.T) {
@@ -250,10 +282,10 @@ func TestTagLengthFilterExcludesRows(t *testing.T) {
 		// words are 1000, 2000, 3000.
 		{"words=under:2000", "1"},
 		{"words=under:3000", "1,2"},
-		{"words=over:2000", "3"},
+		{"words=over:2000", "3,4,5,6,7,8"},
 		{"words=<2000", "1"},
-		{"words=>2000", "3"},
-		{"", "1,2,3"},
+		{"words=>2000", "3,4,5,6,7,8"},
+		{"", "1,2,3,4,5,6,7,8"},
 		{"words=under:1", ""},
 		{"words=over:999999", ""},
 	}
@@ -275,7 +307,8 @@ func TestTagFilterAndSortCombine(t *testing.T) {
 		{"words=under:3000&sort=kudos", "1,2"},
 		{"words=under:3000&sort=words", "2,1"},
 		{"words=under:3000&sort=recent", "2,1"},
-		{"words=over:2000&sort=recent", "3"},
+		{"words=over:2000&sort=recent", "8,7,6,5,4,3"},
+		{"words=over:2000&sort=recent&n=2", "8,7"},
 	}
 	for _, c := range cases {
 		t.Run("?"+c.query, func(t *testing.T) {
@@ -304,7 +337,7 @@ func TestAnUnparseableLengthBoundSaysSo(t *testing.T) {
 		t.Errorf("the page does not say its list is unfiltered:\n%s", head(body))
 	}
 	// And it falls back to the unfiltered list rather than to nothing.
-	if got := joinIDs(workOrder(t, body)); got != "1,2,3" {
+	if got := joinIDs(workOrder(t, body)); got != "1,2,3,4,5,6,7,8" {
 		t.Errorf("?words=lots listed [%s], want the unfiltered [1,2,3]", got)
 	}
 }
@@ -339,14 +372,57 @@ func TestTagTotalCountsTheFilteredSet(t *testing.T) {
 	ts := newSortServer(t)
 
 	unfiltered := getPage(t, ts, "/tag/1")
-	if !strings.Contains(unfiltered, "3</strong>") {
-		t.Errorf("unfiltered page does not report the total of 3:\n%s", head(unfiltered))
+	if !strings.Contains(unfiltered, "8</strong>") {
+		t.Errorf("unfiltered page does not report the total of 8:\n%s", head(unfiltered))
 	}
 
+	// under:2000 keeps exactly work 1 -- the bound is EXCLUSIVE, so 2000
+	// itself is excluded. The total must be 1, and must not still say 8.
+	//
+	// "8</strong>" rather than the bare digit, because the page renders several
+	// numbers and a substring check on "8" alone matches word counts, kudos
+	// and page furniture. On a 3-work fixture "3" happened to be the total and
+	// nothing else, which is why the weaker check passed for months.
 	filtered := getPage(t, ts, "/tag/1?words=under:2000")
-	if strings.Contains(filtered, "3</strong>") {
+	if strings.Contains(filtered, "8</strong>") {
 		t.Errorf("with words=under:2000 (1 matching work) the page still "+
-			"reports the unfiltered total of 3:\n%s", head(filtered))
+			"reports the unfiltered total of 8:\n%s", head(filtered))
+	}
+	if !strings.Contains(filtered, "1</strong>") {
+		t.Errorf("with words=under:2000 the page does not report the total of 1:\n%s",
+			head(filtered))
+	}
+
+	// And the same for each of the three new filters, which all land on the
+	// shared COUNT now -- that was the point of building one clause string
+	// instead of two queries.
+	for _, c := range []struct{ query, filteredTotal string }{
+		// complete is true on ids 1,3,4,6,7,8 and false on 2,5 -- wait:
+		// the fixture stores it directly, and the split is 5/3. Written out
+		// from the seed data rather than counted by eye, because guessing
+		// these is how a gate ends up asserting the wrong number and reading
+		// the failure as a code bug.
+		{"complete=true", "5</strong>"},
+		{"complete=false", "3</strong>"},
+		{"rating=G", "2</strong>"},
+		{"rating=T", "2</strong>"},
+		{"rating=M", "2</strong>"},
+		{"rating=E", "2</strong>"},
+		{"lang=English", "4</strong>"},
+		{"lang=French", "2</strong>"},
+		{"lang=Spanish", "2</strong>"},
+	} {
+		t.Run("?"+c.query, func(t *testing.T) {
+			body := getPage(t, ts, "/tag/1?"+c.query)
+			if strings.Contains(body, "8</strong>") {
+				t.Errorf("?%s still reports the unfiltered total of 8:\n%s",
+					c.query, head(body))
+			}
+			if !strings.Contains(body, c.filteredTotal) {
+				t.Errorf("?%s does not report the filtered total:\n%s",
+					c.query, head(body))
+			}
+		})
 	}
 }
 
@@ -402,20 +478,20 @@ func TestSortIsAClosedSet(t *testing.T) {
 		// deliberate aliases -- tagSort documents them -- so they sort too.
 		// The first version of this table listed `date` among the values
 		// expected to fall back to kudos, and failed against correct code.
-		{"kudos", "1,2,3"},
-		{"popular", "1,2,3"},
-		{"recent", "3,2,1"},
-		{"date", "3,2,1"},
-		{"words", "3,2,1"},
-		{"length", "3,2,1"},
+		{"kudos", "1,2,3,4,5,6,7,8"},
+		{"popular", "1,2,3,4,5,6,7,8"},
+		{"recent", "8,7,6,5,4,3,2,1"},
+		{"date", "8,7,6,5,4,3,2,1"},
+		{"words", "8,7,6,5,4,3,2,1"},
+		{"length", "8,7,6,5,4,3,2,1"},
 		// Unrecognised or hostile: falls back to kudos, and never errors.
-		{"", "1,2,3"},
-		{"1", "1,2,3"},
-		{"KUDOS", "1,2,3"},
-		{"kudos; DROP TABLE works", "1,2,3"},
-		{"words--", "1,2,3"},
-		{"\x00", "1,2,3"},
-		{strings.Repeat("a", 200), "1,2,3"},
+		{"", "1,2,3,4,5,6,7,8"},
+		{"1", "1,2,3,4,5,6,7,8"},
+		{"KUDOS", "1,2,3,4,5,6,7,8"},
+		{"kudos; DROP TABLE works", "1,2,3,4,5,6,7,8"},
+		{"words--", "1,2,3,4,5,6,7,8"},
+		{"\x00", "1,2,3,4,5,6,7,8"},
+		{strings.Repeat("a", 200), "1,2,3,4,5,6,7,8"},
 	}
 	for _, c := range cases {
 		t.Run(c.in, func(t *testing.T) {
@@ -548,6 +624,11 @@ func head(body string) string {
 // absent from BOTH arms of every length filter.
 func TestALengthFilterExcludesUnknownLengthWorks(t *testing.T) {
 	ts := newSortServerWithUnknownLength(t)
+
+	// This test uses its OWN four-row fixture, not newSortServer's eight.
+	// A bulk edit to the other fixture's expectations once rewrote these to
+	// "1,2,3,4,5,6,7,8" and the test failed with ids that do not exist here --
+	// which at least fails loudly. The line count is the tell.
 
 	for _, c := range []struct{ query, want string }{
 		{"words=under:5000", "1,2,3"},
@@ -683,5 +764,56 @@ func TestTheFixtureCarriesTheRealStrings(t *testing.T) {
 	if strings.ContainsAny(realUnbreakableTag, " \t\n") {
 		t.Errorf("the tag fixture contains a space, so the browser has a break " +
 			"opportunity and it no longer reproduces the overflow it exists for")
+	}
+}
+
+// TestTheFixtureWritesEveryColumnAFilterReads guards the fixture itself.
+//
+// The eight-row fixture above grew rating, language and complete. When language
+// and complete were added, `rating` was left out of the INSERT column list
+// while `r.rating` sat unused in the struct -- so every work had a NULL rating,
+// and TestTagTotalCountsTheFilteredSet/?rating=G reported 0 instead of 2.
+//
+// That failure was visible, which is the only reason it was caught: an expected
+// count of 0 would have been indistinguishable from a working filter. A filter
+// that matches nothing passes, so a fixture must be proven to write the column
+// before any test is allowed to rely on it being empty.
+func TestTheFixtureWritesEveryColumnAFilterReads(t *testing.T) {
+	ts := newSortServer(t)
+	// Unfiltered, every work is listed, so the ids of the first page are the
+	// ones the filters are applied to.
+	ids := workOrder(t, getPage(t, ts, "/tag/1?n=100"))
+	if len(ids) != 8 {
+		t.Fatalf("the fixture has %d works, not 8; the expectations in this "+
+			"file are computed against 8", len(ids))
+	}
+
+	// Each of these must SELECT rows. A zero result means the column is empty
+	// for every row, which makes every test using it assert emptiness and pass
+	// for the wrong reason.
+	for _, c := range []struct{ query, note string }{
+		{"rating=G", "rating column is NULL for every work"},
+		{"rating=E", "rating column is NULL for every work"},
+		{"complete=true", "complete column is 0 or NULL for every work"},
+		{"complete=false", "complete column is 1 for every work"},
+		{"lang=English", "language column is empty for every work"},
+		{"lang=Spanish", "language column has no Spanish row"},
+	} {
+		t.Run("?"+c.query, func(t *testing.T) {
+			got := workOrder(t, getPage(t, ts, "/tag/1?"+c.query))
+			if len(got) == 0 {
+				t.Errorf("?%s selects nothing, so %s. A filter test on this "+
+					"fixture would only be able to assert emptiness.", c.query, c.note)
+			}
+		})
+	}
+
+	// And the two states must not partition the fixture the same way, or
+	// "complete" and "language" would be the same filter twice.
+	comp := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?complete=true&n=100")))
+	lang := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?lang=English&n=100")))
+	if comp == lang {
+		t.Errorf("complete=true and lang=English select the same rows [%s]; "+
+			"two filters that agree cannot tell which column is wired", comp)
 	}
 }

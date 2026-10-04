@@ -161,6 +161,29 @@ type TagPage struct {
 	// showing an unfiltered list under a filter the reader set is the
 	// failure mode this whole change exists to remove.
 	WordsErr string
+
+	// Complete is "true", "false" or "" -- the completion filter as the
+	// reader spelled it, echoed so the control shows the current selection.
+	Complete string
+	// Rating and Lang likewise, for the rating and language controls.
+	Rating string
+	Lang   string
+	// RatingOptions drives the rating control. tagRatingOptions is the
+	// measured set; a template cannot range over a map with a stable order.
+	RatingOptions []SortOption
+	// UnfilteredTagCount is the tag's real size, unaffected by any filter.
+	// Separate from Tag.WorkCount, which is the FILTERED count because the
+	// heading above the list must describe the set the page contains.
+	//
+	// They differ exactly when a filter is active, and the empty-result
+	// message needs the unfiltered one -- otherwise it reports "the tag has 0
+	// works" at the reader, which is the opposite of what happened.
+	UnfilteredTagCount int
+
+	// FilterErr is set when complete/rating/lang could not be understood.
+	// Separate from WordsErr because it is a different control and a reader
+	// needs to know WHICH one was ignored.
+	FilterErr string
 }
 
 // SortOption is one choice in the sort control.

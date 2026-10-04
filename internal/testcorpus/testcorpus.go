@@ -74,8 +74,17 @@ type Work struct {
 	// the normal state for a work nobody has crawled bookmarks for. A plain
 	// int cannot express that, so a fixture would quietly normalise away the
 	// one case that breaks NULL-unsafe reads.
-	Bookmarks  *int
-	Rating     string
+	Bookmarks *int
+	Rating    string
+	// Language and Complete are present because the tag page filters on both,
+	// and a fixture that leaves them unset makes those filters untestable: the
+	// column reads as empty for every row, so "the filter returns nothing" and
+	// "the filter ignores the parameter" produce the same answer.
+	//
+	// Complete is a bool because the column is NOT NULL in the schema; the
+	// mirror's real distribution is roughly 76/24 complete/in-progress.
+	Language   string
+	Complete   bool
 	UpdateDate string
 }
 
@@ -110,6 +119,54 @@ type Corpus struct {
 	WorkTags []WorkTag
 	Edges    []Edge
 }
+
+// The rating, language and completion vocabulary below is the REAL mirror's,
+// not invented. Measured across all 112,935 rows: Explicit 42,968, Teen And Up
+// Audiences 27,562, Mature 25,190, Not Rated 8,796, General Audiences 8,419.
+//
+// That matters because this fixture used to set EVERY work to "Explicit" and
+// set no language or completion at all. A filter test written against it
+// passes whether or not the filter is wired to the right column -- `rating=E`
+// returns all forty works, and an implementation that ignores the parameter
+// entirely returns the same forty. It is the tautology shape, and it is the
+// reason the tag page shipped a rating control that could not be tested.
+//
+// Splitting the vocabulary across works makes each filter falsifiable: a
+// filter that drops the wrong rows, or ignores the parameter, now returns a
+// different set.
+//
+// The distribution is deliberately uneven and NOT uniform, so a test cannot
+// pass by accident on a half-and-half split.
+func fixtureRating(i int) string {
+	switch i % 5 {
+	case 0, 1:
+		return "General Audiences"
+	case 2:
+		return "Teen And Up Audiences"
+	case 3:
+		return "Mature"
+	default:
+		return "Explicit"
+	}
+}
+
+// fixtureLanguage gives three languages in a 5:2:1 ratio. A two-way split
+// would let "the first language" and "the other one" pass for each other.
+func fixtureLanguage(i int) string {
+	switch i % 8 {
+	case 5, 6:
+		return "Spanish"
+	case 7:
+		return "French"
+	default:
+		return "English"
+	}
+}
+
+// fixtureComplete alternates with a period of 3, so both values occur and
+// neither is a rounding error. A 50/50 split would make a test that
+// accidentally drops the last row look correct.
+func fixtureComplete(i int) bool { return i%3 != 2 }
 
 // New returns a deterministic fixture with `nWorks` works over a small tag
 // vocabulary, wired so that a real ranking is possible: works share tags, have
@@ -173,7 +230,9 @@ func New(nWorks int) *Corpus {
 			Hits:      10_000 + i*500,
 			Kudos:     kd,
 			Bookmarks: bmp,
-			Rating:    "Explicit",
+			Rating:    fixtureRating(i),
+			Language:  fixtureLanguage(i),
+			Complete:  fixtureComplete(i),
 			// A fixed date, NOT time.Now(): a relative recency assertion must
 			// not depend on when the suite runs.
 			UpdateDate: "2026-01-15",
@@ -254,7 +313,11 @@ func (c *Corpus) Write(path string) (string, error) {
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			w.ID, fmt.Sprintf("https://example.invalid/works/%d", w.ID),
 			w.Title, w.Authors, w.Summary, w.Rating, w.WordCount, w.Hits, w.Kudos,
-			bm, "1/?", "English", 1, w.UpdateDate, "2026-01-01", "2026-01-01"); err != nil {
+			// language and complete were hardcoded to "English" and 1 here,
+			// which silently overrode the struct. The tag page filters on both,
+			// so both had to come from the fixture.
+			bm, "1/?", w.Language, boolToInt(w.Complete),
+			w.UpdateDate, "2026-01-01", "2026-01-01"); err != nil {
 			return "", fmt.Errorf("work %d: %w", w.ID, err)
 		}
 	}
@@ -278,4 +341,14 @@ func (c *Corpus) Write(path string) (string, error) {
 		return "", err
 	}
 	return filepath.Clean(path), nil
+}
+
+// boolToInt renders a bool as the 0/1 the SQLite INTEGER column stores. A
+// bool does not scan out of SQLite as an int without this, and storing Go's
+// true/false makes the column read "1" only by accident of the driver.
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

@@ -62,8 +62,40 @@
     <option value="over:100000" {{if eq .Words "over:100000"}}selected{{end}}>over 100,000 words</option>
   </select>
 
+  <label for="complete">Status</label>
+  <select id="complete" name="complete">
+    <option value="" {{if not .Complete}}selected{{end}}>any</option>
+    <option value="true" {{if eq .Complete "true"}}selected{{end}}>complete only</option>
+    <option value="false" {{if eq .Complete "false"}}selected{{end}}>in progress only</option>
+  </select>
+
+  <label for="rating">Rating</label>
+  {{/* The VALUES are AO3's letters, which the reader knows; the LABELS are
+       what the mirror stores. Sending the letter is what makes this agree
+       with /api/v1/ao3/works, where `rating=G` is translated through a table
+       measured against the real corpus. */}}
+  <select id="rating" name="rating">
+    <option value="" {{if not .Rating}}selected{{end}}>any rating</option>
+    {{range .RatingOptions}}
+    <option value="{{.Value}}" {{if eq $.Rating .Value}}selected{{end}}>{{.Label}}</option>
+    {{end}}
+  </select>
+
+  <label for="lang">Language</label>
+  {{/* A text input rather than a select: the mirror has many languages and a
+       closed list would be a list of the ones somebody remembered. Empty
+       means no filter. */}}
+  <input type="text" id="lang" name="lang" value="{{.Lang}}" size="10"
+         placeholder="English">
+
   <input type="submit" value="Apply">
 </form>
+
+{{if .FilterErr}}
+  <p class="note" data-testid="filter-error">
+    {{.FilterErr}} Showing every work on this tag instead.
+  </p>
+{{end}}
 
 {{if .WordsErr}}
   <p class="note" data-testid="words-error">
@@ -82,11 +114,26 @@
   {{if .Limited}}
   <p class="count">Showing the first {{len .Works}}. Raise <code>?n=</code> for more.</p>
   {{end}}
-{{else if .Words}}
+{{else if or .Words .Complete .Rating .Lang}}
+  {{/* Names every filter that is set. The first version said only "under
+       5,000 words" and would have been wrong the moment a second filter was
+       applied -- a reader who set rating + length and got nothing was told
+       about one of the two. */}}
   <p class="count" data-testid="no-matches">
-    No work on this tag matches &ldquo;{{.Words}}&rdquo;. The tag has
-    {{commas .Tag.WorkCount}} work{{if ne .Tag.WorkCount 1}}s{{end}} in total, so the
-    filter is what excluded them.
+    No work on this tag matches
+    {{if .Words}}the length filter &ldquo;{{.Words}}&rdquo;{{end}}
+    {{if .Complete}}and {{if eq .Complete "true"}}complete{{else}}in progress{{end}}{{end}}
+    {{if .Rating}}and rating {{.Rating}}{{end}}
+    {{if .Lang}}and language {{.Lang}}{{end}}.
+    {{/* UnfilteredTagCount, NOT Tag.WorkCount. WorkCount is the filtered count
+         -- it has to be, because the heading above the list describes the set
+         the page contains -- so using it here printed "the tag has 0 works in
+         total" the moment a filter matched nothing. That tells the reader their
+         filter emptied the tag, which is the exact opposite of what happened,
+         and it was found by a browser assertion on this sentence rather than by
+         any Go test. */}}
+    The tag has {{commas .UnfilteredTagCount}} work{{if ne .UnfilteredTagCount 1}}s{{end}}
+    in total, so the filters are what excluded them.
   </p>
 {{else}}
   <p class="count">No works carry this tag in the mirror.</p>

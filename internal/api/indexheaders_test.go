@@ -358,8 +358,8 @@ func newTestServerWithStore(t *testing.T) (*httptest.Server, *store.Store) {
 		t.Fatal(err)
 	}
 	if _, err := seed.Exec(
-		`INSERT INTO works(id,url,title,word_count,hits,kudos,update_date,first_seen)
-		 VALUES(1,'https://example.invalid/1','Work 1',5000,1000,100,'2026-06-01','2026-06-01')`); err != nil {
+		`INSERT INTO works(id,url,title,authors,word_count,hits,kudos,update_date,first_seen)
+		 VALUES(1,'https://example.invalid/1','Work 1','author1',5000,1000,100,'2026-06-01','2026-06-01')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := seed.Exec(`INSERT INTO tags(id,name) VALUES(1,'dark')`); err != nil {

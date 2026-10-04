@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -1200,6 +1201,19 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 		{Value: "recent", Label: "most recently updated"},
 		{Value: "words", Label: "longest"},
 	}
+	page.RatingOptions = tagRatingOptions
+
+	// complete / rating / lang, which the API has always honoured and the page
+	// silently ignored. Verified against the live instance before this change:
+	// `/api/v1/ao3/works?complete=true` applied the filter and reported it in
+	// `filters_applied`, while `/tag/29?complete=true` returned the unfiltered
+	// list with no comment. A reader who learned the filters from the API
+	// documentation could not use them in a browser, and nothing said so.
+	//
+	// Each is parsed here rather than concatenated into SQL, so a bad value is
+	// a stated reason instead of a silently absent filter -- the same rule the
+	// length bound already follows.
+	extra, extraArgs := tagFilters(r.URL.Query(), &page)
 
 	// The length bound is parsed here rather than in SQL so a typo is a
 	// stated reason and not a silently ignored parameter -- the same rule
@@ -1247,9 +1261,16 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	// first version counted all of them, so "3,000 works" sat above a list
 	// of 20 short ones filtered to under 5,000 words -- a heading that
 	// describes a set the page does not contain.
-	totalQuery := `SELECT COUNT(*) FROM work_tags wt JOIN works w ON w.id = wt.work_id
-	               WHERE wt.tag_id = ?`
-	totalArgs := []any{id}
+	// ONE clause string and ONE arg list, shared by the count and the list.
+	// They were separate before the length filter and keeping them in step by
+	// hand is how "of 55,808" ends up above a filtered list of twenty.
+	// COUNT(DISTINCT) for the same reason as the list's DISTINCT: a work
+	// attached to this tag under two types is one work, not two. Using COUNT(*)
+	// here made the heading claim 29 works over a list of 28 distinct ones.
+	totalQuery := `SELECT COUNT(DISTINCT wt.work_id) FROM work_tags wt
+	               JOIN works w ON w.id = wt.work_id
+	               WHERE wt.tag_id = ?` + extra
+	totalArgs := append([]any{id}, extraArgs...)
 	if wordsClause != "" {
 		totalQuery += wordsClause
 		totalArgs = append(totalArgs, page.WordsBound)
@@ -1260,21 +1281,67 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 		d.fail(w, r, http.StatusInternalServerError, err)
 		return
 	}
+
+	// The unfiltered size, for the empty-result message only. Skipped when the
+	// filtered count is already the unfiltered one (no filters set), since the
+	// two are then the same query.
+	var unfilteredTotal int64
+	if extra != "" || wordsClause != "" {
+		// COUNT(DISTINCT work_id), for the same reason as the filtered count:
+		// work_tags is keyed on (work_id, tag_id, tag_type), so a tag name
+		// attached under two types is one work with two rows. COUNT(*) here
+		// said the tag had 29 works while the list below showed 28 distinct
+		// ones -- which is the same class of contradiction as the "0 works"
+		// message, one layer further out.
+		if err := d.Engine.Corpus.DB.QueryRowContext(ctx,
+			`SELECT COUNT(DISTINCT work_id) FROM work_tags WHERE tag_id = ?`, id).
+			Scan(&unfilteredTotal); err != nil {
+			d.fail(w, r, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	// Tag.WorkCount is the FILTERED count, because the heading above the list
+	// has to describe the set the page actually contains -- "3,000 works" over a
+	// filtered list of twenty is a heading that lies.
 	page.Tag.WorkCount = total
 	page.Total = int(total)
+
+	// UnfilteredTagCount is the tag's real size, for the one message that needs
+	// it: "No work on this tag matches ... The tag has N works in total, so the
+	// filters are what excluded them."
+	//
+	// Reusing Tag.WorkCount there said "The tag has 0 works in total" the
+	// moment any filter matched nothing, which tells the reader their filter
+	// emptied the tag rather than that the filter excluded everything. Caught
+	// by a Playwright assertion on the message text, not by a Go test -- the Go
+	// test for this branch asserted the filters were NAMED and never checked
+	// the number beside them.
+	page.UnfilteredTagCount = int(unfilteredTotal)
 	page.Limited = total > int64(n)
 
 	// authors, url, summary and language are all NULLable in the corpus.
 	// Scanning them into *string fails the whole page on a row that is
 	// perfectly ordinary, which is what happened the first time: one
 	// work with no author recorded took out every tag page that listed it.
+	// DISTINCT, and this is load-bearing.
+	//
+	// work_tags is keyed on (work_id, tag_id, tag_type), so the SAME tag name
+	// attached to a work under two types -- "dark" as both a fandom and a
+	// freeform, which the fixture deliberately produces -- yields two rows for
+	// one work. Without DISTINCT the page lists work 1 twice, the count says 29
+	// for 28 distinct works, and `complete=true` and `complete=false` union to
+	// 28 rather than 29.
+	//
+	// Found by a Playwright assertion that the two completion states partition
+	// the tag. It failed by exactly one, which is what a duplicated join row
+	// looks like from the outside.
 	listQuery := `
-		SELECT w.id, w.title, w.authors, w.url, w.summary,
+		SELECT DISTINCT w.id, w.title, w.authors, w.url, w.summary,
 		       w.kudos, w.hits, w.word_count, w.language, w.complete
 		FROM work_tags wt JOIN works w ON w.id = wt.work_id
-		WHERE wt.tag_id = ?` + wordsClause + `
+		WHERE wt.tag_id = ?` + extra + wordsClause + `
 		ORDER BY ` + tagOrder(page.Sort) + `, w.id LIMIT ?`
-	listArgs := []any{id}
+	listArgs := append([]any{id}, extraArgs...)
 	if wordsClause != "" {
 		listArgs = append(listArgs, page.WordsBound)
 	}
@@ -1661,6 +1728,124 @@ func (d Deps) fillFreshness(ctx context.Context, b *Base) {
 			return
 		}
 		b.CorpusBuiltAt = raw
+	}
+}
+
+// tagRatingOptions is the rating control's choices.
+//
+// The VALUES are what the reader types and what AO3 uses -- single letters --
+// and the LABELS are the names the mirror actually stores. Sending the letter
+// is deliberate: `ao3RatingNames` in internal/api translates it, and that
+// mapping is measured against the real corpus rather than guessed.
+//
+// The full names are also accepted on input (`?rating=General%20Audiences`),
+// because a client that reads `rating` out of the API and sends it back must
+// get the same works. Both spellings are what readers type, and a control
+// that only accepts one of them is a control that fails silently.
+var tagRatingOptions = []SortOption{
+	{Value: "G", Label: "General Audiences"},
+	{Value: "T", Label: "Teen And Up Audiences"},
+	{Value: "M", Label: "Mature"},
+	{Value: "E", Label: "Explicit"},
+}
+
+// tagFilters parses complete / rating / lang into a SQL clause and its
+// arguments, and echoes the accepted values back onto the page so the controls
+// can render the current selection.
+//
+// Returns ("", nil) when none is set, which is the common case and must not
+// add a clause -- an empty predicate would change the query plan for every
+// unfiltered request.
+//
+// Every value is bound as a parameter. None of these three is a string
+// interpolated into SQL, and the one that could be (rating) is a fixed set of
+// clauses built from a hardcoded comparison, never from the input.
+func tagFilters(q url.Values, page *TagPage) (string, []any) {
+	var clause strings.Builder
+	var args []any
+
+	// complete. Only "true" and "false" are accepted; anything else is an
+	// error rather than a no-op, because "complete=1" or "complete=yes" read
+	// as a filter that did nothing.
+	switch v := strings.ToLower(strings.TrimSpace(q.Get("complete"))); v {
+	case "":
+	case "true", "1", "yes", "only":
+		page.Complete = "true"
+		clause.WriteString(" AND w.complete = 1")
+	case "false", "0", "no":
+		page.Complete = "false"
+		clause.WriteString(" AND w.complete = 0")
+	default:
+		page.FilterErr = fmt.Sprintf(
+			"%q is not a completion filter; use complete=true or complete=false", v)
+		return "", nil
+	}
+
+	if v := strings.TrimSpace(q.Get("rating")); v != "" {
+		// Upper-cased and matched against the mirror's own spelling. The
+		// letters are translated by the API's own table, so this page and
+		// `/api/v1/ao3/works` cannot disagree about what "E" means.
+		//
+		// `UPPER(w.rating) = ?` rather than a LIKE: the column is a short
+		// controlled vocabulary, and a full scan of 112,935 rows with a
+		// function on the column is not worth it for a page that is usually
+		// read without this filter set.
+		page.Rating = v
+		clause.WriteString(" AND UPPER(w.rating) = ?")
+		args = append(args, strings.ToUpper(ratingToStored(v)))
+	}
+
+	if v := strings.TrimSpace(q.Get("lang")); v != "" {
+		page.Lang = v
+		clause.WriteString(" AND UPPER(w.language) = ?")
+		args = append(args, strings.ToUpper(v))
+	}
+
+	return clause.String(), args
+}
+
+// ratingToStored maps an AO3 rating letter to the name the mirror stores, or
+// returns the value unchanged when it is already a full name.
+//
+// Measured on the real mirror, all 112,935 rows included: Explicit 42,968,
+// Teen And Up Audiences 27,562, Mature 25,190, Not Rated 8,796, General
+// Audiences 8,419. The letters alone match nothing, which is why `rating=G`
+// returned zero works until this mapping existed.
+//
+// "Not Rated" is deliberately absent from the control: it is a real value in
+// the column and `?rating=Not+Rated` works, but it is not a rating a reader
+// picks from a list of content ratings, so offering it would be a category
+// error.
+func ratingToStored(v string) string {
+	// ONLY the four AO3 letters.
+	//
+	// The first version also accepted P, S, D and Z, which I took from other
+	// systems' age ratings. That is wrong and not merely incomplete: those
+	// letters mean different things elsewhere, so a reader asking for them
+	// would have been silently served works they did not ask for.
+	//
+	//	 P  UK 12+/15+ and PEGI 12        -> not "General"
+	//	 S  Spain/Portugal 12+             -> not "Teen"
+	//	 D  Germany 16+, or US TV-MA       -> not "Mature"
+	//	 Z  Explicit in some storefronts   -> not "Mature"
+	//
+	// `?rating=Z` returned two Mature works instead of nothing, which is the
+	// worst failure mode a filter can have: it answers the wrong question
+	// confidently. A letter this project does not recognise now matches
+	// nothing, which is the honest answer.
+	switch strings.ToUpper(strings.TrimSpace(v)) {
+	case "G":
+		return "General Audiences"
+	case "T":
+		return "Teen And Up Audiences"
+	case "M":
+		return "Mature"
+	case "E":
+		return "Explicit"
+	default:
+		// Already a full name, or something the mirror does not contain --
+		// which then matches nothing, honestly, instead of being coerced.
+		return v
 	}
 }
 

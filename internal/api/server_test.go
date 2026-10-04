@@ -14,18 +14,27 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
+	"git.polarisocial.xyz/kindred/kindred/internal/testcorpus"
 )
 
-const corpusSchema = `
-CREATE TABLE works(id INTEGER PRIMARY KEY, url TEXT, title TEXT, authors TEXT, summary TEXT,
-  rating TEXT, word_count INTEGER, hits INTEGER, kudos INTEGER, bookmarks INTEGER,
-  chapters TEXT, language TEXT, complete INTEGER, update_date TEXT, first_seen TEXT,
-  last_updated TEXT, bookmarks_backfilled_at TEXT);
-CREATE TABLE tags(id INTEGER PRIMARY KEY, name TEXT);
-CREATE TABLE work_tags(work_id INTEGER, tag_id INTEGER, tag_type TEXT, PRIMARY KEY(work_id, tag_id));
-CREATE TABLE cooccurrence_edges(tag_a_id INTEGER, tag_b_id INTEGER, cooccur_count INTEGER,
-  PRIMARY KEY(tag_a_id, tag_b_id));
-`
+// corpusSchema used to be a private copy of the schema written out here, and
+// it was WRONG in the one way that mattered:
+//
+//	PRIMARY KEY(work_id, tag_id)              <- the copy
+//	PRIMARY KEY(work_id, tag_id, tag_type)     <- the real mirror
+//
+// The real key lets one tag NAME sit on one work twice under two tag types,
+// which is what internal/testcorpus produces and what a tag that exists as
+// both a fandom and a freeform produces in production. Against the copy, any
+// code that JOINs work_tags without DISTINCT looked correct, because the copy
+// physically cannot express the duplication. That is the worst shape for a
+// fixture: it removes the bug from the tests while leaving it in the product.
+//
+// It also lacked the `users` table entirely.
+//
+// Both problems have one fix: use the schema the fixtures actually write, which
+// is derived from the real mirror's CREATE TABLE.
+const corpusSchema = testcorpus.Schema
 
 // newTestServer builds a server over a small corpus: 4 works sharing tags,
 // which is enough for a pool, a ranking and a diversified list.
@@ -92,9 +101,10 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}
 	for id, tags := range links {
 		if _, err := seed.Exec(
-			`INSERT INTO works(id,url,title,word_count,hits,kudos,bookmarks,update_date,first_seen)
-			 VALUES(?,?,?,?,?,?,?,?,?)`,
+			`INSERT INTO works(id,url,title,authors,word_count,hits,kudos,bookmarks,update_date,first_seen)
+			 VALUES(?,?,?,?,?,?,?,?,?,?)`,
 			id, "https://example.com/"+string(rune('0'+id)), "Work "+string(rune('0'+id)),
+			"author"+string(rune('0'+id)),
 			5000, 1000*id, 100*id, 10*id, "2026-06-01", "20260"); err != nil {
 			t.Fatal(err)
 		}

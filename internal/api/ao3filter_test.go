@@ -117,11 +117,12 @@ func newDiscriminatingServer(t *testing.T) *httptest.Server {
 	}
 	for _, r := range rows {
 		if _, err := seed.Exec(
-			`INSERT INTO works(id,url,title,word_count,hits,kudos,bookmarks,
+			`INSERT INTO works(id,url,title,authors,word_count,hits,kudos,bookmarks,
 			   update_date,first_seen,complete,rating,language)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			r.id, fmt.Sprintf("https://example.com/%d", r.id),
-			fmt.Sprintf("Work %d", r.id), r.words, r.hits, r.kudos, 0,
+			fmt.Sprintf("Work %d", r.id), fmt.Sprintf("author%d", r.id),
+			r.words, r.hits, r.kudos, 0,
 			"2026-06-01", "2026-06-01", r.complete, r.rating, r.language); err != nil {
 			t.Fatal(err)
 		}
