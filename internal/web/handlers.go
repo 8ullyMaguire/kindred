@@ -161,7 +161,16 @@ func ageHeaderString(b Base) string {
 	if d == unknownAgeSentinel {
 		return "unknown"
 	}
-	return d.Truncate(time.Second).String()
+	// NOT `time.Duration(b.IndexAgeDays) * 24 * time.Hour`. That is the age
+	// in DAYS, and the index was built minutes ago: with IndexAgeDays == 0
+	// (a sub-24h build) it produced "0s", which claims the mirror was
+	// rebuilt this second. Verified live -- the header read `0s` five
+	// minutes after a 5m26s ingest. The whole-day floor is for the footer's
+	// prose, not for a header with second resolution.
+	//
+	// AgeSeconds exists precisely so this function has a real precision to
+	// report; IndexAgeDays stays as the coarse value the footer prose reads.
+	return (time.Duration(b.AgeSeconds) * time.Second).String()
 }
 
 // versionFor names the build, from an explicit version if the store has one
@@ -180,11 +189,10 @@ func versionFor(b Base) string {
 // header. "unknown" is 0 seconds -- which is NOT the same claim as a measured
 // zero, and is why both spellings are sent.
 func ageSeconds(b Base) string {
-	d := formatAge(b)
-	if d == unknownAgeSentinel {
+	if !b.AgeKnown {
 		return "0"
 	}
-	return strconv.FormatInt(int64(d.Seconds()), 10)
+	return strconv.FormatInt(int64(b.AgeSeconds), 10)
 }
 
 func (d Deps) guardAPI(api http.Handler, pages http.Handler) http.Handler {
@@ -1560,7 +1568,9 @@ func (d Deps) fillFreshness(ctx context.Context, b *Base) {
 		}
 		b.IndexBuiltAt = raw
 		b.AgeKnown = true
-		b.IndexAgeDays = int(time.Since(t).Hours() / 24)
+		elapsed := time.Since(t)
+		b.AgeSeconds = int64(elapsed.Seconds())
+		b.IndexAgeDays = int(elapsed.Hours() / 24)
 		b.IndexAgeAbsDays = b.IndexAgeDays
 		if b.IndexAgeAbsDays < 0 {
 			b.IndexAgeAbsDays = -b.IndexAgeAbsDays

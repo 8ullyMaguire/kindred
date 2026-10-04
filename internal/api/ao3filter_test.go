@@ -76,30 +76,44 @@ func newDiscriminatingServer(t *testing.T) *httptest.Server {
 	// 6 works. Every column is built so that no two sorts can agree by
 	// accident:
 	//
-	//	id | words | hits  | kudos | complete | rating | language
-	//	 1 |  1000 | 60000 |    10 |        1 | G      | English
-	//	 2 |  2000 | 50000 |    20 |        0 | T      | Spanish
-	//	 3 |  3000 | 40000 |    30 |        1 | M      | English
-	//	 4 |  4000 | 30000 |    40 |        0 | E      | French
-	//	 5 |  5000 | 20000 |    50 |        1 | G      | Spanish
-	//	 6 |  6000 | 10000 |    60 |        0 | T      | English
+	//	id | words | hits  | kudos | complete | rating                | language
+	//	 1 |  1000 | 60000 |    10 |        1 | General Audiences     | English
+	//	 2 |  2000 | 50000 |    20 |        0 | Teen And Up Audiences | Spanish
+	//	 3 |  3000 | 40000 |    30 |        1 | Mature                | English
+	//	 4 |  4000 | 30000 |    40 |        0 | Explicit              | French
+	//	 5 |  5000 | 20000 |    50 |        1 | General Audiences     | Spanish
+	//	 6 |  6000 | 10000 |    60 |        0 | Teen And Up Audiences | English
 	//
 	// words ascend with id; hits, kudos descend. So the top id differs for
 	// every sort, and a fixture that made them agree would make this test
 	// vacuous.
+	//
+	// The ratings are the FULL names the real mirror stores, measured
+	// across all 112,935 rows -- not the single letters AO3's query
+	// language uses. This fixture originally stored "G"/"T"/"M"/"E",
+	// which is why `rating=G` passed here and returned NOTHING against
+	// the real corpus: the letters the fixture invented were the letters
+	// the mirror never stored. A fixture whose vocabulary differs from the
+	// product's hides exactly this class of bug.
 	type row struct {
 		id                 int
 		words, hits, kudos int
 		complete           int
 		rating, language   string
 	}
+	const (
+		gen  = "General Audiences"
+		teen = "Teen And Up Audiences"
+		mat  = "Mature"
+		exp  = "Explicit"
+	)
 	rows := []row{
-		{1, 1000, 60000, 10, 1, "G", "English"},
-		{2, 2000, 50000, 20, 0, "T", "Spanish"},
-		{3, 3000, 40000, 30, 1, "M", "English"},
-		{4, 4000, 30000, 40, 0, "E", "French"},
-		{5, 5000, 20000, 50, 1, "G", "Spanish"},
-		{6, 6000, 10000, 60, 0, "T", "English"},
+		{1, 1000, 60000, 10, 1, gen, "English"},
+		{2, 2000, 50000, 20, 0, teen, "Spanish"},
+		{3, 3000, 40000, 30, 1, mat, "English"},
+		{4, 4000, 30000, 40, 0, exp, "French"},
+		{5, 5000, 20000, 50, 1, gen, "Spanish"},
+		{6, 6000, 10000, 60, 0, teen, "English"},
 	}
 	for _, r := range rows {
 		if _, err := seed.Exec(
@@ -274,9 +288,15 @@ func TestWorksFiltersActuallyFilter(t *testing.T) {
 		// The < and > spellings are the AO3 forms and must work too.
 		{"words=>5000", "words=>5000", []int64{6}},
 		{"words=<2000", "words=<2000", []int64{1}},
+		// AO3's letters, which the API translates.
 		{"rating=G", "rating=G", []int64{1, 5}},
 		{"rating=G,T", "rating=G,T", []int64{1, 2, 5, 6}},
 		{"rating=E", "rating=E", []int64{4}},
+		// The mirror's own spelling, which must work too -- both are what
+		// readers type, and a client that reads `rating` out of this API
+		// and sends it back gets the same works.
+		{"rating=General Audiences", "rating=General+Audiences", []int64{1, 5}},
+		{"rating=Mature", "rating=Mature", []int64{3}},
 		{"lang=English", "lang=English", []int64{1, 3, 6}},
 		{"lang=Spanish", "lang=Spanish", []int64{2, 5}},
 		// Two filters at once: the single-WHERE-clause version this

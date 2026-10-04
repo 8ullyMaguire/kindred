@@ -247,6 +247,88 @@ func TestAgeHeaderStringNeverInventsAnAge(t *testing.T) {
 	}
 }
 
+// TestRatingLettersResolveToTheNamesTheMirrorStores guards the mapping
+// against the real corpus's vocabulary.
+//
+// Found by running the filter against the actual 1.7 GB mirror, where
+// `rating=General` returned zero works: the column holds
+// "General Audiences", never "General", so a reader who typed the spelling
+// ao3.org uses got a confident empty list. The measured distribution is in
+// ao3RatingNames's comment; this pins that every mapped letter resolves to a
+// name this fixture's rows actually carry.
+func TestRatingLettersResolveToTheNamesTheMirrorStores(t *testing.T) {
+	// No server here, deliberately: this fixture stores single letters, so
+	// it cannot exercise the translation end to end -- a request for
+	// rating=G against it would look up "G" and find the row, proving
+	// nothing about the real mirror. What is asserted is the mapping
+	// against the real corpus's measured vocabulary.
+	realCorpusRatings := []string{
+		"General Audiences", "Teen And Up Audiences", "Mature",
+		"Not Rated", "Explicit",
+	}
+	inCorpus := map[string]bool{}
+	for _, r := range realCorpusRatings {
+		inCorpus[r] = true
+	}
+	for letter, name := range ao3RatingNames {
+		if !inCorpus[name] {
+			t.Errorf("rating letter %q maps to %q, which the real mirror "+
+				"does not contain (measured distribution: %v). A letter that "+
+				"resolves to an absent rating returns a confident empty list.",
+				letter, name, realCorpusRatings)
+		}
+	}
+	// And the four letters AO3 documents must all resolve, or a reader
+	// copying ao3.org's own syntax gets nothing.
+	for _, letter := range []string{"G", "T", "M", "E"} {
+		if _, ok := ao3RatingNames[letter]; !ok {
+			t.Errorf("AO3 rating letter %q is not mapped; ao3.org's own "+
+				"query syntax uses it", letter)
+		}
+	}
+}
+
+// TestTheHeaderAgeIsNotZeroForAFreshIndex is the regression test for the
+// bug the live run found.
+//
+// The header derived its value from IndexAgeDays, which floors to 0 for
+// anything under 24 hours. Five minutes after a 5m26s ingest, the live
+// header read "0s" -- a claim that the mirror was rebuilt this second. The
+// footer prose is fine with a day floor; a header is not.
+func TestTheHeaderAgeIsNotZeroForAFreshIndex(t *testing.T) {
+	ts, s := newTestServerWithStore(t)
+	// Five minutes ago: same day, so IndexAgeDays is 0.
+	fiveMin := time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339)
+	if err := s.SetMeta(context.Background(), "index_built_at", fiveMin); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	age := resp.Header.Get("X-Kindred-Index-Age")
+	if age == "0s" || age == "0m0s" {
+		t.Errorf("a five-minute-old index reports age %q; that claims it was "+
+			"rebuilt this second", age)
+	}
+	d, err := time.ParseDuration(age)
+	if err != nil {
+		t.Fatalf("age %q not a duration: %v", age, err)
+	}
+	// Within a minute either way.
+	if diff := d - 5*time.Minute; diff > time.Minute || diff < -time.Minute {
+		t.Errorf("age %v does not match a stamp written 5m ago", d)
+	}
+	// The seconds header must agree and be non-zero too.
+	secs := resp.Header.Get("X-Kindred-Index-Age-Seconds")
+	if secs == "0" {
+		t.Errorf("seconds header is 0 for a five-minute-old index")
+	}
+}
+
 // newTestServerWithStore exposes the store so a test can write a build stamp.
 func newTestServerWithStore(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Helper()

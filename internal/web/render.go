@@ -42,12 +42,21 @@ type Base struct {
 	// from the index build: an index built today from a mirror written in
 	// March is three months out of date however fresh the index is.
 	CorpusBuiltAt string
-	// IndexAgeDays is how stale the data is, in whole days.
+	// IndexAgeDays is how stale the data is, in whole days. It is the
+	// footer prose's precision: "built 3 days ago".
 	//
 	// Separate from the timestamps so the template does no date arithmetic.
 	// Negative when the recorded time is in the future, which is a clock
 	// problem rather than a data problem and is rendered as such.
 	IndexAgeDays int
+	// AgeSeconds is the same age in seconds, for the response headers.
+	//
+	// It exists because the day count is too coarse for a header: a mirror
+	// ingested five minutes ago has IndexAgeDays == 0, and a header derived
+	// from it reads "0s", claiming the index was rebuilt this second. That
+	// was not a theoretical worry -- it is what the live header said, five
+	// minutes after a 5m26s ingest.
+	AgeSeconds int64
 	// AgeKnown is false when no build time is recorded at all, which is a
 	// THIRD state distinct from "built now" and "built long ago". A page
 	// must not render "0 days old" for a mirror of unknown vintage -- that
