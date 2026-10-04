@@ -12,6 +12,7 @@ tree or the running service, not against a plan.
 | Spec gate | `docs/goal-check.py` — all 7 clauses pass |
 | Deployment | live on thinkcentre `:8010`, binary sha256 matches the build, unit restarted 2026-10-05 01:02 |
 | Deploy gate | `scripts/check-deploy.sh` — **32 checks, all pass** |
+| Doc gate | `scripts/check-doc-commands.sh` — exit 0, 28 invocations checked |
 | Index age | **128h.** Correct: the index was built 2026-09-29, and the header reports the age of the *data*. A deploy does not rebuild an index — `kindred ingest` does. |
 
 ## Done this session
@@ -52,21 +53,43 @@ client. Named in the spec since it was written, never implemented.
 `TestTransportHasNoPlainDialFallback` covers the fetch transport, which is a
 different claim. This is the only §4.4 row still named-but-unwritten.
 
-### 3. A CI check that every command in the docs parses
+### 3. ~~A CI check that every command in the docs parses~~ — DONE
 
-Two documents in a row (`PLAN` §6.4 and `SPEC` §4.4) named a `kindred` command
-that does not exist, and the failure mode reads as "the feature is broken"
-rather than "the document is wrong".
+`scripts/check-doc-commands.sh`, exit 0 today. It found one more error than the
+two I already knew about:
 
-- [ ] extract every `kindred …` line from the docs, run `--help`-level parsing
-      on each
-- [ ] it will fail today. That is the point — it is a real list of errors
+    SPEC 8.1   kindred ingest ao3  ->  kindred ingest --corpus <mirror>
 
-### 4. Docs-command drift, root cause
+That one is the interesting shape. The wrong form does not error on the bad
+subcommand — the CLI reads `ingest`, treats `ao3` as a stray argument, and
+fails with `--corpus is required`, which is an error about something else. So
+the exit code says the command works, and only `kindred ingest -h` reveals
+that `ingest ao3` is not a thing. The verdict is now made that way.
 
-The docs were written before the CLI settled. Worth one pass to make the
-command surface the source of truth, or the check in item 3 becomes a permanent
-allowlist.
+Five versions of the extractor failed before one worked, and three of them
+reported SUCCESS while matching nothing at all:
+
+  v1 matched prose anywhere    -> "43 of 43 broken", every one fake
+  v2 grep -oE with \s          -> 0 matches, reported CLEAN
+  v3 array read in a subshell  -> 0 matches, reported CLEAN
+  v4 `local` in a subshell     -> 0 matches, reported CLEAN
+  v5 `*"  "*` skip pattern     -> 21 real commands skipped, reported CLEAN
+
+All three clean-looking failures were found by reading the output rather than
+trusting it. The script now refuses to run if it cannot read the subcommand
+list from the binary, and runs a self-test against a fixture it writes itself
+before it says anything about the documents.
+
+### 4. Docs-command drift, root cause — lower priority than it looks
+
+The docs were written before the CLI settled, and the check in item 3 now
+catches the drift. What the check cannot do is notice a command that exists and
+is described wrongly — the verdict is "does the CLI know this invocation", not
+"does the CLI do what the prose says". Fixing that means either generating the
+command sections from `--help` or accepting the limit.
+
+- [ ] decide: generate the CLI reference from `--help`, or document the limit
+      in the script header (it is already stated there)
 
 ## Three bugs worth remembering
 
