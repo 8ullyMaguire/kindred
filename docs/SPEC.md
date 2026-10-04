@@ -287,15 +287,43 @@ opt-in, and enabling it is a logged decision in the manifest.
 
 | Threat | Mitigation | Test |
 |---|---|---|
-| Peer learns my IP | snapshot is served **only** on a Tor onion service; no clearnet listener exists for it | `kindred dump verify --no-clearnet` asserts no non-onion route is registered |
+| Peer learns my IP | snapshot is served **only** on a Tor onion service; no clearnet listener exists for it | `TestNoClearnetRouteIsRegisteredForASnapshot` (internal/dump) asserts that any snapshot-serving declaration carries onion-only evidence **in its own body**, and `TestTheClearnetListenerWouldHaveToBeDeliberate` asserts internal/dump opens no listener at all |
 | Fetch client falls back to clearnet | the fetcher accepts **only** `.onion` hosts, refuses redirects off `.onion`, has no DNS path and no proxy-less dialer | unit test points it at `127.0.0.1` and at a redirect-to-clearnet, asserts refusal |
-| A bug makes an outbound request | the serving binary's request path links no HTTP client; the fetch path dials only through the Tor SOCKS proxy | `go list -deps` assertion + a test that fails if `net/http.Client` appears in the request path |
-| Onion service is silently disabled | `KINDRED_DUMP_REQUIRE_ONION=1` (default) makes the dump task exit non-zero if no onion service is up | integration test |
+| A bug makes an outbound request | the serving binary's request path links no HTTP client; the fetch path dials only through the Tor SOCKS proxy | **NOT IMPLEMENTED** — no `go list -deps` assertion exists. Partially covered by `TestTransportHasNoPlainDialFallback` (internal/onion), which checks the transport has no clearnet dialer but does not check the serving binary's link graph |
+| Onion service is silently disabled | `KINDRED_DUMP_REQUIRE_ONION=1` (default) makes the dump task exit non-zero if no onion service is up | **NOT IMPLEMENTED** — the env var does not exist and there is no such integration test. Currently unreachable because nothing serves snapshots at all (see the note below) |
 | Timing/pattern reveals scale | fixed rebuild cadence, no "new dump" notification push — peers poll | design property |
 | Salt leaks and pseudonymises | salt is stored in the manifest, which is public — so a stable salt is *not* a secret, and is treated as a privacy trade-off rather than a security control | §4.2 |
 
 That last row is the one worth pausing on: the stable salt is not
 protection, it is linkage. Calling it protection would be wrong.
+
+**Revised 2026-10-04, after auditing this table against the tree.** Three of
+the six rows named a test that did not exist, and the two marked
+NOT IMPLEMENTED above were the ones found. Row 1 is now implemented, and the
+way it is implemented is worth stating because it is not what the table
+originally described.
+
+`kindred dump verify --no-clearnet` does not exist and, on inspection, could
+not usefully: **this project has no snapshot-serving code at all.** `dump`
+writes files to a directory and returns; `internal/onion` only *fetches*.
+There is no listener anywhere that a peer could reach, so "no clearnet
+listener exists for a snapshot" is a property of the codebase rather than of
+a running process — which is why the gate is a source-level assertion over the
+AST rather than a flag on a subcommand.
+
+The gate is deliberately a POSITIVE obligation: if a serving symbol
+(`ServeSnapshot`, `ServeDump`, `ServeOnion`, …) ever appears, the gate demands
+onion-only evidence inside that same declaration. A test that merely greps for
+the absence of a listener would pass forever on a codebase that has no
+listener for unrelated reasons, and would keep passing right up to the moment
+someone added one.
+
+The evidence check is scoped to the declaration, not the file. The first
+version scanned the whole file, and `internal/dump/dump.go` already declares
+`IsOnionHost` for the fetcher — so a bare `http.ListenAndServe` in a new
+function passed, because the file contained the evidence string even though
+the function never used it. That mutation survived one round of
+mutation-checking before the scope was corrected.
 
 ### 4.5 Peers pull; nobody pushes
 

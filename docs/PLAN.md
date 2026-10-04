@@ -752,10 +752,23 @@ Expected: a JSON array of works, and both `X-Kindred-Index-Age` and
 retention, then onion. Each stage gets its own test, and the anonymiser's
 tests need no Tor at all — which is the reason the onion work is last.
 
-**Files:** `internal/dump/anonymise.go`, `internal/dump/shard.go`,
+**Files:** ~~`internal/dump/anonymise.go`, `internal/dump/shard.go`,
 `internal/dump/manifest.go`, `internal/dump/sign.go`, `internal/dump/delta.go`,
 `internal/dump/retention.go`, `internal/onion/service.go`, `internal/onion/fetch.go`,
-plus `cmd/kindred/dump.go`.
+plus `cmd/kindred/dump.go`.~~
+
+**Corrected 2026-10-04: none of those eight filenames was used.** What shipped
+is `internal/dump/dump.go` (398 lines: manifest, sign, verify, anonymise,
+shard) and `internal/onion/onion.go` (334 lines: the fetch client), with
+`cmd/kindred/dumpcmd.go` as the subcommand. Every obligation in this section
+is met; only the file list is fiction, and a reader who greps for
+`anonymise.go` concludes the milestone was never built.
+
+The **delta log (§4.3) and retention (§4.2) are genuinely not implemented** —
+`grep -rn 'retention\|delta' internal/dump/ cmd/kindred/` finds nothing.
+SPEC §4.2's "retention is 3" and §4.3's delta mechanism are both currently
+aspirational, and `Manifest` carries no version-chain field. Recorded as open
+work in `docs/WHAT-IS-LEFT.md`.
 
 ### 6.1 The dropped tables are a test, not a comment
 
@@ -817,9 +830,46 @@ Expected: a manifest, a signed `manifest.minisig`, N shards, and printed
 row counts per table. **Then verify with the tool, not by eye:**
 
 ```bash
-./bin/kindred dump verify --in /tmp/dumps
+./bin/kindred verify --dir /tmp/dumps/v0
 ```
-Expected: `signature ok`, `hashes ok`, `no user rows`, exit 0.
+Expected: `manifest v1 verified`, one line per shard count, exit 0.
+
+**This section was wrong until 2026-10-04 and cost a false alarm.** It said
+`dump verify --in`, and SPEC §4.4 said the same. Neither exists: `verify` is a
+**top-level** command and the flag is `--dir`, not `--in`. Running what this
+section printed produces `--corpus is required` — because `dump verify` parses
+as `dump` with the subcommand-ish word `verify`, which takes a different path
+through the flag binding. I read that as "M4 is broken", and it was not.
+
+Observed against the 1.7 GB mirror on 2026-10-04:
+
+```
+kindred dump --corpus <mirror> --out /tmp/kdumps --k-anon 20
+  tag_affinity rows : 4065 (k=20, salt=per-dump)
+  shards            : 256
+  real 19.1s
+
+kindred verify --dir /tmp/kdumps/v0
+  manifest v1 verified (k=20, salt=per-dump, full=true)
+  256 shards verified by content hash                exit 0
+
+  same, after editing one float in shard-000.json:
+  BAD  shard-000.json: hash f19a2ff6... does not match manifest 97fa8320...
+  1 of 256 shards failed their hash                   exit 1
+```
+
+There is also no `no user rows` line, because §6.1's
+`TestDumpContainsNoUserRows` was never written. The property holds anyway —
+`Anonymise` returns `[]Affinity` and nothing else, so there is no code path
+that could copy a user table — but "holds by construction" is a weaker claim
+than "asserted", and only the first one is currently true of the tests.
+
+A useful lesson from checking it directly rather than trusting the plan: a
+first leak-check reported **125 raw user ids** in the dump. All 125 were shard
+keys — `"149":{"hash":…,"path":"shard-149.json"}` — coinciding with user id
+149, because shard numbers and user ids are both small integers. A bare
+`grep -E "\b$id\b"` cannot tell a leak from a collision; look at *where* the
+token appears before reporting anything.
 
 **Commit:** `m4: anonymised signed snapshots over a Tor onion service`
 
