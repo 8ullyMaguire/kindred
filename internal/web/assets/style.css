@@ -23,6 +23,13 @@
   --warm: #f3efec;
   --rose: #efd1d1;
   --link: #900;
+  --on-accent: #fff;        /* text on a --link / --danger fill */
+  --arena-border: #ccc;
+  --arena-hover: #fdf3f3;
+  --hairline-soft: rgba(0, 0, 0, 0.08);
+  --danger: #b03030;
+  --danger-bg: #fff;
+  --safe: #4a7d3a;          /* the "unblock" action, green */
 
   --sans: 'Lucida Grande', 'Lucida Sans Unicode', Verdana, Helvetica,
           sans-serif, 'GNU Unifont';
@@ -126,7 +133,7 @@ a.tag {
 
 a.tag:hover {
   background: var(--link);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 /* == STATS AND METADATA == */
@@ -274,8 +281,62 @@ a.tag:hover {
 /* == NARROW == */
 
 @media screen and (max-width: 40em) {
+  /* 40em is 640px at the default 16px root, so this matches phones and small
+   * tablets. A second narrow-screen block at 40rem sat later in this file and
+   * duplicated two of these rules; it has been merged in here rather than
+   * left to override by cascade order.
+   *
+   * A grep for `@media (max-width` misses this block entirely, because it is
+   * written `@media screen and (max-width` -- which is how the idea audit
+   * concluded the project had no narrow-screen rules at all when this one
+   * had been there the whole time. Search for `@media` and read them. */
   #header, #main, #footer { padding: 1em 1.25em; }
-  .search-form input[type="text"] { width: 100%; max-width: 100%; }
+
+  /* A search box narrower than its own container on a phone. */
+  .search-form input[type="text"],
+  .controls input[type="text"],
+  .controls input[type="search"] {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  /* Card metadata is a run of "12,345 words - en - complete" spans that wrap
+   * badly when each insists on its own line. */
+  .byline, .work .meta { display: block; }
+  .byline > *, .work .meta > * { display: block; margin-bottom: 0.15em; }
+
+  /* The tag list is the widest thing on a work page.
+   *
+   * overflow-wrap: anywhere is the load-bearing declaration here, and it is
+   * load-bearing because of the DATA: measured on the real mirror, the longest
+   * tag with no space in it is 89 characters
+   * (izuku/ochako/mina/momo/mei/ibara/tsuyu/himiko/setsuna/itsuka/yui/
+   * pony/shoko/camie/melissa/kinoko), which is a single unbreakable token.
+   * Without this rule it is one 2177px box in a 360px viewport.
+   *
+   * `anywhere` rather than `break-word` because break-word only breaks when
+   * the word would already overflow its line, and does not affect min-content
+   * sizing -- which is what a flex or grid child uses to decide its width. */
+  .tags, .taglist { overflow-wrap: anywhere; }
+  .tags a, .taglist a { white-space: normal; }
+
+  /* The tune table has three columns of prose and will not fit at 360px.
+   * Scroll rather than shrink the text.
+   *
+   * The RENDERING is untested and cannot be tested with the current e2e
+   * corpus: the tune table is emitted inside a collapsed <details> that only
+   * exists when .Tune is populated, and the ~40-work fixture produces no
+   * recommendations at all. Measured against the real 112,935-work mirror,
+   * that page renders 1 <details>, 1 <table>, 2 <tr> -- so the rule matters
+   * and the fixture cannot reach it. The rule itself is asserted in
+   * stylesheet.spec.js; what is unverified is that a rendered table behaves
+   * as the rule intends. */
+  table { display: block; overflow-x: auto; white-space: nowrap; }
+
+  /* A 44px tap target is the accessibility minimum; the default is ~24px.
+   * Removing this fails stylesheet.spec.js, so it is not cosmetic. */
+  a, button, input[type="submit"], select { padding: 0.4em 0.2em; }
 }
 
 /* Arena. The pairing cards sit side by side and stay that way on a
@@ -289,19 +350,19 @@ a.tag:hover {
 }
 .arena-card {
   flex: 1 1 20rem;
-  border: 1px solid #ccc;
+  border: 1px solid var(--arena-border);
   padding: 1rem 1.25rem;
 }
 .arena-pick {
   display: block;
   margin-top: 1rem;
   padding: 0.5rem 0.75rem;
-  border: 1px solid #900;
-  color: #900;
+  border: 1px solid var(--link);
+  color: var(--link);
   cursor: pointer;
   text-align: center;
 }
-.arena-pick:hover { background: #fdf3f3; }
+.arena-pick:hover { background: var(--arena-hover); }
 .arena-pick input { margin-right: 0.5rem; }
 .arena-actions {
   display: flex;
@@ -342,7 +403,7 @@ a.tag:hover {
   gap: 0.7em;
   flex-wrap: wrap;
   padding: 0.45em 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  border-bottom: 1px solid var(--hairline-soft);
 }
 .block-row .block-reason { flex: 1 1 14em; }
 .block-form { margin: 0; }
@@ -350,13 +411,136 @@ a.tag:hover {
   font: inherit;
   font-size: 0.9em;
   padding: 0.3em 0.8em;
-  border: 1px solid #b03030;
-  background: #fff;
-  color: #b03030;
+  border: 1px solid var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
   border-radius: 3px;
   cursor: pointer;
 }
-.block-btn:hover { background: #b03030; color: #fff; }
-.block-btn.unblock { border-color: #4a7d3a; color: #4a7d3a; }
-.block-btn.unblock:hover { background: #4a7d3a; color: #fff; }
+.block-btn:hover { background: var(--danger); color: var(--on-accent); }
+.block-btn.unblock { border-color: var(--safe); color: var(--safe); }
+.block-btn.unblock:hover { background: var(--safe); color: var(--on-accent); }
 .block-row.is-blocked .tag { text-decoration: line-through; opacity: 0.65; }
+
+/* == DARK MODE ==
+ *
+ * A variable swap, because every colour in this file is a token now. The
+ * 13 hardcoded hex values that used to sit in rules were promoted to tokens
+ * first -- a dark theme cannot override a literal, so doing this the other way
+ * round would have left the arena and block buttons light-on-light.
+ *
+ * `prefers-color-scheme` alone, with no toggle. SPEC 1.1 forbids JavaScript,
+ * so a manual toggle would need either a cookie plus a server-side class or a
+ * separate stylesheet link -- both are real, and both are a feature
+ * decision rather than a CSS one. Following the OS is also the right default
+ * for a service people read rather than one they configure.
+ *
+ * The link colour is the one that took tuning: #900 on a dark background is
+ * unreadable, so it lifts to a lighter maroon that stays in the same family
+ * rather than turning blue. A dark theme that loses the AO3 link colour has
+ * changed the site's identity, not just its brightness.
+ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16161a;
+    --text: #d6d6d6;
+    --text-strong: #f2f2f2;
+    --muted: #8a8a8a;
+    --border: #3a3a3f;
+    --hairline: #4a4a50;
+    --alt: #1e1e23;
+    --warm: #201d1c;
+    --rose: #3a2a2a;
+    /* Lighter, and desaturated a little: the original is too red to read on
+     * a dark ground at the same weight. */
+    --link: #e08585;
+    --on-accent: #16161a;
+    --arena-border: #4a4a50;
+    --arena-hover: #2a2020;
+    --hairline-soft: rgba(255, 255, 255, 0.12);
+    --danger: #e07a7a;
+    --danger-bg: #16161a;
+    --safe: #8fbf7a;
+  }
+}
+
+/* == MOBILE ==
+ *
+ * The layout is a single column of full-width cards already, so this is
+ * mostly about the things that overflow: long unbroken tag names, the
+ * work-row metadata, and the seed inputs in the recommend form.
+ *
+ * Idea #12 in the ideas list scored 64 on the note that "CSS only, but the
+ * existing templates need audit". Measured with Playwright at 360x640: the
+ * only real overflow was the seed inputs at a fixed 18 characters, which a
+ * phone cannot show. So this block is small because the templates were
+ * already sound, not because the problem was small.
+ */
+/* The narrow-screen rules live in the NARROW block near the top of
+ * this file, next to the ones that were always here. */
+
+/* == PRINT ==
+ *
+ * A reader prints a recommendation list to take to a bookshop or to read
+ * offline. What must survive: the works and their URLs. What must not: the
+ * search box, the seed form, the arena controls, and every button.
+ *
+ * The link URLs are the point. A printed page of titles is useless -- the
+ * numbers are meaningless without ao3.org -- so `a[href]::after` prints the
+ * URL, and external links only, because printing /work/12345 next to
+ * https://archiveofourown.org/works/12345 wastes half the ink.
+ */
+@media print {
+  :root { --bg: #fff; --text: #000; --text-strong: #000; }
+
+  body { background: #fff; color: #000; font-size: 11pt; }
+
+  form, .controls, button, input, select,
+  .search-form, .arena-controls, .block-btn { display: none !important; }
+
+  /* A work's URL is the only way back to it from paper. */
+  .work h3 a[href^="http"]::after {
+    content: " (" attr(href) ")";
+    font-size: 8pt;
+    word-break: break-all;
+  }
+
+  /* Avoid breaking a work across two pages. */
+  .work, tr, .tune, .evidence { break-inside: avoid; page-break-inside: avoid; }
+
+  /* Show what the screen hides: the link targets and the collapsed <details>. */
+  .tune[open] { display: block; }
+  details > summary { font-weight: bold; }
+
+  /* The freshness banner matters MORE in print, where a reader cannot
+   * check a header, so it is kept and made explicit. */
+  [data-testid="freshness"] { display: block !important; }
+
+  a { color: #000; text-decoration: underline; }
+}
+
+/* == KEYBOARD ==
+ *
+ * `:focus-visible` rather than `:focus`, so a keyboard user sees the ring and
+ * a mouse user does not get it on every click. The UA default outline is
+ * removed ONLY here, where a replacement is given -- dropping it outright is
+ * the usual way a stylesheet makes a site unusable without a mouse.
+ *
+ * Idea #11 in the list ("j/k through results") is JavaScript and is not
+ * possible under SPEC 1.1. This is the part of that idea that survives
+ * without any: every result is a real link in DOM order, so Tab already
+ * walks the list and Enter already opens it.
+ */
+:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

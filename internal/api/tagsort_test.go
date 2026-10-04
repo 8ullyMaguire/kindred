@@ -639,3 +639,49 @@ func newSortServerWithUnknownLength(t *testing.T) *httptest.Server {
 	t.Cleanup(ts.Close)
 	return ts
 }
+
+// The real extremes, measured on the 112,935-work mirror:
+//
+//	longest title          255 chars
+//	longest tag name       150 chars
+//	longest UNBREAKABLE tag 96 chars (no spaces, so no break opportunity)
+//
+// Taken verbatim. A mobile test against a fixture of "Work 1" and a tag
+// called "dark" measures nothing: the whole reason a phone overflows is a
+// 96-character token with no space in it, and that string does not exist in
+// a hand-written fixture.
+//
+// Every one of these is a single token with NO break opportunity, so
+// overflow-wrap: anywhere is the only thing that can stop it -- and it is
+// what makes the mobile gate in the stylesheet meaningful rather than
+// decorative.
+const (
+	realLongTitle = "Help! I Was Rinancarnated Again By This Isekai Obsessed " +
+		"Immortal Being and Now I\u2019m Surrounded By Rebels That Want to Vent " +
+		"Me! Feral Breaker floretta: The Ruthless Reincarnated Floret Forms the " +
+		"Ultimate Rinan Revolt! All Roots Lead to THEIR Domestication!!"
+	// The 89-character tag with NO SPACES in it, from the same query. The
+	// 150-character tag I reached for first ("no one is infected by a demon...")
+	// is mostly spaces, so it wraps at any width and tests nothing -- which
+	// the assertion below caught, because it is the one property that matters.
+	realUnbreakableTag = "izuku/ochako/mina/momo/mei/ibara/tsuyu/himiko/" +
+		"setsuna/itsuka/yui/pony/shoko/camie/melissa/kinoko"
+)
+
+func TestTheFixtureCarriesTheRealStrings(t *testing.T) {
+	// So the extremes cannot silently rot into short strings when someone
+	// tidies the fixture: these are measured, and the assertion is on the
+	// LENGTH, not on the content.
+	if len([]rune(realLongTitle)) < 250 {
+		t.Errorf("the long title fixture is %d chars; the real maximum is 255",
+			len([]rune(realLongTitle)))
+	}
+	if len([]rune(realUnbreakableTag)) < 90 {
+		t.Errorf("the unbreakable tag fixture is %d chars; the real maximum is 96",
+			len([]rune(realUnbreakableTag)))
+	}
+	if strings.ContainsAny(realUnbreakableTag, " \t\n") {
+		t.Errorf("the tag fixture contains a space, so the browser has a break " +
+			"opportunity and it no longer reproduces the overflow it exists for")
+	}
+}
