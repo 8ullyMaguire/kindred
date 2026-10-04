@@ -523,10 +523,23 @@ priority                  = score · freshness_decay(candidate)
 
 ## 8. Migration from kindling
 
-1. `kindred ingest ao3` reads `ao3_metadata.db` read-only and populates
+1. `kindred ingest --corpus ~/kindling-data/ao3_metadata.db` reads
+   `ao3_metadata.db` read-only and populates
    `kindred.db`. Idempotent, resumable, reports rows in/rows kept/rows
    dropped per table — the "silent no-op beats crashes" rule, applied to
    the migrator.
+   **Corrected 2026-10-05.** This said `kindred ingest ao3`. There is no
+   positional argument: `ingest` takes `--corpus`, and the mirror is passed by
+   path. The wrong form does NOT error on the bad subcommand -- the CLI reads
+   `ingest`, treats `ao3` as a stray argument, and fails with `--corpus is
+   required`, which reads as "you forgot a flag" rather than "that command does
+   not exist".
+
+   Found by `scripts/check-doc-commands.sh`. The silent fall-through is the
+   general hazard: a document naming a non-existent subcommand of a real one
+   produces an error about something else entirely, so the doc looks broken
+   rather than wrong.
+
 2. The index build writes the CSR + embeddings.
 3. Kindling's own eval fixtures (`tests/test_scoring_shape.py`,
    `test_taste.py`, `test_rerank_parity.py`) become Kindred's parity
