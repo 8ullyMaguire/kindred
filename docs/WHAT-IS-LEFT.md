@@ -21,21 +21,23 @@ says so is not done.
 | `python3 docs/goal-check.py` | all 7 clauses pass |
 | Real corpus | 112,935 works / 6,261 users / 180,677 interactions, on thinkcentre |
 | Deployed instance | thinkcentre `127.0.0.1:8010`, systemd **system** unit `kindred.service` |
-| **Deployed binary is from 2026-09-29** | **six days stale — 14 commits undeployed** |
+| **Deployed binary** | **rebuilt from 11bcaed and deployed 2026-10-04, verified live** |
+| Deploy-drift gate | `scripts/check-deploy.sh`, 22 checks, mutation-checked |
+| Index age on the live instance | **127h — honest.** The index was built 2026-10-01, not by a stale binary |
 
-### Deploy is the single largest gap
+### Deploy: DONE, and the drift that caused it is now gated
 
-The live instance runs a Sep 29 binary. Verified absent from the live wire:
+The live instance ran a Sep 29 binary for six days. It was up the whole time —
+no `X-Kindred-Index-Age`, no `Server: kindred`, no sort controls, no dark mode.
+Rebuilt, deployed with a pre-flight gate on a scratch port, and verified **on
+the live wire** rather than in the repo. `scripts/check-deploy.sh` now runs 22
+checks against any deployment URL and is mutation-checked by building the
+pre-headers revision and watching it fail 20 of 22.
 
-- no `X-Kindred-Index-Age` / `-Version` headers (SPEC §3.2.2 requires them on
-  *every* response)
-- no `Server: kindred`
-- no sort/length controls on `/tag/{id}`
-- no dark mode in the served stylesheet
-
-Every gate this project has is green **against the repo, not against the
-running service**. Nothing in the test suite checks the deployed binary, so
-this drift was invisible.
+One number on the live instance is worth not misreading: the index age reads
+**127 hours**. That is correct — the index was built 2026-10-01, and the header
+reports the age of the *data*, not the age of the binary. A deploy does not
+rebuild the index; `kindred ingest` does.
 
 ---
 
@@ -97,21 +99,34 @@ appears before reporting it.
 
 ## Open work, highest value first
 
-### 1. Deploy the current binary — everything else is invisible until this
+### 1. ~~Deploy the current binary~~ — DONE
 
-- [ ] rebuild for the deploy host, replace `/usr/local/bin/kindred`
-- [ ] `systemctl restart kindred`, confirm `active (running)`
-- [ ] verify **on the live wire**, not in the repo:
-      `X-Kindred-Index-Age`, `Server: kindred`, `/tag/29?sort=recent` reorders,
-      `prefers-color-scheme` present in the served CSS
-- [ ] add a gate so this cannot drift again — see item 2
+- [x] cross-compiled static binary (the deploy host has Go 1.22.2, the module
+      needs 1.27.1, so the build happens on the repo host)
+- [x] pre-flight gate on a scratch port with its own state db — the live WAL is
+      never opened by a second process
+- [x] atomic replace (`mv`, not `cp`), `systemctl restart kindred`
+- [x] verified on the live wire: headers present, sort reorders, dark mode
+      served, peak RSS 144 MB against the 220 MB cap
 
-### 2. A deploy-drift gate (the missing check that let item 1 happen)
+### 2. ~~A deploy-drift gate~~ — DONE
 
-- [ ] a test that asserts the running instance's headers, from outside the
-      repo. Nothing currently compares the deployed binary to HEAD.
+- [x] `scripts/check-deploy.sh`, 22 checks, exits 1 on drift / 2 on unreachable
+- [x] mutation-checked by building `a95e224^` and serving it: **20 of 22 fail**
 
-### 3. SPEC §4.4's headline privacy assertion has no implementation
+Run it after every deploy:
+```bash
+scripts/check-deploy.sh http://127.0.0.1:8010
+```
+
+### 3. ~~SPEC §4.4's headline privacy assertion~~ — DONE, and rows 3/4 marked NOT IMPLEMENTED
+
+- [x] row 1 implemented as a source-level AST gate (a flag could not work:
+      nothing serves snapshots, so the guarantee is about the codebase)
+- [x] rows 3 and 4 marked **NOT IMPLEMENTED** in the spec rather than left
+      aspirational
+- [x] mutation-checked: a bare `net.Listen` fails, a bare `ServeSnapshot`
+      fails, a compliant `ServeSnapshot` guarded by `IsOnionHost` passes
 
 SPEC §4.4 states, as the mitigation for "peer learns my IP":
 
@@ -124,21 +139,36 @@ transport has no clearnet dialer, not that the *service* registers only an
 onion listener. PLAN §6.2 names the stronger test as `TestNoClearnetRouteForDump`;
 it does not exist under that name or any other.
 
-- [ ] decide: implement `dump verify --no-clearnet`, or amend SPEC §4.4 to
-      describe the guarantee that is actually tested
-- [ ] whichever it is, the test must be mutation-checked
+- [x] decided: amend the spec to describe what is actually enforced, and
+      implement it as a source gate
+- [x] row 3 (`go list -deps` assertion that no HTTP client is linked into the
+      serving path) is still genuinely missing — see item 9 below
 
-### 4. `docs/PLAN.md` §6.4 and `docs/SPEC.md` §4.4 document commands that do not exist
+### 9. SPEC §4.4 row 3: the `go list -deps` assertion (still open)
+
+- [ ] assert the serving binary's link graph contains no outbound HTTP client
+      beyond what the onion transport needs. Named in the spec, never written.
+- [ ] `TestTransportHasNoPlainDialFallback` covers the *fetch* transport only.
+
+### 10. SPEC §4.2 retention (3 versions) and §4.3 delta log — not implemented
+
+- [ ] `grep -rn 'retention|delta' internal/dump/ cmd/kindred/` finds nothing
+- [ ] every dump is a full snapshot; §4.3's "peers pull a few hundred KB per
+      day" is currently a 7 MB full rebuild every time
+
+### 4. ~~`docs/PLAN.md` §6.4 documents commands that do not exist~~ — DONE
 
 Both say `kindred dump verify --in <dir>`. The real command is
 `kindred verify --dir <dir>` — `verify` is top-level, not a `dump` subcommand.
 
-- [ ] correct both documents, or add a `dump verify` alias
-- [ ] this is the second time a doc's command was wrong in a way that made the
-      feature look broken; worth a CI check that every command in the docs
-      parses
+- [x] both documents corrected, with the observed output pasted in
+- [x] PLAN §6.1's eight fictional filenames corrected, and the genuinely
+      missing delta/retention called out rather than left implied
+- [ ] **still worth doing:** a CI check that every `kindred …` command quoted
+      in the docs actually parses. Two documents in a row named a command that
+      does not exist, and the failure mode reads as "the feature is broken"
 
-### 5. M5 — budgets and parity
+### 5. M5 — budgets and parity (partial)
 
 - [ ] `make budget` cannot run on the repo host (it refuses without a corpus);
       it should run against the thinkcentre mirror. The measurement was done
@@ -147,7 +177,7 @@ Both say `kindred dump verify --in <dir>`. The real command is
 - [ ] `scripts/budget-pi.sh` is named in PLAN §7 and does not exist
 - [ ] arm64 run under `MemoryMax` on real hardware (SPEC §12)
 
-### 6. Filters in the API but not on the pages
+### 5b. ~~M5: budgets and parity~~ — partially done; script still missing
 
 `complete=`, `rating=`, `lang=` work in `/api/v1/ao3/works`. The tag page
 accepts `?sort=` and `?words=` only. A reader who learns the filters from the
