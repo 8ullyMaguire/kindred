@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -373,6 +374,150 @@ func (s *Server) handleSimilarTags(w http.ResponseWriter, r *http.Request) {
 
 // --- the unofficial AO3 API ----------------------------------------------
 
+// worksFilter is one parsed query parameter, kept as data rather than as a
+// SQL fragment appended at the call site.
+//
+// It exists because the first version of this handler built its WHERE clause
+// by string concatenation with a single `query += " WHERE ..."`, which cannot
+// express two filters: the second would either overwrite the first or produce
+// `WHERE a WHERE b`. Every clause therefore collects into one slice and is
+// joined once, with the values kept in a separate args slice so nothing is
+// ever interpolated into SQL text.
+type worksFilter struct {
+	clause string
+	args   []any
+}
+
+// parseWorksFilters reads the filter parameters from an AO3-style works query
+// and returns the WHERE clauses to apply.
+//
+// AO3's own syntax is followed rather than invented, because a reader who has
+// used ao3.org already knows these spellings and a client written against
+// ao3.org works here unchanged:
+//
+//	?complete=true            only works flagged complete
+//	?words=under:10000        under 10,000 words
+//	?words=>50000             over 50,000 words
+//	?rating=G,T               any of the listed ratings
+//	?lang=en                  one language
+//
+// `words=under:N` and `words=>N` are both accepted because AO3 itself accepts
+// both, and a 400 on the spelling a reader used on ao3.org would be a
+// pointless difference.
+//
+// A malformed value is a 400, not a silently ignored parameter. The whole
+// point of this change is that a filter which does not fire must not look
+// like one that did, and "quietly drop the filter" is the failure mode being
+// removed.
+func parseWorksFilters(q url.Values) ([]worksFilter, error) {
+	var out []worksFilter
+
+	// complete. `complete=1`/`true`/`yes` are all the same request. An
+	// absent or unrecognised value means no filter: this parameter is
+	// about ADDING a restriction, not about the default.
+	if v := strings.TrimSpace(q.Get("complete")); v != "" {
+		switch strings.ToLower(v) {
+		case "1", "true", "yes", "only":
+			// complete = 1, not complete != 0. A NULL complete is UNKNOWN,
+			// and `complete != 0` is NULL for those rows, so SQL would
+			// exclude them anyway -- but stating it as `= 1` says what is
+			// meant and cannot drift if the dialect's three-valued logic is
+			// ever handled differently.
+			out = append(out, worksFilter{"w.complete = 1", nil})
+		case "0", "false", "no":
+			out = append(out, worksFilter{"w.complete = 0", nil})
+		default:
+			return nil, fmt.Errorf("complete must be true or false, got %q", v)
+		}
+	}
+
+	if v := strings.TrimSpace(q.Get("words")); v != "" {
+		lower := strings.ToLower(v)
+		switch {
+		case strings.HasPrefix(lower, "under:"):
+			n, err := parseWordBound(strings.TrimSpace(v[len("under:"):]))
+			if err != nil {
+				return nil, fmt.Errorf("words=under: %v", err)
+			}
+			out = append(out, worksFilter{"w.word_count < ?", []any{n}})
+		case strings.HasPrefix(lower, "over:"):
+			n, err := parseWordBound(strings.TrimSpace(v[len("over:"):]))
+			if err != nil {
+				return nil, fmt.Errorf("words=over: %v", err)
+			}
+			out = append(out, worksFilter{"w.word_count > ?", []any{n}})
+		case strings.HasPrefix(v, "<"):
+			n, err := parseWordBound(strings.TrimSpace(v[1:]))
+			if err != nil {
+				return nil, fmt.Errorf("words=<: %v", err)
+			}
+			out = append(out, worksFilter{"w.word_count < ?", []any{n}})
+		case strings.HasPrefix(v, ">"):
+			n, err := parseWordBound(strings.TrimSpace(v[1:]))
+			if err != nil {
+				return nil, fmt.Errorf("words=>: %v", err)
+			}
+			out = append(out, worksFilter{"w.word_count > ?", []any{n}})
+		default:
+			return nil, fmt.Errorf(
+				"words must be under:N or over:N (AO3 also accepts <N and >N), got %q", v)
+		}
+	}
+
+	if v := strings.TrimSpace(q.Get("rating")); v != "" {
+		// Case-insensitively matched, because the corpus stores "Explicit"
+		// while AO3's query language uses "E".
+		parts := strings.Split(v, ",")
+		ph := make([]string, 0, len(parts))
+		args := make([]any, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			ph = append(ph, "UPPER(w.rating) = ?")
+			args = append(args, strings.ToUpper(p))
+		}
+		if len(ph) == 0 {
+			return nil, errors.New("rating was given but listed no values")
+		}
+		out = append(out, worksFilter{
+			clause: "w.rating IS NOT NULL AND (" + strings.Join(ph, " OR ") + ")",
+			args:   args,
+		})
+	}
+
+	if v := strings.TrimSpace(q.Get("lang")); v != "" {
+		// Languages are matched case-insensitively on a prefix-free exact
+		// value, so "en" is English and "English" is also English. AO3
+		// itself uses the two-letter code in its query language.
+		out = append(out, worksFilter{
+			clause: "UPPER(w.language) = UPPER(?)",
+			args:   []any{v},
+		})
+	}
+
+	return out, nil
+}
+
+// parseWordBound reads a word count bound and refuses a negative one.
+//
+// Zero is ALLOWED on both sides, deliberately: `words=over:0` is the same
+// request as no bound at all, and rejecting it would make the natural way of
+// spelling "any length" a 400. A negative bound is refused because "shorter
+// than -5 words" is not a request a reader meant to make, and returning the
+// whole corpus for it is exactly the behaviour this change exists to remove.
+func parseWordBound(s string) (int, error) {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a number of words", s)
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("a word count bound cannot be negative, got %d", n)
+	}
+	return n, nil
+}
+
 func (s *Server) handleAO3Works(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := clamp(atoiDefault(q.Get("limit"), 20), 1, 100)
@@ -388,15 +533,37 @@ func (s *Server) handleAO3Works(w http.ResponseWriter, r *http.Request) {
 		order = "w.word_count DESC"
 	}
 
+	filters, err := parseWorksFilters(q)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+
 	query := `SELECT w.id, w.title, w.summary, w.url, w.word_count, w.kudos,
 	                 w.hits, w.bookmarks, w.update_date, w.language, w.complete
 	          FROM works w`
 	args := []any{}
+	clauses := make([]string, 0, len(filters)+1)
+
+	// The tag filter is a JOIN rather than a WHERE on an alias, because the
+	// join is what connects the works table to the tag named in the query.
 	if tag := q.Get("tag"); tag != "" {
 		query += ` JOIN work_tags wt ON wt.work_id = w.id JOIN tags t ON t.id = wt.tag_id`
 		args = append(args, tag)
-		query += ` WHERE t.name = ?`
+		clauses = append(clauses, "t.name = ?")
 	}
+
+	for _, f := range filters {
+		clauses = append(clauses, f.clause)
+		args = append(args, f.args...)
+	}
+
+	// Joined once, after every clause is collected. The single-clause
+	// version this replaced could not express two filters at all.
+	if len(clauses) > 0 {
+		query += ` WHERE ` + strings.Join(clauses, " AND ")
+	}
+
 	query += ` ORDER BY ` + order + ` LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
 
@@ -419,12 +586,37 @@ func (s *Server) handleAO3Works(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 		total++
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	// rows.Err is checked rather than assumed. A cursor that failed part
+	// way through returns a SHORT list with a nil error from Next(), and a
+	// caller reading `count: 12` has no way to know 400 rows were dropped.
+	if err := rows.Err(); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// Echo which filters were applied, so a client can tell the difference
+	// between "your filter matched nothing" and "your filter was ignored".
+	// This was the whole problem: previously both returned every work.
+	applied := map[string]string{}
+	for _, k := range []string{"tag", "complete", "words", "rating", "lang"} {
+		if v := q.Get(k); v != "" {
+			applied[k] = v
+		}
+	}
+	body := map[string]any{
 		"works":  items,
 		"count":  total,
 		"limit":  limit,
 		"offset": offset,
-	})
+	}
+	if len(applied) > 0 {
+		body["filters_applied"] = applied
+	} else {
+		// Explicitly empty rather than absent, so a client does not have to
+		// tell "no filters" from "a version that does not report them".
+		body["filters_applied"] = map[string]string{}
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Server) handleAO3Work(w http.ResponseWriter, r *http.Request) {

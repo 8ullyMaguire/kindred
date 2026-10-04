@@ -27,7 +27,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"sort"
 	"testing"
 	"time"
 
@@ -234,68 +233,78 @@ func TestSortKudosAndDateAreWired(t *testing.T) {
 	}
 }
 
-// TestUnknownQueryParametersAreIgnoredNotClaimed documents the CURRENT state of
-// the filters the ideas list scores at 63-80, so the next person does not build
-// a UI on a parameter that does nothing.
+// TestWorksFiltersActuallyFilter is the gate for the four parameters the 100-
+// idea list scored at 63-80 on the claim that "it's already in the API, just
+// add the UI".
 //
-// The assertions are about behaviour, and the comments are about intent: these
-// parameters are currently INERT. `words=under:10000` returns every work
-// including one with 6000 words; `complete=true` returns works whose complete
-// flag is 0. That is not a bug in this test -- it is the finding. The test
-// passes when the behaviour matches reality, and will FAIL when someone
-// implements the filter, which is when they should update it.
+// It was not in the API. All four were accepted in the query string and
+// ignored, returning byte-identical rows, which is the accepted-and-did-
+// nothing shape this repo has now found five times -- and the most dangerous
+// instance yet, because a "complete only" checkbox rendered on top of it
+// would look like it worked.
 //
-// A filter test that asserts "the parameter is ignored" would be perverse if
-// the filter later gets built; this one asserts "the response matches what the
-// handler does", and pins the DEVIATION explicitly below.
-func TestUnknownQueryParametersAreIgnoredNotClaimed(t *testing.T) {
+// The fixture is the one from newDiscriminatingServer, where every filtered
+// column varies and no two columns agree, so a filter that returns the wrong
+// subset cannot be mistaken for one that returned nothing to exclude.
+//
+// Each case compares ID SETS, never counts. Identical counts can coincide;
+// identical sets prove inertness. That rule comes from a near-miss in another
+// project where ?max=1 and an unfiltered query both returned exactly 50 rows
+// and the filter looked broken when it was not.
+func TestWorksFiltersActuallyFilter(t *testing.T) {
 	ts := newDiscriminatingServer(t)
-	base := workIDs(t, ts, "limit=100")
 
+	// Fixture (from newDiscriminatingServer):
+	//   id | words | complete | rating | language
+	//    1 |  1000 |    yes    |   G    | English
+	//    2 |  2000 |    no     |   T    | Spanish
+	//    3 |  3000 |    yes    |   M    | English
+	//    4 |  4000 |    no     |   E    | French
+	//    5 |  5000 |    yes    |   G    | Spanish
+	//    6 |  6000 |    no     |   T    | English
 	cases := []struct {
-		param string
-		value string
+		name  string
+		query string
+		want  []int64
 	}{
-		{"complete", "true"},
-		{"words", "under:10000"},
-		{"rating", "G"},
-		{"lang", "en"},
+		{"complete=true", "complete=true", []int64{1, 3, 5}},
+		{"complete=false", "complete=false", []int64{2, 4, 6}},
+		{"words=under:3000", "words=under:3000", []int64{1, 2}},
+		{"words=over:5000", "words=over:5000", []int64{6}},
+		// The < and > spellings are the AO3 forms and must work too.
+		{"words=>5000", "words=>5000", []int64{6}},
+		{"words=<2000", "words=<2000", []int64{1}},
+		{"rating=G", "rating=G", []int64{1, 5}},
+		{"rating=G,T", "rating=G,T", []int64{1, 2, 5, 6}},
+		{"rating=E", "rating=E", []int64{4}},
+		{"lang=English", "lang=English", []int64{1, 3, 6}},
+		{"lang=Spanish", "lang=Spanish", []int64{2, 5}},
+		// Two filters at once: the single-WHERE-clause version this
+		// replaced could not express this at all.
+		{"complete=true + rating=G", "complete=true&rating=G", []int64{1, 5}},
+		{"complete=true + words=over:2000", "complete=true&words=over:2000", []int64{3, 5}},
+		{"rating=T + lang=Spanish", "rating=T&lang=Spanish", []int64{2}},
 	}
+
 	for _, c := range cases {
-		t.Run(c.param, func(t *testing.T) {
-			got := workIDs(t, ts, "limit=100&"+c.param+"="+c.value)
-			if !int64sEq(got, base) {
-				// The good case: the parameter now filters. This failure
-				// is the signal to update this test and build the UI.
-				t.Logf("%s=%s now filters: %v (was %v)", c.param, c.value, got, base)
-				return
+		t.Run(c.name, func(t *testing.T) {
+			got := workIDs(t, ts, "limit=100&"+c.query)
+			if !int64sEq(got, c.want) {
+				t.Errorf("%s returned %v, want %v\n"+
+					"  (an unfiltered list is %v -- if that is what you got, the "+
+					"parameter is being ignored)",
+					c.query, got, c.want, workIDs(t, ts, "limit=100"))
 			}
-			// The current state. Asserted so that it cannot change silently.
-			if len(got) != len(base) {
-				t.Errorf("set differs in length for %s=%s but the comparison "+
-					"said they were equal", c.param, c.value)
-			}
-			t.Logf("INERT: %s=%s is accepted and ignored (%d works in, %d out) "+
-				"-- a UI control for it would look like it works", c.param, c.value,
-				len(base), len(got))
 		})
 	}
 }
 
-// TestInertFiltersActuallyReturnEverythingTheyShould is the honest inverse: it
-// proves the claim above is not an artefact of comparing a sorted list to
-// itself, by checking the fixture really does contain rows the filter would
-// exclude.
-//
-// complete=true would exclude ids 2,4,6. rating=G would exclude 2,3,4,6.
-// words=under:10000 would exclude all six. If none of that is true, the
-// fixture cannot distinguish "inert filter" from "filter with nothing to do",
-// and the test above would be reporting a difference that is not there.
-func TestInertFiltersActuallyReturnEverythingTheyShould(t *testing.T) {
+// TestFixtureCanDistinguishFilteredFromUnfiltered is what stops
+// TestWorksFiltersActuallyFilter passing for the wrong reason: if the fixture
+// had no incomplete works, `complete=true` returning everything would be
+// indistinguishable from filtering.
+func TestFixtureCanDistinguishFilteredFromUnfiltered(t *testing.T) {
 	ts := newDiscriminatingServer(t)
-
-	// The fixture must have BOTH complete and incomplete works, or
-	// complete=true returning everything is indistinguishable from filtering.
 	resp, err := http.Get(ts.URL + "/api/v1/ao3/works?limit=100")
 	if err != nil {
 		t.Fatal(err)
@@ -305,32 +314,136 @@ func TestInertFiltersActuallyReturnEverythingTheyShould(t *testing.T) {
 		Works []struct {
 			ID        int64 `json:"id"`
 			Complete  any   `json:"complete"`
-			Rating    any   `json:"rating"`
 			WordCount int64 `json:"word_count"`
 		} `json:"works"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	var complete, incomplete, under10k int
+	var complete, incomplete, under3k int
 	for _, w := range body.Works {
 		if w.Complete == true {
 			complete++
 		} else {
 			incomplete++
 		}
-		if w.WordCount < 10000 {
-			under10k++
+		if w.WordCount < 3000 {
+			under3k++
 		}
 	}
 	if complete == 0 || incomplete == 0 {
 		t.Fatalf("fixture cannot distinguish complete from incomplete: "+
-			"%d complete, %d incomplete", complete, incomplete)
+			"%d complete, %d incomplete; complete=true filtering is unfalsifiable",
+			complete, incomplete)
 	}
-	if under10k != len(body.Works) {
-		t.Fatalf("fixture has only %d of %d works under 10k words; "+
-			"words=under:10000 would exclude nothing on some works",
-			under10k, len(body.Works))
+	if under3k == 0 || under3k == len(body.Works) {
+		t.Fatalf("fixture has %d of %d works under 3000 words; words=under:3000 "+
+			"either cannot filter or cannot exclude", under3k, len(body.Works))
+	}
+}
+
+// TestMalformedFilterValuesAreRejected pins the other half of the change.
+//
+// A filter value that cannot be understood is a 400, never a silently
+// dropped parameter. `words=lots` returning every work is indistinguishable
+// from `words=under:10000` returning every work when the reader meant
+// something by it -- and the first is a bug while the second is a legitimate
+// empty result.
+func TestMalformedFilterValuesAreRejected(t *testing.T) {
+	ts := newDiscriminatingServer(t)
+	bad := []string{
+		"complete=maybe",
+		"words=lots",
+		"words=under:",
+		"words=under:abc",
+		"words=under:-5",
+		"rating=,,",
+	}
+	for _, q := range bad {
+		t.Run(q, func(t *testing.T) {
+			resp, err := http.Get(ts.URL + "/api/v1/ao3/works?limit=10&" + q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				var body map[string]any
+				json.NewDecoder(resp.Body).Decode(&body)
+				t.Errorf("?%s = %d, want 400; a filter value that cannot be "+
+					"parsed must not be ignored (body: %v)", q,
+					resp.StatusCode, body["error"])
+			}
+		})
+	}
+}
+
+// TestFiltersAppliedIsEchoed pins the honesty requirement: a client must be
+// able to tell "your filter matched nothing" from "your filter was ignored".
+// Before this change both returned every work with no indication either way.
+func TestFiltersAppliedIsEchoed(t *testing.T) {
+	ts := newDiscriminatingServer(t)
+
+	get := func(query string) map[string]any {
+		t.Helper()
+		resp, err := http.Get(ts.URL + "/api/v1/ao3/works?limit=10&" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+
+	body := get("complete=true&words=over:5000")
+	applied, ok := body["filters_applied"].(map[string]any)
+	if !ok {
+		t.Fatalf("filters_applied is %T (%v), want an object; a client "+
+			"cannot tell an ignored filter from an empty result without it",
+			body["filters_applied"], body["filters_applied"])
+	}
+	if applied["complete"] != "true" || applied["words"] != "over:5000" {
+		t.Errorf("filters_applied = %v, want complete=true and words=over:5000", applied)
+	}
+
+	// Unfiltered is explicitly empty, so "no filters" and "a server too old to
+	// report them" are different facts.
+	body = get("")
+	applied, ok = body["filters_applied"].(map[string]any)
+	if !ok {
+		t.Fatalf("unfiltered response has no filters_applied object, want {}")
+	}
+	if len(applied) != 0 {
+		t.Errorf("unfiltered response reported filters %v, want none", applied)
+	}
+}
+
+// TestAFilterMatchingNothingIsAnEmptyListNotAnError is the distinction the
+// whole change rests on: a real filter that matches nothing must return an
+// empty list with 200, so the reader sees "no works match" rather than a
+// fault. This is what a UI can render honestly.
+func TestAFilterMatchingNothingIsAnEmptyListNotAnError(t *testing.T) {
+	ts := newDiscriminatingServer(t)
+	resp, err := http.Get(ts.URL + "/api/v1/ao3/works?limit=10&words=under:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("a filter matching nothing = %d, want 200 with an empty list",
+			resp.StatusCode)
+	}
+	var body struct {
+		Works []json.RawMessage `json:"works"`
+		Count int               `json:"count"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Count != 0 || len(body.Works) != 0 {
+		t.Errorf("words=under:1 returned %d works, want 0", len(body.Works))
 	}
 }
 
@@ -357,8 +470,4 @@ func TestWorksListIsStablyOrderedAcrossRequests(t *testing.T) {
 		t.Errorf("two unfiltered requests returned different orders:\n  %v\n  %v",
 			a, b)
 	}
-	sorted := append([]int64(nil), a...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-	t.Logf("unfiltered default order: %v", a)
-	t.Logf("ascending id order:      %v", sorted)
 }
