@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
@@ -253,22 +254,84 @@ func commas(n int64) string {
 // shorten trims a summary to a whole number of sentences, for a list page
 // where the full text is one click away. Cutting mid-word mid-sentence
 // reads as broken rather than as abbreviated.
+//
+// It has to skip over the dots that are NOT sentence endings, because a
+// summary that opens "Dr. Smith has 3.5k words. Then more." used to render as
+// "Dr." -- four pages showed a reader a title instead of a sentence. A period
+// ends a sentence only when:
+//
+//   - it is followed by whitespace or the end of the string (so "3.5" and
+//     "example.com" are left alone), AND
+//   - the thing before it is not a single capital letter (so "A." and "J. R. R."
+//     are initials, not one-character sentences), AND
+//   - the token before it is not a known title abbreviation.
+//
+// Iterating over runes rather than bytes matters: "Café naïve." puts a
+// two-byte rune before the period, and a byte-indexed slice can land inside it.
+// trim(), below, guards the same hazard and says so; this did not, which is how
+// the two ended up inconsistent.
 func shorten(s string, max int) string {
 	s = strings.TrimSpace(strings.Join(strings.Fields(s), " "))
 	if s == "" || max <= 0 {
 		return s
 	}
+	r := []rune(s)
 	count := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '.' {
-			count++
-			if count >= max {
-				return s[:i+1]
-			}
+	for i := 0; i < len(r); i++ {
+		if r[i] != '.' || !sentenceEndsAt(r, i) {
+			continue
+		}
+		count++
+		if count >= max {
+			return strings.TrimRight(string(r[:i+1]), " ")
 		}
 	}
 	return s
 }
+
+// titleAbbreviations are the tokens whose trailing period does not end a
+// sentence. The list is deliberately short: it covers the forms that actually
+// appear in AO3 summaries, and a token not on it is treated as a real sentence
+// ending, which truncates rather than over-keeps. Erring that way loses a
+// little text; erring the other way loses the reader the sentence.
+var titleAbbreviations = map[string]bool{
+	"dr": true, "mr": true, "mrs": true, "ms": true, "prof": true,
+	"st": true, "sr": true, "jr": true, "rev": true, "hon": true,
+	"capt": true, "sgt": true, "lt": true, "col": true, "gen": true,
+	"inc": true, "ltd": true, "co": true, "vs": true, "etc": true,
+	"approx": true, "dept": true, "est": true, "fig": true, "no": true,
+	"vol": true, "pp": true,
+}
+
+// sentenceEndsAt reports whether the period at index i terminates a sentence.
+func sentenceEndsAt(r []rune, i int) bool {
+	// Must be followed by whitespace or end of string. This alone rejects "3.5"
+	// and "example.com"; without it every decimal and every URL truncates.
+	if i+1 < len(r) && !unicode.IsSpace(r[i+1]) {
+		return false
+	}
+	// Walk back over the token that precedes the period. The case is preserved
+	// here and lowered only for the abbreviation lookup below: lowercasing
+	// first and then asking unicode.IsUpper would always be false, which is how
+	// this check shipped dead the first time.
+	j := i - 1
+	for j >= 0 && !unicode.IsSpace(r[j]) {
+		j--
+	}
+	if j+1 >= i {
+		return false
+	}
+	token := string(r[j+1 : i])
+	// A lone capital letter is an initial: "A." in "A. B. C. wrote this."
+	// Checked on the original case, not the lowered token.
+	if isSingleRune(token) && unicode.IsUpper([]rune(token)[0]) {
+		return false
+	}
+	return !titleAbbreviations[strings.ToLower(token)]
+}
+
+// isSingleRune reports whether s is exactly one rune (so []rune(s) has len 1).
+func isSingleRune(s string) bool { return len([]rune(s)) == 1 }
 
 // percent formats a 0..1 ratio.
 func percent(v float64) string {

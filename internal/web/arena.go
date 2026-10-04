@@ -1124,12 +1124,37 @@ func trim(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	r := []rune(s)
-	for len(r) > 0 && len(string(r)) > max {
-		r = r[:len(r)-8]
+	// Budget the ellipsis, not just the cut. Appending "..." after cutting to
+	// max bytes overshoots by three -- "party 🎉🎉🎉🎉🎉🎉 time" at max=20 cut
+	// to 18 bytes and then grew to 21. A field this narrow then has to be
+	// escaped or truncated by whatever renders it, so the overrun propagates.
+	//
+	// Cut in whole runes (never mid-rune), and if a single rune is wider than
+	// the whole budget, keep one rune rather than none: returning empty would
+	// make the row look missing.
+	const ellipsis = "..."
+	budget := max - len(ellipsis)
+	if budget < 0 {
+		budget = 0
 	}
-	return strings.TrimRight(string(r), " ,.;:") + "..."
+	r := []rune(s)
+	for len(r) > 0 && len(string(r)) > budget {
+		r = r[:len(r)-1]
+	}
+	out := strings.TrimRight(string(r), " ,.;:")
+	if out == "" {
+		// One rune is wider than the budget (a CJK or emoji summary at max=2).
+		// Returning "" would read as "no summary", which is a different claim.
+		if len(runesOf(s)) > 0 {
+			return string(runesOf(s)[0])
+		}
+		return s
+	}
+	return out + ellipsis
 }
+
+// runesOf is a small readability helper for the trim guard above.
+func runesOf(s string) []rune { return []rune(s) }
 
 // round1 is for display only. A rating is a float that means "about this
 // much", and showing 1464.0583 implies a precision the measurement does not
