@@ -142,6 +142,31 @@ type TagPage struct {
 	// 25 MiB back. The names are fetched from the corpus here, which is
 	// the only place they still exist at request time.
 	Neighbours []Neighbour
+
+	// Sort is the order the works are listed in, as one of "kudos",
+	// "recent", "words". It is on the page so the control can render the
+	// CURRENT selection -- a reader who asked for "recent" and got kudos
+	// back can otherwise only guess why.
+	Sort string
+	// SortOptions drives the control. A template cannot loop over a map
+	// with a stable order, so the options are a slice.
+	SortOptions []SortOption
+	// Words is the raw word-count filter as the reader typed it, echoed
+	// back into the control so a reload keeps it.
+	Words string
+	// WordsBound is the parsed integer, used by the query.
+	WordsBound int
+	// WordsErr is set when the bound could not be parsed. It renders as a
+	// message and the list falls back to unfiltered, because silently
+	// showing an unfiltered list under a filter the reader set is the
+	// failure mode this whole change exists to remove.
+	WordsErr string
+}
+
+// SortOption is one choice in the sort control.
+type SortOption struct {
+	Value string
+	Label string
 }
 
 // Neighbour is a ScoredNeighbour with the tag's name attached.

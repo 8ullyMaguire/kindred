@@ -480,9 +480,92 @@ func TestEveryPageTemplateRenders(t *testing.T) {
 				},
 				Total:      1,
 				Neighbours: []Neighbour{{ID: 2, Name: "angst", PMI: 0.42, Count: 1234}},
+				// Sort and the control that sets it, populated so the
+				// `{{if eq .Value $.Sort}}` inside the range is actually
+				// evaluated -- an empty SortOptions means the control
+				// renders with no options and the selected branch is never
+				// taken.
+				Sort: "kudos",
+				SortOptions: []SortOption{
+					{Value: "kudos", Label: "most kudos"},
+					{Value: "recent", Label: "most recently updated"},
+					{Value: "words", Label: "longest"},
+				},
 			},
 			// 98,765: commas over a plain int64 struct field.
-			wantContains: []string{"98,765", "1,234", "/work/1", "angst"},
+			wantContains: []string{"98,765", "1,234", "/work/1", "angst",
+				// The controls exist and the heading names the order.
+				`name="sort"`, "most kudos", "most recently updated",
+				`name="words"`, "under 5,000 words",
+				"Most kudos first",
+				// Word count now renders on the card.
+				"5,000 words",
+			},
+		},
+		{
+			// The heading must name the order that was actually applied. A
+			// page saying "most recently updated" over a kudos listing is a
+			// sentence a reader believes for ten seconds, and this is the
+			// one place the two could drift apart.
+			name: "tag.html sorted by recency",
+			tpl:  "tag.html",
+			data: TagPage{
+				Base: base,
+				Tag:  TagInfo{ID: 7, Name: "dark", WorkCount: 40},
+				Works: []WorkHit{
+					{ID: 1, Title: "W1", Author: "A", WordCount: 5000, Complete: 1},
+				},
+				Sort: "recent",
+				SortOptions: []SortOption{
+					{Value: "kudos", Label: "most kudos"},
+					{Value: "recent", Label: "most recently updated"},
+				},
+			},
+			wantContains: []string{"Most recently updated"},
+			// And must NOT claim kudos while sorted by recency.
+			wantNotContains: []string{"Most kudos first"},
+		},
+		{
+			// A length filter that matched nothing says so, and names the
+			// filter as the reason rather than claiming the tag is empty.
+			name: "tag.html a length filter that matched nothing",
+			tpl:  "tag.html",
+			data: TagPage{
+				Base:        base,
+				Tag:         TagInfo{ID: 7, Name: "dark", WorkCount: 1234},
+				Sort:        "kudos",
+				Words:       "under:500",
+				SortOptions: []SortOption{{Value: "kudos", Label: "most kudos"}},
+			},
+			wantContains: []string{
+				`data-testid="no-matches"`,
+				"under:500",
+				// The real total is still stated, so the reader can tell a
+				// filter excluded them from the tag being empty.
+				"1,234",
+			},
+			wantNotContains: []string{"No works carry this tag"},
+		},
+		{
+			// A word bound that cannot be parsed says so and says the list
+			// is unfiltered. Showing an unfiltered list silently under a
+			// filter the reader set is the failure this whole change exists
+			// to remove.
+			name: "tag.html an unparseable length filter",
+			tpl:  "tag.html",
+			data: TagPage{
+				Base:        base,
+				Tag:         TagInfo{ID: 7, Name: "dark", WorkCount: 40},
+				Works:       []WorkHit{{ID: 1, Title: "W1", Author: "A", WordCount: 5000, Complete: 1}},
+				Sort:        "kudos",
+				WordsErr:    `\"lots\" is not a word-count bound; use under:10000 or over:50000`,
+				SortOptions: []SortOption{{Value: "kudos", Label: "most kudos"}},
+			},
+			wantContains: []string{
+				`data-testid="words-error"`,
+				"is not a word-count bound",
+				"Showing every work on this tag instead",
+			},
 		},
 		{
 			name:         "notfound.html",

@@ -416,6 +416,34 @@ var ao3RatingNames = map[string]string{
 	"Z": "Mature",
 }
 
+// word_countKnown is the precondition for any word-count comparison.
+//
+// Measured on the real mirror: 42 works of 112,935 record a word_count of
+// exactly 0, because AO3 published no length for them. They are not short
+// fics, they are fics of unknown length, and `word_count < 5000` includes
+// all 42. Zero rows are NULL, so a NOT NULL test alone does not exclude them.
+//
+// The filter exists to bound how long a reader might spend, and a work of
+// unknown length bounds nothing -- so a 0 is excluded from both arms rather
+// than being quietly counted as short. 0.04% of the corpus, so it will never
+// be visible in a page, and it is still wrong in the direction that matters.
+// The parentheses are required because each clause is built as
+// word_countKnown+" AND w.word_count < ?", and a bare `> 0 AND w.word_count
+// < ?` relies on the reader knowing that comparison binds tighter than AND.
+//
+// HOW THE FIRST VERSION OF THIS BROKE, because the reason is not the
+// obvious one. The guard was added to four clause strings by a
+// find-and-replace of `"w.word_count < ?"`, which also matched INSIDE the
+// constant's own declaration and rewrote its NAME to `w.word_countKnown`.
+// Every clause then read `w.word_countKnown AND w.word_count < ?` -- SQL
+// naming a column that does not exist -- and every length-filtered request
+// returned 500. The parentheses were never the problem; they were the thing
+// I reached for, and I wrote the explanation before checking which was true.
+// Only TestAFilterMatchingNothingIsAnEmptyListNotAnError asking for a bound
+// that matched nothing caught it, because it is the one arm that expects an
+// empty result rather than rows.
+const word_countKnown = "(w.word_count IS NOT NULL AND w.word_count > 0)"
+
 // worksFilter is one parsed query parameter, kept as data rather than as a
 // SQL fragment appended at the call site.
 //
@@ -481,25 +509,25 @@ func parseWorksFilters(q url.Values) ([]worksFilter, error) {
 			if err != nil {
 				return nil, fmt.Errorf("words=under: %v", err)
 			}
-			out = append(out, worksFilter{"w.word_count < ?", []any{n}})
+			out = append(out, worksFilter{word_countKnown + " AND w.word_count < ?", []any{n}})
 		case strings.HasPrefix(lower, "over:"):
 			n, err := parseWordBound(strings.TrimSpace(v[len("over:"):]))
 			if err != nil {
 				return nil, fmt.Errorf("words=over: %v", err)
 			}
-			out = append(out, worksFilter{"w.word_count > ?", []any{n}})
+			out = append(out, worksFilter{word_countKnown + " AND w.word_count > ?", []any{n}})
 		case strings.HasPrefix(v, "<"):
 			n, err := parseWordBound(strings.TrimSpace(v[1:]))
 			if err != nil {
 				return nil, fmt.Errorf("words=<: %v", err)
 			}
-			out = append(out, worksFilter{"w.word_count < ?", []any{n}})
+			out = append(out, worksFilter{word_countKnown + " AND w.word_count < ?", []any{n}})
 		case strings.HasPrefix(v, ">"):
 			n, err := parseWordBound(strings.TrimSpace(v[1:]))
 			if err != nil {
 				return nil, fmt.Errorf("words=>: %v", err)
 			}
-			out = append(out, worksFilter{"w.word_count > ?", []any{n}})
+			out = append(out, worksFilter{word_countKnown + " AND w.word_count > ?", []any{n}})
 		default:
 			return nil, fmt.Errorf(
 				"words must be under:N or over:N (AO3 also accepts <N and >N), got %q", v)

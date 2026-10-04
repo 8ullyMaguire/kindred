@@ -30,12 +30,64 @@
 {{end}}
 
 <h2>Works</h2>
+
+{{/* Sort and length controls. A GET form, so the result is a URL a reader
+     can bookmark or share -- there is no JavaScript in this project by
+     design (SPEC §1.1), so the controls must work without any.
+
+     The current selection is rendered from .Sort and .Words rather than
+     hardcoded, because the heading below claims an order: a page that says
+     "most recently updated" while listing by kudos is the kind of thing a
+     reader believes for ten seconds. */}}
+<form class="controls" method="get" action="/tag/{{.Tag.ID}}" role="search"
+      aria-label="Sort and filter works">
+  <label for="sort">Order</label>
+  <select id="sort" name="sort">
+    {{range .SortOptions}}
+    <option value="{{.Value}}" {{if eq .Value $.Sort}}selected{{end}}>{{.Label}}</option>
+    {{end}}
+  </select>
+
+  <label for="words">Length</label>
+  {{/* A select of presets rather than a free-text box. A number input
+       invites "5,000" and "5k" and "under 5000", three of which are not
+       numbers, and each would need its own error message. The presets cover
+       what readers actually ask for. */}}
+  <select id="words" name="words">
+    <option value="" {{if not .Words}}selected{{end}}>any length</option>
+    <option value="under:5000" {{if eq .Words "under:5000"}}selected{{end}}>under 5,000 words</option>
+    <option value="under:20000" {{if eq .Words "under:20000"}}selected{{end}}>under 20,000 words</option>
+    <option value="under:50000" {{if eq .Words "under:50000"}}selected{{end}}>under 50,000 words</option>
+    <option value="over:50000" {{if eq .Words "over:50000"}}selected{{end}}>over 50,000 words</option>
+    <option value="over:100000" {{if eq .Words "over:100000"}}selected{{end}}>over 100,000 words</option>
+  </select>
+
+  <input type="submit" value="Apply">
+</form>
+
+{{if .WordsErr}}
+  <p class="note" data-testid="words-error">
+    {{.WordsErr}} Showing every work on this tag instead.
+  </p>
+{{end}}
+
 {{if .Works}}
-  <p class="count">Most kudos first, of {{commas .Tag.WorkCount}}.</p>
+  {{/* The order is named here, from the same value the control shows, so
+       the sentence and the listing cannot disagree. */}}
+  <p class="count" data-testid="works-heading">
+    {{if eq .Sort "recent"}}Most recently updated{{else if eq .Sort "words"}}Longest first{{else}}Most kudos first{{end}},
+    of {{commas .Tag.WorkCount}}{{if .Words}} matching &ldquo;{{.Words}}&rdquo;{{end}}.
+  </p>
   {{range .Works}}{{template "workrow" .}}{{end}}
   {{if .Limited}}
   <p class="count">Showing the first {{len .Works}}. Raise <code>?n=</code> for more.</p>
   {{end}}
+{{else if .Words}}
+  <p class="count" data-testid="no-matches">
+    No work on this tag matches &ldquo;{{.Words}}&rdquo;. The tag has
+    {{commas .Tag.WorkCount}} work{{if ne .Tag.WorkCount 1}}s{{end}} in total, so the
+    filter is what excluded them.
+  </p>
 {{else}}
   <p class="count">No works carry this tag in the mirror.</p>
 {{end}}

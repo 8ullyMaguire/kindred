@@ -1185,12 +1185,78 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	n := clampInt(atoiDefault(r.URL.Query().Get("n"), 20), 1, 100)
 	page := TagPage{Base: d.base(name, name), Tag: TagInfo{ID: id, Name: name}}
 
+	// Sort and filter, from the query string.
+	//
+	// The order was hardcoded to kudos, which is defensible and useless:
+	// the three questions a reader brings to a tag -- "what is popular",
+	// "what is recent", "what can I read in one sitting" -- need three
+	// different answers and got one. The values are whitelisted into a
+	// constant rather than interpolated, because the alternative is string
+	// concatenation into ORDER BY, which is SQL injection with a different
+	// costume.
+	page.Sort = tagSort(r.URL.Query().Get("sort"))
+	page.SortOptions = []SortOption{
+		{Value: "kudos", Label: "most kudos"},
+		{Value: "recent", Label: "most recently updated"},
+		{Value: "words", Label: "longest"},
+	}
+
+	// The length bound is parsed here rather than in SQL so a typo is a
+	// stated reason and not a silently ignored parameter -- the same rule
+	// the works list follows.
+	wordsFilter := strings.TrimSpace(r.URL.Query().Get("words"))
+	wordsClause := ""
+	if wordsFilter != "" {
+		bound, under, ok := parseWordBoundDir(wordsFilter)
+		if ok {
+			page.Words = wordsFilter
+			// Strict on both sides. AO3's own filter treats the bound as
+			// exclusive, and a reader asking for "under 20,000 words" who
+			// gets a 20,000-word fic did not get what they asked for.
+			//
+			// word_count > 0 as well, because the mirror has 42 works of
+			// 112,935 with a recorded count of exactly 0 -- AO3 published no
+			// count for them. Those are not short fics; they are fics of
+			// unknown length, and they satisfy a "under 5,000 words" filter.
+			// Measured: 0.04% of the corpus, so this will never be visible
+			// in a list, but it is wrong in the direction that matters --
+			// the filter is there to protect a reader's time, and an
+			// unknown-length fic protects nothing. No NULLs exist in the
+			// column, but word_count IS NOT NULL is stated anyway so the
+			// clause survives a mirror that does have them.
+			if under {
+				wordsClause = " AND w.word_count IS NOT NULL" +
+					" AND w.word_count > 0 AND w.word_count < ?"
+			} else {
+				wordsClause = " AND w.word_count IS NOT NULL" +
+					" AND w.word_count > 0 AND w.word_count > ?"
+			}
+			page.WordsBound = bound
+		} else {
+			page.WordsErr = fmt.Sprintf(
+				"%q is not a word-count bound; use under:10000 or over:50000",
+				wordsFilter)
+		}
+	}
+
 	// The heading needs the real total, which is not the length of the
 	// page. Conflating them is how a page ends up claiming a tag with
 	// 3,000 works has twenty.
+	//
+	// The total counts the FILTERED set, not every work on the tag. The
+	// first version counted all of them, so "3,000 works" sat above a list
+	// of 20 short ones filtered to under 5,000 words -- a heading that
+	// describes a set the page does not contain.
+	totalQuery := `SELECT COUNT(*) FROM work_tags wt JOIN works w ON w.id = wt.work_id
+	               WHERE wt.tag_id = ?`
+	totalArgs := []any{id}
+	if wordsClause != "" {
+		totalQuery += wordsClause
+		totalArgs = append(totalArgs, page.WordsBound)
+	}
 	var total int64
 	if err := d.Engine.Corpus.DB.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM work_tags WHERE tag_id = ?`, id).Scan(&total); err != nil {
+		totalQuery, totalArgs...).Scan(&total); err != nil {
 		d.fail(w, r, http.StatusInternalServerError, err)
 		return
 	}
@@ -1202,11 +1268,18 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	// Scanning them into *string fails the whole page on a row that is
 	// perfectly ordinary, which is what happened the first time: one
 	// work with no author recorded took out every tag page that listed it.
-	rows, err := d.Engine.Corpus.DB.QueryContext(ctx, `
+	listQuery := `
 		SELECT w.id, w.title, w.authors, w.url, w.summary,
 		       w.kudos, w.hits, w.word_count, w.language, w.complete
 		FROM work_tags wt JOIN works w ON w.id = wt.work_id
-		WHERE wt.tag_id = ? ORDER BY w.kudos DESC, w.id LIMIT ?`, id, n)
+		WHERE wt.tag_id = ?` + wordsClause + `
+		ORDER BY ` + tagOrder(page.Sort) + `, w.id LIMIT ?`
+	listArgs := []any{id}
+	if wordsClause != "" {
+		listArgs = append(listArgs, page.WordsBound)
+	}
+	listArgs = append(listArgs, n)
+	rows, err := d.Engine.Corpus.DB.QueryContext(ctx, listQuery, listArgs...)
 	if err != nil {
 		d.fail(w, r, http.StatusInternalServerError, err)
 		return
@@ -1589,6 +1662,95 @@ func (d Deps) fillFreshness(ctx context.Context, b *Base) {
 		}
 		b.CorpusBuiltAt = raw
 	}
+}
+
+// tagSort is the tag page's sort order, as a closed set.
+//
+// A string, not an ORDER BY fragment, because the value comes from a query
+// parameter: interpolating one is SQL injection with a different costume.
+// An unrecognised value falls back to kudos rather than erroring, and the
+// page renders the control showing kudos selected -- so the reader can see
+// what they are getting instead of guessing why the order is not what they
+// asked for.
+func tagSort(s string) string {
+	switch s {
+	case "date", "recent":
+		return "recent"
+	case "words", "length":
+		return "words"
+	case "kudos", "popular":
+		return "kudos"
+	case "":
+		return "kudos"
+	default:
+		return "kudos"
+	}
+}
+
+// tagOrder maps a tagSort value to its ORDER BY expression.
+//
+// kudos is NULL for some rows in the real corpus, so every arm ends with
+// `w.id` as a tiebreak: without it, rows equal on the sort key come back in
+// whatever order SQLite happens to produce, and the same page renders
+// differently on two requests. That instability was measured on the tag
+// page's neighbours list before it was fixed there.
+func tagOrder(sortKey string) string {
+	switch sortKey {
+	case "recent":
+		// update_date is TEXT and nullable, so a NULL date sorts last with
+		// an explicit guard rather than first by accident.
+		return "CASE WHEN w.update_date IS NULL OR w.update_date = '' THEN 1 ELSE 0 END, w.update_date DESC"
+	case "words":
+		return "w.word_count DESC"
+	default:
+		return "w.kudos DESC"
+	}
+}
+
+// parseWordBoundUI reads a word-count bound in the AO3 spelling the works
+// list uses: under:N, over:N, and the <N / >N forms.
+//
+// Returns ok=false for anything else so the caller can SAY the value was not
+// understood, rather than dropping it -- the same rule as the API filter,
+// and for the same reason: a silently ignored control looks like a working
+// one.
+func parseWordBoundUI(s string) (int, bool) {
+	n, _, ok := parseWordBoundDir(s)
+	return n, ok
+}
+
+// parseWordBoundDir is parseWordBoundUI plus the DIRECTION.
+//
+// The direction is part of the parse rather than something the caller
+// re-derives. It was: the handler checked `strings.HasPrefix(s, "under")`
+// to pick the SQL comparison, which is correct for "under:2000" and
+// INVERTED for "<2000" -- the same bound, the opposite filter. Caught by
+// the test arm `?words=<2000 listed [3], want [1]`: it returned the single
+// work that is NOT under 2,000 words.
+//
+// Returning the direction means the two spellings cannot disagree about
+// what they mean, and it puts the accepted forms in one place.
+func parseWordBoundDir(s string) (n int, under bool, ok bool) {
+	raw := strings.TrimSpace(s)
+	lower := strings.ToLower(raw)
+	var num string
+	switch {
+	case strings.HasPrefix(lower, "under:"):
+		num, under = raw[len("under:"):], true
+	case strings.HasPrefix(lower, "over:"):
+		num = raw[len("over:"):]
+	case strings.HasPrefix(raw, "<"):
+		num, under = raw[1:], true
+	case strings.HasPrefix(raw, ">"):
+		num = raw[1:]
+	default:
+		return 0, false, false
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(num))
+	if err != nil || v < 0 {
+		return 0, false, false
+	}
+	return v, under, true
 }
 
 // parseBuildTime reads a build timestamp.
