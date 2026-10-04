@@ -110,6 +110,17 @@ func (s *Server) Routes() http.Handler {
 		writeErr(w, http.StatusNotFound, fmt.Errorf("no route for %s %s", r.Method, r.URL.Path))
 	})
 
+	// The X-Kindred-Index-* headers are NOT set here. They were, and it was
+	// dead code: web.Pages() wraps this handler in the HTML frontend, whose
+	// guardAPI sends /api/, /healthz and /stats HERE but every other request
+	// to the page router -- and the page router is wrapped again, outside
+	// this one, by web.withFreshnessHeaders. So a middleware at this layer
+	// would only ever stamp responses that the outer wrapper already
+	// stamped. Mutation-verified: removing this one changed no test result,
+	// which is how it was found to be redundant rather than load-bearing.
+	//
+	// There is exactly one implementation, in web, at the layer that sees
+	// every response this server produces.
 	api := s.withLogging(s.withRecovery(mux))
 
 	// The HTML frontend wraps the API rather than sitting beside it.

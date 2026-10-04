@@ -141,8 +141,18 @@ func TestSearchWithNoMatchIsStillAPage(t *testing.T) {
 	if !strings.Contains(ct, "text/html") {
 		t.Errorf("Content-Type %q, want text/html even with no results", ct)
 	}
-	if !strings.Contains(body, "Nothing matches") {
-		t.Errorf("no-results search does not say so:\n%.400s", body)
+	// This asserted the literal string "Nothing matches", which was the
+	// single-message wording before /search searched works as well as tags.
+	// The page now has TWO halves, so it says which half found nothing --
+	// "no work matches" and "no tag match" -- because one message would
+	// leave a reader unable to tell whether the other half ran at all.
+	//
+	// What must not change is the property: a search that matches nothing
+	// says so, rather than rendering an empty page that reads as a corpus
+	// with no data in it.
+	if !strings.Contains(body, "No work") || !strings.Contains(body, "No tag") {
+		t.Errorf("a search matching nothing does not say so in both "+
+			"halves:\n%.600s", body)
 	}
 }
 

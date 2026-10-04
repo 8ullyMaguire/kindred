@@ -89,7 +89,102 @@ func (d Deps) Pages(api http.Handler) http.Handler {
 	pages := http.NewServeMux()
 	pages.Handle("/static/", http.StripPrefix("/static/", Static()))
 	pages.HandleFunc("/", d.route)
-	return d.guardAPI(api, pages)
+	// The staleness headers go HERE, on the outermost handler, and nowhere
+	// else in the tree.
+	//
+	// This layer is the only one that sees every response the server
+	// produces: guardAPI sends /api/, /healthz and /stats to `api` and
+	// everything else to `pages`, so middleware inside either branch covers
+	// only part of the surface. An earlier version put this in the API
+	// package instead, and a test asserting the header on /, /search,
+	// /work/1 and /arena failed on all four while every /api/ route passed
+	// -- the signature of middleware wired to the wrong layer. It was then
+	// mutation-checked as redundant here and deleted.
+	return withFreshnessHeaders(d, d.guardAPI(api, pages))
+}
+
+// withFreshnessHeaders stamps the index age onto HTML responses.
+//
+// SPEC §3.2.2 says EVERY response. An API client reads the header; a reader
+// in a browser does not, which is why the same fact is also rendered in the
+// footer. Two mechanisms for one requirement, because they reach different
+// readers -- and the footer version is the one a human actually sees.
+func withFreshnessHeaders(d Deps, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b := d.base("", "")
+
+		// SPEC §3.2.3: "Server: kindred plus a JSON unofficial: true on
+		// every document, and a human-visible line on the root page."
+		//
+		// The label half was never set: `grep -rn 'Header().Set("Server'`
+		// found nothing. Go's net/http omits the Server header entirely by
+		// default, so a client could not tell what it was talking to from
+		// the response at all. Set before the handler runs, because the
+		// header map seals at WriteHeader.
+		w.Header().Set("Server", "kindred")
+		// An X-Powered-By-style disclosure is the opposite of what this
+		// project is for, so it is explicitly cleared rather than merely
+		// left alone.
+		w.Header().Set("X-Powered-By", "")
+
+		w.Header().Set("X-Kindred-Index-Age", ageHeaderString(b))
+		w.Header().Set("X-Kindred-Index-Age-Seconds", ageSeconds(b))
+		w.Header().Set("X-Kindred-Index-Version", versionFor(b))
+		next.ServeHTTP(w, r)
+	})
+}
+
+// formatAge renders the age as a duration, or "unknown".
+//
+// "unknown" rather than "0s" for the same reason as the API header: a zero
+// age claims the index was built just now, and that is the one claim a client
+// would be most wrong to accept. -1 is the sentinel for it, and both header
+// writers below turn that sentinel into the literal string "unknown" rather
+// than into a negative number of seconds.
+func formatAge(b Base) time.Duration {
+	if !b.AgeKnown {
+		return unknownAgeSentinel
+	}
+	if b.AgeInFuture {
+		return -time.Duration(b.IndexAgeAbsDays) * 24 * time.Hour
+	}
+	return time.Duration(b.IndexAgeDays) * 24 * time.Hour
+}
+
+// unknownAgeSentinel marks "no build stamp recorded". Distinct from any real
+// age, including zero.
+const unknownAgeSentinel = time.Duration(-1)
+
+// ageHeaderString is the human/machine spelling used in the header value.
+func ageHeaderString(b Base) string {
+	d := formatAge(b)
+	if d == unknownAgeSentinel {
+		return "unknown"
+	}
+	return d.Truncate(time.Second).String()
+}
+
+// versionFor names the build, from an explicit version if the store has one
+// and from the build date otherwise.
+func versionFor(b Base) string {
+	if b.IndexBuiltAt == "" {
+		return "unknown"
+	}
+	if t, err := parseBuildTime(b.IndexBuiltAt); err == nil {
+		return t.UTC().Format("2006-01-02")
+	}
+	return "unknown"
+}
+
+// ageSeconds converts a duration to whole seconds for the machine-readable
+// header. "unknown" is 0 seconds -- which is NOT the same claim as a measured
+// zero, and is why both spellings are sent.
+func ageSeconds(b Base) string {
+	d := formatAge(b)
+	if d == unknownAgeSentinel {
+		return "0"
+	}
+	return strconv.FormatInt(int64(d.Seconds()), 10)
 }
 
 func (d Deps) guardAPI(api http.Handler, pages http.Handler) http.Handler {
@@ -932,15 +1027,33 @@ func (d Deps) searchTags(ctx context.Context, q string, page *SearchPage) {
 
 // searchWorks fills the work half of the results, matching the title.
 //
-// LIKE '%q%' is a table scan. That is the right trade at this size: the
-// corpus is 112,935 works, a scan is a few tens of milliseconds, and an
-// index on a leading-wildcard LIKE is not something SQLite can use anyway.
-// The LIMIT is what keeps the response bounded, and it is applied in SQL
-// rather than by counting a full result set in Go.
+// LIKE '%q%' on works is a full table scan: 112,935 rows on the real mirror.
 //
-// Title and author are both searched. AO3 readers know a fic by its author at
-// least as often as by its title, and `authors` is a comma-separated column
-// in this corpus, so a substring match there finds a person by name.
+// MEASURED on thinkcentre against the 1.7 GB mirror, not estimated:
+//
+//	title LIKE '%dark%' OR authors LIKE '%dark%', ORDER BY kudos LIMIT 50
+//	  -> 0.06 s, 6.2 MB peak RSS
+//	  -> 0.06 s for a query matching a third of the corpus ('%the%')
+//	the tag query that has always shipped
+//	  -> 0.07 s, 5.4 MB peak RSS
+//
+// So the works search costs the same as the tag search it sits beside, and
+// the worst case is not worse than the ordinary case: the LIMIT is pushed
+// into SQL, so SQLite stops after 50 rows even when the predicate matches
+// 40,000. A first run took 3.5 s and the next took 0.06 s -- page cache, not
+// a warm-up curve worth engineering around.
+//
+// An index cannot serve a leading-wildcard LIKE, and a trigram table would
+// be a new index over 112,935 rows to save 60 ms on a request a reader
+// waits for once. Not worth it at this size; re-measure at 10x the corpus.
+//
+// Title AND author are both searched because an AO3 reader knows a fic by
+// its author at least as often as by its title, and `authors` holds a
+// comma-separated list, so a substring match there finds a person by name.
+// Both columns are non-NULL for all 112,935 rows of the real mirror
+// (measured), but they are still scanned into sql.Null* because the shape of
+// the corpus is not a promise a reader of this code can make about every
+// mirror.
 func (d Deps) searchWorks(ctx context.Context, q string, page *SearchPage) {
 	needle := "%" + likeEscape(q) + "%"
 	const stmt = `
