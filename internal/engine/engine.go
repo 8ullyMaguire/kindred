@@ -6,6 +6,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -16,6 +17,7 @@ import (
 
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/diversify"
+	"git.polarisocial.xyz/kindred/kindred/internal/fandom"
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 	"git.polarisocial.xyz/kindred/kindred/internal/signal"
@@ -112,7 +114,7 @@ type Request struct {
 	N           int
 	Tune        string
 	MaxPerGroup int
-	GroupBy     string // "tag", "author", or "" for none
+	GroupBy     string // "fandom", "tag", "author", or "" for none
 	PoolSize    int
 	// Exclude drops the seeds themselves from the results: nobody wants to
 	// be recommended the work they seeded from.
@@ -166,6 +168,15 @@ func DefaultTune() rank.Tune {
 	}
 }
 
+// ErrUnsupportedKind is returned for a seed or request kind this mirror does
+// not hold.
+//
+// It is a SENTINEL rather than a plain error so the API layer can map it to
+// 400 without matching on message text: without it an unknown kind fell
+// through to 500, and a caller who typo'd `book:1` was told the server had a
+// fault when the fault was theirs.
+var ErrUnsupportedKind = errors.New("unsupported kind")
+
 // Recommend produces a ranked list.
 func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 	if len(req.Seeds) == 0 {
@@ -174,6 +185,21 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 	kind := req.Kind
 	if kind == "" {
 		kind = req.Seeds[0].Kind
+	}
+	// Reject an unknown kind up front. The seed id is looked up in the corpus
+	// regardless of its kind, so `book:1` silently resolves to AO3 work 1 and
+	// returns a confident, plausible, entirely wrong ranking. A caller who
+	// typo'd a kind gets "0 results" or worse, results for the wrong corpus;
+	// what they need to hear is that the kind is not one this mirror holds.
+	if kind != corpus.AO3Kind {
+		return nil, fmt.Errorf("%w %q; this mirror holds %q",
+			ErrUnsupportedKind, kind, corpus.AO3Kind)
+	}
+	for _, s := range req.Seeds {
+		if s.Kind != "" && s.Kind != kind {
+			return nil, fmt.Errorf("%w: seed kind %q does not match the requested kind %q",
+				ErrUnsupportedKind, s.Kind, kind)
+		}
 	}
 	n := req.N
 	if n <= 0 {
@@ -259,6 +285,29 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 		groupFn = diversify.GroupByTag
 	case "author":
 		groupFn = diversify.GroupByAuthor
+	case "fandom":
+		// The one group key that had to be built rather than borrowed.
+		//
+		// The obvious implementation is a `tag_type='fandoms'` filter, and
+		// measured against this mirror it returns nothing useful: 51 of
+		// 113,995 works carry such a row, because the blurb scraper
+		// flattened every tag into freeforms. A cap keyed on that column has
+		// an empty key set, excludes nothing, and reports success — which is
+		// exactly what the previous deployment's --max-per-fandom did.
+		//
+		// This groups on fandom tag NAME SHAPE instead, so the cap actually
+		// bites on the corpus as it exists.
+		groupFn = func(c rank.Candidate) string { return fandom.GroupKey(c.TagNames) }
+	}
+	if req.MaxPerGroup > 0 && groupFn == nil {
+		// A requested cap with no group function is a no-op cap, and a no-op
+		// cap is the failure mode this whole feature was built to remove. Say
+		// so in the metadata rather than returning a list that looks
+		// diversified and is not.
+		meta.Shortfall = &rank.Short{
+			Requested: n, Returned: len(ranked),
+			Reason: "max-per-group was set but no group was chosen; pass group_by=fandom",
+		}
 	}
 	div := diversify.Apply(ranked, diversify.Options{
 		Requested:   n,

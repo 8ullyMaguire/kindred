@@ -1,5 +1,16 @@
 {{define "content"}}
+{{/* The work's TITLE and a link to it were both missing. The page showed a
+     number, an uncertainty and a win/loss record for a work the reader could
+     not identify and could not open -- so the reader has to go and find the
+     work by other means to find out what they are looking at.
+
+     Title and WorkURL were both already on RankPage and both populated by
+     renderRank; they were simply never printed. That is the same
+     accepted-and-ignored shape as the crawl bug in the Python sibling: the
+     data was there and nothing used it. */}}
 <div class="rating-head">
+  <h2><a href="{{.WorkURL}}">{{.Title}}</a></h2>
+  {{if .Author}}<p class="byline">{{.Author}}</p>{{end}}
   <p class="score big">{{printf "%.0f" .Rating}}</p>
   <p class="muted">&plusmn;{{printf "%.0f" .RD}} &mdash; read the deviation before the rating.</p>
 </div>

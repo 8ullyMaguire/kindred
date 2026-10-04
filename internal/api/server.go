@@ -12,6 +12,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -24,8 +25,10 @@ import (
 
 	"git.polarisocial.xyz/kindred/kindred/internal/budget"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
+	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
+	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 	"git.polarisocial.xyz/kindred/kindred/internal/web"
 )
@@ -43,6 +46,27 @@ type Server struct {
 	// arenaSvc is built on first use, so adding the arena did not have to
 	// change this struct's shape for every caller and every test.
 	arenaSvc *ArenaService
+
+	// Profiles is the taste-profile store, served to the web layer so a reader
+	// can build and rate a profile from the browser.
+	//
+	// It is optional: a read-only deployment passes nil and the profile pages
+	// answer 503 with the reason. Making it optional is what lets the same
+	// Server work against the 1.7 GB read-only mirror and against a writable
+	// state DB without the pages having to know which it is.
+	Profiles ProfileStore
+}
+
+// ProfileStore is the profile surface the server needs.
+//
+// It is the same interface web.Deps declares, restated here rather than
+// imported, because api already depends on web: web.Deps.Profiles taking an
+// interface api must satisfy would make the dependency circular. The
+// compiler checks that both sides agree, which is the part that matters.
+type ProfileStore interface {
+	Save(ctx context.Context, p *profile.Profile) error
+	Load(ctx context.Context, name string) (*profile.Profile, error)
+	List(ctx context.Context) ([]string, error)
 }
 
 // Routes builds the router.
@@ -95,11 +119,31 @@ func (s *Server) Routes() http.Handler {
 	// and /healthz straight back to the handler above so it cannot be
 	// wrong. A browser asking for a page gets HTML; a client asking for
 	// the API gets exactly the JSON it got before, including the 404.
+	// The corpus query runner and the profile store are separate handles for
+	// separate jobs, and the split is load-bearing rather than tidiness:
+	//
+	//   - The corpus is opened READ-ONLY and shared with every request. The
+	//     query layer only reads it, so it needs no write access at all.
+	//   - The profile store is WRITABLE and lives in the state DB, not the
+	//     mirror. Putting profiles in the read-only corpus fails with
+	//     "attempt to write a readonly database", an error that names the
+	//     symptom rather than the design error.
+	//
+	// A nil CorpusQuery leaves /fandoms, /underrated and /neighbours answering
+	// 503 with the reason, rather than pretending the corpus is empty: an empty
+	// fandom list and a disabled fandom list are different facts and the reader
+	// needs to be able to tell them apart.
 	pages := web.Deps{
 		Engine:  s.Engine,
 		Version: s.Version,
 		Lite:    s.Lite,
 		Log:     s.Log,
+	}
+	if s.Engine != nil && s.Engine.Corpus != nil {
+		pages.CorpusQuery = corpusquery.NewRunner(s.Engine.Corpus.DB)
+	}
+	if s.Profiles != nil {
+		pages.Profiles = s.Profiles
 	}
 
 	return pages.Pages(api)
@@ -265,6 +309,14 @@ func (s *Server) parseRecommend(r *http.Request) (*engine.Request, error) {
 // the thing it named does not exist.
 func (s *Server) writeEngineErr(w http.ResponseWriter, err error) {
 	switch {
+	// A plain error whose message starts like a client mistake. The engine
+	// rejects an unsupported seed kind and a mismatched seed kind with
+	// fmt.Errorf; without this arm both fell through to 500, so a caller who
+	// typo'd `book:1` got "internal server error" and no way to tell that the
+	// fault was theirs. Matched on the sentinel below rather than on message
+	// text, so this stays correct when the message is reworded.
+	case errors.Is(err, engine.ErrUnsupportedKind):
+		writeErr(w, http.StatusBadRequest, err)
 	case errors.Is(err, store.ErrNotFound),
 		errors.Is(err, corpus.ErrNotFound),
 		errors.Is(err, sql.ErrNoRows):

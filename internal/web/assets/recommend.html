@@ -1,6 +1,59 @@
 {{define "content"}}
+<form class="controls" method="get" action="/recommend" role="search"
+      aria-label="Recommendation controls">
+  {{/* Seeds are a repeated query parameter, so one input per seed is the
+       honest control: a reader adding a fourth seed should not have to know
+       that the URL wants ?seed=a&seed=b. */}}
+  <fieldset>
+    <legend>Seeds</legend>
+    {{range .Seeds}}
+      <input type="text" name="seed" value="{{.Raw}}"
+             aria-label="Seed {{.Raw}}" size="18">
+    {{end}}
+    {{/* Always render one empty slot, so adding a seed needs no URL editing.
+         It is omitted once the cap is reached, because a visible input that
+         silently discards what is typed into it is worse than no input. */}}
+    {{if lt (len .Seeds) .MaxSeeds}}
+      <input type="text" name="seed" value="" aria-label="Add another seed"
+             size="18" placeholder="ao3_work:20151202">
+    {{end}}
+    <p class="hint">
+      Up to {{.MaxSeeds}}. Past about five, seeds average each other away
+      rather than describing a taste.
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Diversity</legend>
+    {{/* max_per_fandom is the control that matters most and the one a reader
+         will never think to look for: without it a reader seeded from 18
+         Harry Potter works gets 26 of the top 30 back as Harry Potter
+         (measured) and reads that as "kindred only knows one fandom".
+
+         The group is the part that is easy to get wrong, so the option is
+         labelled by the axis rather than offered as a bare "max per group":
+         keyed on tag_type this cap silently excludes nothing at all. */}}
+    <label for="cap">Max results per group</label>
+    <input type="number" id="cap" name="max_per_fandom" min="0" max="100"
+           value="{{.MaxPerFandom}}" size="4">
+    <label for="groupby">Group</label>
+    <select id="groupby" name="group_by">
+      <option value="fandom" {{if eq .GroupBy "fandom"}}selected{{end}}>fandom</option>
+      <option value="tag" {{if eq .GroupBy "tag"}}selected{{end}}>tag</option>
+      <option value="author" {{if eq .GroupBy "author"}}selected{{end}}>author</option>
+      <option value="" {{if eq .GroupBy ""}}selected{{end}}>no cap</option>
+    </select>
+    <p class="hint">
+      A cap can only shorten the list. kindred says so below rather than
+      padding back up with the works it just excluded.
+    </p>
+  </fieldset>
+
+  <input type="submit" value="Rank">
+</form>
+
 {{if .Similar}}
-  <div class="recommend">
+  <div class="recommend" data-testid="results">
     {{range .Similar}}
       <div class="work">
         <h3>
@@ -20,17 +73,43 @@
         {{if .TagNames}}<p>{{template "taglist" (taghits .)}}</p>{{end}}
       </div>
     {{end}}
-    <p class="count">
+    <p class="count" data-testid="count">
+      Showing {{.Returned}} of {{.N}} requested.
+      {{if .ShortfallReason}}{{.ShortfallReason}}{{end}}
+    </p>
+    <p class="hint">
       Add another seed to rank the intersection. That is what separates a
-      recommender from a similarity lookup: one seed gives you what is
-      like this, two give you what is like <em>both</em> of these.
+      recommender from a similarity lookup: one seed gives you what is like
+      this, two give you what is like <em>both</em> of these.
     </p>
   </div>
 {{else}}
-  <p class="count">
-    Nothing scored above zero for these seeds. That is a real answer
-    rather than a failure: PMI keeps only pairs that co-occur more often
-    than chance predicts.
+  <p class="count" data-testid="empty">
+    Nothing scored above zero for these seeds. That is a real answer rather
+    than a failure: PMI keeps only pairs that co-occur more often than chance
+    predicts, and a seed set with no shared tags has no such pairs.
+    {{if .MaxPerFandom}}
+      It is also possible the diversity cap excluded everything &mdash; raise or
+      remove the cap to tell those two apart.
+    {{end}}
   </p>
+{{end}}
+
+{{if .SeedLimitHit}}
+  <p class="warn" data-testid="seed-limit">
+    Only the first {{.MaxSeeds}} seeds were ranked; the rest were dropped.
+  </p>
+{{end}}
+
+{{if .Tune}}
+  <details class="tune">
+    <summary>Why these results (signal weights)</summary>
+    <table>
+      <thead><tr><th>Signal</th><th>Weight</th></tr></thead>
+      <tbody>
+        {{range .Tune}}<tr><td>{{.Name}}</td><td>{{printf "%.2f" .Weight}}</td></tr>{{end}}
+      </tbody>
+    </table>
+  </details>
 {{end}}
 {{end}}

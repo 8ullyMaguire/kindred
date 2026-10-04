@@ -26,6 +26,10 @@ commands:
   serve     run the HTTP API (the read-only mirror, incl. the unofficial AO3 surface)
   ingest    measure the corpus and build the index
   recommend recommend entities from seeds
+  crawl     fetch AO3 work pages into the mirror (the only networked subcommand)
+  profile   build, list, show and rate taste profiles
+  rate      fold one like/dislike into a profile (alias for 'profile rate')
+  corpus-query  ask a question about the corpus (fandom-ranking, underrated, tag-neighbours)
   stats     print corpus and index statistics
   dump      write an anonymised, signed snapshot for peers
   verify    verify a snapshot's signature and hashes
@@ -59,6 +63,14 @@ func main() {
 		err = runEmbed(ctx, args)
 	case "recommend":
 		err = runRecommend(ctx, args)
+	case "crawl":
+		err = runCrawl(ctx, args)
+	case "profile":
+		err = runProfile(ctx, config.Load().CorpusDB, args)
+	case "rate":
+		err = runRate(ctx, config.Load().CorpusDB, args)
+	case "corpus-query":
+		err = runCorpusQuery(ctx, config.Load().CorpusDB, args)
 	case "stats":
 		err = runStats(ctx, args)
 	case "dump":

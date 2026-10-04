@@ -33,3 +33,46 @@ jobs:
         env:
           CI: "true"
         run: python3 docs/goal-check.py
+
+  # The browser suite, in its own job on purpose.
+  #
+  # It is not folded into goal-check because it needs Node, an npm install and
+  # a Chromium download: any of those failing would then report as "the
+  # repository's definition of done is false", which is both untrue and the
+  # kind of failure people learn to ignore. A separate job says exactly what
+  # broke.
+  e2e:
+    runs-on: docker
+    steps:
+      - name: Check out
+        uses: https://git.polarisocial.xyz/forgejo/forgejo-actions-checkout@v4
+
+      - name: Set up Go
+        uses: https://git.polarisocial.xyz/forgejo/forgejo-actions-setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Set up Node
+        uses: https://git.polarisocial.xyz/forgejo/forgejo-actions-setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright and Chromium
+        working-directory: e2e
+        run: |
+          npm install --no-audit --no-fund @playwright/test
+          npx playwright install chromium
+
+      - name: Run the browser suite
+        working-directory: e2e
+        env:
+          CI: "true"
+        run: npx playwright test
+
+      - name: Upload the Playwright report
+        if: failure()
+        uses: https://git.polarisocial.xyz/forgejo/forgejo-actions-upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report

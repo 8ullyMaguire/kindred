@@ -1,0 +1,66 @@
+{{define "content"}}
+<form class="controls" method="get" action="/fandoms" aria-label="Fandom ranking options">
+  <label for="profile">Taste profile</label>
+  <select id="profile" name="profile">
+    {{/* An explicit "whole corpus" option, because an empty select value and
+         a missing parameter mean different things and the reader should not
+         have to know that. Without a profile this is the corpus's own
+         distribution, which is a real answer to a different question. */}}
+    <option value="" {{if eq .Profile ""}}selected{{end}}>whole corpus (no profile)</option>
+    {{range .Available}}
+      <option value="{{.}}" {{if eq $.Profile .}}selected{{end}}>{{.}}</option>
+    {{end}}
+  </select>
+
+  <label for="gate">Minimum co-works</label>
+  <input type="number" id="gate" name="min_co_works" min="1" max="10000"
+         value="{{.Gate}}" size="5">
+  <p class="hint">
+    The evidence floor. Below it a fandom's score is mostly noise, and a
+    one-work fandom can outrank a genuinely loved one &mdash; lift shrinkage
+    alone pulls it <em>toward</em> 1.0 and so promotes it. This gate is what
+    stops that, so lowering it makes the list worse, not broader.
+  </p>
+  <input type="submit" value="Rank fandoms">
+</form>
+
+{{if .Rows}}
+  <table class="rows" data-testid="fandom-rows">
+    <thead>
+      <tr>
+        <th>#</th><th>Fandom</th><th>Score</th><th>Works</th><th>Co-works</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range $i, $row := .Rows}}
+        <tr>
+          <td>{{add $i 1}}</td>
+          {{/* A fandom is not a tag page: its tag id is unknown here and the
+               corpus lookup by name is the only way there. So this is a search
+               link, not /tag/N -- a link built from a guessed id would 404. */}}
+          <td><a href="/search?q={{urlquery $row.Label}}">{{$row.Label}}</a></td>
+          <td>{{printf "%.3f" $row.Score}}</td>
+          <td>{{commas (int64 $row.Works)}}</td>
+          <td>{{commas (int64 $row.CoWorks)}}</td>
+        </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{if .Truncated}}<p class="hint">Truncated.</p>{{end}}
+{{else}}
+  <p class="count" data-testid="empty">
+    No fandom cleared the evidence floor. That is a statement about this
+    corpus at this threshold, not an error.
+  </p>
+{{end}}
+
+{{range .Notes}}<p class="note">{{.}}</p>{{end}}
+
+<p class="hint">
+  Fandoms are found by tag <em>name shape</em>, not by the mirror's
+  <code>tag_type</code> column. That column says <code>fandoms</code> for 51
+  of 113,995 works, because the tag scraper flattened everything to
+  <code>freeforms</code>; a ranking built on it returns almost nothing and
+  looks like an empty corpus.
+</p>
+{{end}}

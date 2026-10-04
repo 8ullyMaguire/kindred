@@ -1,0 +1,48 @@
+{{define "content"}}
+<form class="controls" method="get" action="/neighbours" aria-label="Tag neighbours">
+  <label for="tag">Tag</label>
+  <input type="text" id="tag" name="tag" value="{{.Tag}}"
+         placeholder="e.g. dark" size="24" required>
+  <p class="hint">
+    Tags that co-occur with this one <em>more often than chance</em>, not
+    merely tags that co-occur. A tag on 60% of the corpus has an enormous raw
+    count and tells you nothing, so it is dropped from this list.
+  </p>
+  <input type="submit" value="Find neighbours">
+</form>
+
+{{if .Rows}}
+  <p class="count">
+    {{.Tag}} appears on {{commas .TotalCo}} works.
+  </p>
+  <table class="rows" data-testid="neighbour-rows">
+    <thead>
+      <tr><th>#</th><th>Tag</th><th>PMI</th><th>Works</th><th>Co-works</th></tr>
+    </thead>
+    <tbody>
+      {{range $i, $row := .Rows}}
+        <tr>
+          <td>{{add $i 1}}</td>
+          {{/* Again a search link, not /tag/N: this layer has names, not
+               ids, and a lookup by name is the honest way there. */}}
+          <td><a href="/search?q={{urlquery $row.Label}}">{{$row.Label}}</a></td>
+          <td>{{printf "%.3f" $row.Score}}</td>
+          <td>{{commas (int64 $row.Works)}}</td>
+          <td>{{commas (int64 $row.CoWorks)}}</td>
+        </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{if .Truncated}}<p class="hint">Truncated.</p>{{end}}
+{{else}}
+  <p class="count" data-testid="empty">
+    {{if .Tag}}
+      Nothing to show for &ldquo;{{.Tag}}&rdquo;.
+    {{else}}
+      Name a tag to see what travels with it.
+    {{end}}
+  </p>
+{{end}}
+
+{{range .Notes}}<p class="note">{{.}}</p>{{end}}
+{{end}}

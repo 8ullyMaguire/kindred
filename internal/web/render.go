@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
+	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
+	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 )
 
@@ -102,6 +105,146 @@ type WorkHit struct {
 	Complete  int64
 }
 
+// RecommendPage is the multi-seed ranking, with the controls that decide
+// what a ranking is FOR.
+//
+// The controls are on the page rather than hidden behind the URL because the
+// two that matter most -- max_per_fandom and group_by -- are the difference
+// between a useful list and a monocrop, and a reader who cannot see that
+// control cannot use it. See MaxPerFandom's field comment for the measurement
+// that makes it non-obvious.
+type RecommendPage struct {
+	Base
+	Similar []rank.Candidate
+
+	// Seeds echo back what was ranked, so the form can show them and so a
+	// reader can see that a sixth seed was dropped rather than silently
+	// ignored.
+	Seeds []SeedRef
+
+	// N is how many were requested; Returned is how many came back. They
+	// differ whenever a diversity cap bites, and the page says so.
+	N        int
+	Returned int
+
+	// MaxPerFandom caps how many results may come from one fandom.
+	MaxPerFandom int
+	// GroupBy is the diversity axis: "", "fandom", "tag" or "author".
+	GroupBy string
+	// SeedLimitHit records that seeds were truncated to the maximum.
+	SeedLimitHit bool
+	// MaxSeeds is that maximum, for the message.
+	MaxSeeds int
+
+	// Shortfall is the honest account when fewer came back than were asked
+	// for. Rendered rather than hidden: a list of 12 that says nothing about
+	// asking for 20 reads as a complete answer.
+	ShortfallReason string
+	// Tune is the active weight vector, so a reader can see WHY a result
+	// ranked where it did rather than having to trust it.
+	Tune []WeightRow
+}
+
+// WeightRow is one signal's weight, heaviest first.
+type WeightRow struct {
+	Name   string
+	Weight float64
+}
+
+// SeedRef is a seed as the form shows it.
+type SeedRef struct {
+	Kind string
+	ID   int64
+	Raw  string
+}
+
+// FandomsPage answers "which fandoms would this reader enjoy".
+//
+// It is a separate page rather than a recommend variant because the question
+// has no seeds in the recommender's sense: the input is a taste PROFILE, and
+// the output is a distribution, not a ranking of works.
+type FandomsPage struct {
+	Base
+	Rows      []corpusquery.Row
+	Notes     []string
+	Truncated bool
+	// Profile is the profile the ranking was weighted by, empty for the
+	// corpus distribution.
+	Profile string
+	// Gate is the evidence floor, shown because it changes the answer.
+	Gate int
+	// Available lists stored profiles so the picker is not a free-text guess.
+	Available []string
+}
+
+// UnderratedPage answers "what is good and under-looked-at".
+type UnderratedPage struct {
+	Base
+	Rows      []corpusquery.Row
+	Notes     []string
+	Truncated bool
+	// Filters echoes what was applied, so a zero-row result is explicable.
+	MinWords int64
+	Complete bool
+}
+
+// NeighboursPage is the tag-co-occurrence view, separated from the tag page
+// because a tag page is about WORKS and this is about TAGS.
+type NeighboursPage struct {
+	Base
+	Tag       string
+	Rows      []corpusquery.Row
+	Notes     []string
+	Truncated bool
+	// TotalCo is the tag's corpus frequency, needed to read a PMI value: a
+	// PMI of 0.4 over 12 works and one over 12,000 are not the same claim.
+	TotalCo int
+}
+
+// ProfilesPage lists the stored taste profiles and offers the build form.
+type ProfilesPage struct {
+	Base
+	Profiles []ProfileRow
+	// Works is the comma-separated seed list for the build form.
+	Works string
+	// Built names the profile just built, for the confirmation.
+	Built string
+	// Err is a build failure worth showing on the page rather than as a
+	// bare 500: "work 999 not in this corpus" is actionable and a stack of
+	// SQL is not.
+	Err string
+}
+
+// ProfileRow is one profile in the list.
+type ProfileRow struct {
+	Name   string
+	Source string
+	Works  int
+	Tags   int
+}
+
+// ProfilePage is one profile's weights, with the rate form on it.
+type ProfilePage struct {
+	Base
+	Profile profile.Profile
+	// Tags are the profile's tags with names resolved, heaviest first.
+	Tags []ProfileTagRow
+	// Err is a rate failure, shown inline.
+	Err string
+	// Rated is the work id just rated, for the confirmation.
+	Rated int64
+	// RatedTags are the weights that moved, so a reader can see the effect
+	// of one click rather than inferring it.
+	RatedTags []ProfileTagRow
+}
+
+// ProfileTagRow is one tag weight with its name.
+type ProfileTagRow struct {
+	ID     int32
+	Name   string
+	Weight float64
+}
+
 // NotFoundPage is what a browser gets for a URL kindred does not serve.
 // The API's own 404 stays JSON: a JSON client parsing an HTML error page
 // gets a parse error instead of a message, and a person looking at a page
@@ -141,7 +284,8 @@ func init() {
 		"layout.html", "search.html", "work.html", "tag.html",
 		"recommend.html", "notfound.html", "error.html",
 		"arena.html", "leaderboard.html", "rank.html", "myranking.html",
-		"block.html",
+		"block.html", "fandoms.html", "underrated.html", "neighbours.html",
+		"profiles.html", "profile.html",
 	} {
 		pages[page] = template.Must(template.New(page).
 			Funcs(funcMap).
@@ -195,6 +339,22 @@ var funcMap = template.FuncMap{
 	"pct":       percent,
 	"taghits":   func(c rank.Candidate) []TagHit { return CandidateTags(c) },
 	"workstats": func() []statRow { return workStats },
+
+	// add is 1-based indexing for "the # column", because a table that starts
+	// at 0 reads as an off-by-one even when it is not.
+	"add": func(a, b int) int { return a + b },
+
+	// urlquery percent-escapes a value for a query-string parameter.
+	//
+	// It exists because fandom names contain spaces, slashes and ampersands
+	// ("harry potter - all media types", "a/b", "x & y"), and an unescaped
+	// href renders as a link that goes somewhere else or nowhere. html/template
+	// escapes for HTML, not for a URI component.
+	"urlquery": url.QueryEscape,
+
+	// int64 converts a template-visible int to int64 for commas(), which takes
+	// int64. Without it the call site needs a cast in every row.
+	"int64": func(v int) int64 { return int64(v) },
 }
 
 // stat reads one number out of a work's Stats map.
@@ -232,8 +392,40 @@ const dash = "—"
 
 // commas renders an integer with thousands separators, because 2384712
 // is much harder to read at a glance than 2,384,712.
-func commas(n int64) string {
-	s := strconv.FormatInt(n, 10)
+// commas renders an integer with thousands separators.
+//
+// It takes any integer type rather than int64, which is a response to a real
+// bug: corpusquery.Row.Works is an `int` and NeighboursPage.TotalCo was too,
+// so `{{commas .TotalCo}}` was a 500 ("expected int64; got int") on every
+// /neighbours request with a tag. html/template resolves that at RENDER time,
+// not parse time, so `go build`, `go vet` and every Go test passed while the
+// page was broken in the browser.
+//
+// A template helper taking a single concrete numeric width means every new
+// field is a potential 500 discovered by a user. `any` plus a type switch
+// makes the mismatch impossible to express.
+func commas(n any) string {
+	var s string
+	switch v := n.(type) {
+	case int:
+		s = strconv.FormatInt(int64(v), 10)
+	case int32:
+		s = strconv.FormatInt(int64(v), 10)
+	case int64:
+		s = strconv.FormatInt(v, 10)
+	case uint:
+		s = strconv.FormatUint(uint64(v), 10)
+	case uint32:
+		s = strconv.FormatUint(uint64(v), 10)
+	case uint64:
+		s = strconv.FormatUint(v, 10)
+	case float64:
+		s = strconv.FormatInt(int64(v), 10)
+	default:
+		// Visible, not silent: a struct field that never reaches this branch
+		// is the one to fix, and the reader should see which it was.
+		return fmt.Sprintf("%v", n)
+	}
 	neg := strings.HasPrefix(s, "-")
 	if neg {
 		s = s[1:]

@@ -1,0 +1,41 @@
+{{define "content"}}
+{{if .Err}}<p class="warn" data-testid="err">{{.Err}}</p>{{end}}
+
+<h2>Build a profile</h2>
+<form class="controls" method="post" action="/profiles" aria-label="Build a taste profile">
+  <label for="name">Name</label>
+  <input type="text" id="name" name="name" value="" size="18" required
+         placeholder="me">
+  <label for="works">Liked work ids</label>
+  <input type="text" id="works" name="works" value="{{.Works}}" size="34"
+         required placeholder="111, 222, 333">
+  <p class="hint">
+    A profile is a weighted bag of tags, not a list of works: each work
+    contributes its tags weighted by its own engagement. It holds no user id
+    and no work ids, so it can be shared without anonymising it.
+  </p>
+  <input type="submit" value="Build">
+</form>
+
+<h2>Stored profiles</h2>
+{{if .Profiles}}
+  <table class="rows" data-testid="profile-rows">
+    <thead><tr><th>Name</th><th>Source</th><th>Works</th><th>Tags</th></tr></thead>
+    <tbody>
+      {{range .Profiles}}
+        <tr>
+          <td><a href="/profile?name={{urlquery .Name}}">{{.Name}}</a></td>
+          <td>{{if .Source}}{{.Source}}{{else}}&mdash;{{end}}</td>
+          <td>{{.Works}}</td>
+          <td>{{.Tags}}</td>
+        </tr>
+      {{end}}
+    </tbody>
+  </table>
+{{else}}
+  <p class="count" data-testid="empty">
+    No profiles yet. Build one above, or from the command line with
+    <code>kindred profile build --name me --works 1,2,3</code>.
+  </p>
+{{end}}
+{{end}}

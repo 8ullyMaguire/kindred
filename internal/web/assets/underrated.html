@@ -1,0 +1,41 @@
+{{define "content"}}
+<form class="controls" method="get" action="/underrated" aria-label="Underrated options">
+  <label for="minwords">Minimum words</label>
+  <input type="number" id="minwords" name="min_words" min="0" step="1000"
+         value="{{.MinWords}}" size="8">
+  <label for="complete">
+    <input type="checkbox" id="complete" name="complete" value="1"
+           {{if .Complete}}checked{{end}}>
+    complete only
+  </label>
+  <p class="hint">
+    Word count and completeness shrink the candidate pool before scoring, so
+    they change which works are eligible &mdash; not which of the eligible
+    ones are shown. Filtering a previous result set instead is not the same
+    set.
+  </p>
+  <input type="submit" value="Find">
+</form>
+
+{{if .Rows}}
+  <div class="work-list" data-testid="underrated-rows">
+    {{range .Rows}}
+      <div class="work">
+        <h3>
+          <a href="/work/{{.WorkID}}">{{.Label}}</a>
+          <span class="score">{{printf "%.4f" .Score}}</span>
+        </h3>
+        {{if .Note}}<p class="summary">{{.Note}}</p>{{end}}
+      </div>
+    {{end}}
+  </div>
+  {{if .Truncated}}<p class="hint">Truncated.</p>{{end}}
+{{else}}
+  <p class="count" data-testid="empty">
+    No work matched. The usual causes are all visible in the notes below, and
+    "no rows" with no explanation is the one thing this page must not be.
+  </p>
+{{end}}
+
+{{range .Notes}}<p class="note">{{.}}</p>{{end}}
+{{end}}

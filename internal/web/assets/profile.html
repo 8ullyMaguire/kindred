@@ -1,0 +1,60 @@
+{{define "content"}}
+{{if .Err}}<p class="warn" data-testid="err">{{.Err}}</p>{{end}}
+
+{{if .Rated}}
+  <p class="ok" data-testid="rated">
+    Recorded your rating for work {{.Rated}}.
+    {{if .RatedTags}}
+      Moved: {{range .RatedTags}}<code>{{.Name}}</code>&nbsp;{{printf "%+.2f" .Weight}}{{end}}
+    {{end}}
+  </p>
+{{end}}
+
+<h2>Tags in this profile</h2>
+{{if .Tags}}
+  <table class="rows" data-testid="profile-tags">
+    <thead><tr><th>#</th><th>Tag</th><th>Weight</th></tr></thead>
+    <tbody>
+      {{range $i, $t := .Tags}}
+        <tr>
+          <td>{{add $i 1}}</td>
+          <td><a href="/search?q={{urlquery $t.Name}}">{{$t.Name}}</a></td>
+          <td>{{printf "%+.2f" $t.Weight}}</td>
+        </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{/* Weights are clamped, so the page says the bound rather than letting a
+       reader infer it from a wall of +1.00s: an unbounded average would let
+       three loud tags own the profile. */}}
+  <p class="hint">
+    Weights are clamped to [-1, +1]. An unbounded average lets three loud tags
+    own the profile and turns a taste into three tags.
+  </p>
+{{else}}
+  <p class="count" data-testid="empty">
+    This profile is empty. Build one from
+    <a href="/profiles">liked works</a>.
+  </p>
+{{end}}
+
+<h2>Rate a work</h2>
+<form class="controls" method="post" action="/profile" aria-label="Rate a work">
+  <input type="hidden" name="name" value="{{$.Profile.Name}}">
+  <label for="ratework">Work id</label>
+  <input type="number" id="ratework" name="work" min="1" required size="8">
+  <label for="rating">Rating</label>
+  <select id="rating" name="rating">
+    <option value="like">like (+)</option>
+    <option value="dislike">dislike (-)</option>
+    <option value="love">love (++, stronger)</option>
+    <option value="neutral">neutral (no change)</option>
+  </select>
+  <p class="hint">
+    One rating moves the weights of that work's tags only. It is additive and
+    clamped, so a hundred likes of one work cannot turn one tag into a
+    constant.
+  </p>
+  <input type="submit" value="Rate">
+</form>
+{{end}}

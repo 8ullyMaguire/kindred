@@ -46,13 +46,32 @@ This document outlines the current state of the Arena ranking functionality in t
    period quality against how fast a reader sees their judgement count. One
    line to change.
 
-3. **Test coverage gaps**: no browser-driven test, and no test that runs
-   against the real 1.7 GB mirror — which is where every defect so far was
-   found. `internal/web` has no test file of its own; page tests live in
-   `internal/api` because that is where the fixture is.
+3. **Test coverage gaps**: no test runs against the real 1.7 GB mirror — which
+   is where every defect of the *data* kind was found. There is now a browser
+   suite (`e2e/`, 46 tests, `make e2e`) and it is hermetic: `cmd/e2eserver`
+   builds an index over the 40-work `internal/testcorpus` fixture and serves the
+   real router, handlers, templates and store. Only the corpus size is fake.
+   Page rendering is additionally covered by `internal/web/render_pages_test.go`,
+   which renders all 17 templates without a server. See item 6 for why that file
+   exists.
 
-4. `TestHealthzReportsOK` fails under `-race` on a clean tree. Pre-existing,
-   confirmed by stashing all of this work. Untouched.
+4. **No test runs against the real mirror.** This is the largest remaining gap
+   and it is not fixable in CI: the 1.7 GB database exists only on
+   thinkcentre, and indexing it takes ~100 s. What exists instead is a
+   40-work fixture that is *shaped* like the real one. The three defects that
+   fixture cannot catch are exactly the data-shaped ones: a query that is slow
+   but correct on 40 rows, an aggregate that overflows or rounds differently at
+   3.9 M rows, and a tag-name distribution the fixture does not reproduce. Run
+   `make e2e KINDRED_E2E_CORPUS=/path/to/real.db` by hand before a release; do
+   not claim the fixture is equivalent.
+
+5. `TestHealthzReportsOK` failed under `-race` on a clean tree. **Fixed, and the
+   fix is not what it looks like.** `/healthz` reports `VmHWM`, a monotonic
+   process high-water mark, so whether the package is under the 220 MiB cap
+   depends on which tests ran first — under `-race` it was consistently over, so
+   the test asserted a fact about test ordering. It now asserts the response's
+   *shape* and that `budget_ok` and `status` agree, which holds whatever the
+   process peak is. The budget guard itself is correct and unchanged.
 
 ### Now wired, and worth knowing
 
@@ -83,6 +102,87 @@ internal/api/arena.go            # NEW: JSON API handlers
 internal/api/arena_handlers.go   # NEW: arena API wiring
 internal/api/arena_web_test.go   # NEW: page tests for the four arena pages
 ```
+
+### The page-coverage audit, and the four bugs it found (added 2026-10-04)
+
+The six parity pages were added, the build went green, and the suite was
+reported green. All 13 Playwright tests passed. **Five of the six new pages had
+zero test coverage**, and `/neighbours?tag=dark` answered:
+
+```
+500  wrong type for value; expected int64; got int
+```
+
+`html/template` resolves field types at RENDER time, so `go build`, `go vet`
+and every test that does not render the page are all green. The bug had been in
+the tree since the page was written. Four defects came out of closing the gap:
+
+| # | Defect | Why nothing caught it |
+|---|--------|----------------------|
+| 1 | `commas` took `int64`, `TotalCo` was `int` → **500 on every `/neighbours?tag=`** | render-time type resolution; no test rendered the page |
+| 2 | Six pages passed `d.base(title, "")` → **no `<h1>` on any of them** | invisible in a screenshot; the layout only emits `<h1>` when Heading is set |
+| 3 | `/profile` status was `map[bool]int{true: 404, false: 200}[page.Err == ""]` → **404 for a blank form, 200 for a profile that does not exist** — exactly inverted | no test requested a missing profile |
+| 4 | `rank.html` never printed `RankPage.Title` or `WorkURL` → **a rating for a work the reader could not identify or open** | both fields were populated; nothing asserted the page showed them |
+
+`rank.html` is the same shape as the Python sibling's `crawl`: the data was
+there and nothing used it.
+
+Three permanent gates, so this class cannot ship again:
+
+- `internal/web/render_pages_test.go` renders **all 17 templates** with every
+  field populated, including the zero-ish ones — a `{{if}}` that skips its body
+  hides every expression inside it. Verified falsifiable: re-narrowing `commas`
+  to `int64` turns it red.
+- `docs/goal-check.py` gained a **`page coverage`** clause: every route must be
+  *requested* by the browser suite and every registered template must be
+  *rendered* by the Go sweep. It found 13 real gaps in the pre-existing pages
+  (`/block`, `/my-ranking`, `/rank`, and 10 unrendered templates).
+- `e2e/tests/pages.spec.js` (33 tests) drives the new pages over real HTTP.
+
+Two bugs in the gate itself, both caught by testing the gate:
+
+1. It grepped the raw spec file, so the file's own header comment — which lists
+   every page it was written for — satisfied the check for all of them. Deleting
+   the tests left the clause green.
+2. The fix for that stripped string literals too, and since the route *is* a
+   string literal, it flagged all 14 routes as unvisited. Comments are stripped;
+   literals are not.
+
+### ao3-recommender parity, and the crawl surface (added 2026-10-04)
+
+```
+internal/crawl/            # NEW package: crawler, parser, resume state, sink
+  crawl.go                 #   HTTPClient (robots-aware), Crawler, State
+  parse.go                 #   ParseWork, offline mode, retry ladder
+  sink.go                  #   SQLSink, idempotent writes, NULL-safe bookmarks
+internal/fandom/           # NEW: fandom detection by tag NAME SHAPE
+internal/corpusquery/      # NEW: fandom-ranking, underrated, tag-neighbours
+internal/profile/          # NEW: taste profiles, feedback, weight clamping
+internal/testcorpus/       # NEW: the shared 40-work AO3-shaped fixture
+cmd/kindred/crawl.go       # NEW: `kindred crawl` (the only networked subcommand)
+cmd/kindred/tune.go        # NEW: `kindred tune`, replacing a stub
+cmd/kindred/profile.go     # NEW: `profile`, `rate`, `corpus-query`
+cmd/e2eserver/             # NEW: real server over the fixture, for e2e
+e2e/                       # NEW: Playwright suite (13 tests, `make e2e`)
+```
+
+Four of these were **accepted-and-ignored flags** in the Python sibling, and each
+is called out in the code where it was fixed:
+
+- `--max-per-fandom` keyed on `tag_type='fandoms'`, which is `freeforms` for
+  3,890,504 of 3,891,300 `work_tags` rows, so the cap excluded nothing while
+  reporting success. `internal/fandom` finds fandoms by name shape instead.
+- `crawl` reported `fetched 2` and wrote zero rows. `Report.Unwritten` now
+  reports a fetch that could not be persisted separately from a fetch failure.
+- offline mode still issued an HTTP request for robots.txt. It is now a *type*,
+  `crawl.Offline`, which cannot fetch at all.
+- `--profile-from-user` was captured by the profile branch, so the corpus query
+  silently only wrote to the DB.
+
+`docs/goal-check.py` gained an `ao3-recommender parity` clause that greps for
+the **wiring** of each of these, not the existence of a symbol — a stub named
+`runTune` would satisfy a grep for `runTune`. Verified falsifiable: renaming
+`case "fandom"` makes the clause fail and name the gap.
 
 ## Actionable Steps for Another AI Agent
 

@@ -35,6 +35,25 @@ test:
 race:
 	$(GO) test -count=1 -race $(PKG)
 
+# The browser suite. Separate from `test` because it needs Node, Playwright and
+# a Chromium download, and a developer running `make test` offline should not be
+# blocked by that.
+.PHONY: e2e
+e2e: e2e-install
+	cd e2e && npx playwright test
+
+# Installs the Playwright package and its browser. `--with-deps` needs root, so
+# it is deliberately NOT here: a CI image with the libs already present is the
+# supported path, and a developer who lacks them gets Chromium's own error
+# naming the missing library rather than a sudo prompt from make.
+.PHONY: e2e-install
+e2e-install:
+	cd e2e && npm install --no-audit --no-fund
+
+.PHONY: e2e-report
+e2e-report:
+	@echo "cd e2e && npx playwright show-report"
+
 .PHONY: vet
 vet:
 	$(GO) vet $(PKG)

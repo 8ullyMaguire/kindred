@@ -141,6 +141,28 @@ func runServe(ctx context.Context, args []string) error {
 		Lite:      lite,
 	}
 
+	// The profile store is attached here, from the STATE db rather than from
+	// the corpus, and the failure is deliberately not fatal.
+	//
+	// A missing or unwritable state db must not stop the server: everything
+	// except /profiles and /profile works without it, and a recommender that
+	// refuses to boot because a taste profile could not be opened would be a
+	// worse failure than one profile page. So it is logged and left nil, and
+	// those two pages then answer 503 with the reason rather than 500.
+	if profs, _, closeProfs, err := openProfileStore(c); err != nil {
+		logger.Warn("taste profiles disabled for this server",
+			"reason", err, "hint", "pass --db PATH to enable /profiles and /profile")
+	} else {
+		defer closeProfs()
+		srv.Profiles = profs
+		if err := profs.EnsureSchema(context.Background()); err != nil {
+			logger.Warn("profile schema unavailable", "err", err)
+			srv.Profiles = nil
+		} else {
+			logger.Info("taste profiles enabled", "state_db", c.DB)
+		}
+	}
+
 	// Timeouts. ReadHeaderTimeout is the one that matters: without it a
 	// slow client holds a connection open indefinitely, and on a Pi with
 	// a small fd budget that is a denial of service by accident.
@@ -213,7 +235,7 @@ func runRecommend(ctx context.Context, args []string) error {
 		seedArg     = fs.String("seed", "", "seed as kind:id (repeatable via comma)")
 		kind        = fs.String("kind", "ao3_work", "the kind to recommend")
 		n           = fs.Int("n", 10, "how many results")
-		groupBy     = fs.String("group_by", "", "cap per group: tag, author, or empty")
+		groupBy     = fs.String("group_by", "", "cap per group: fandom, tag, author, or empty")
 		maxPerGroup = fs.Int("max_per_group", 0, "cap per group (0 disables)")
 		exclude     = fs.Bool("exclude_seeds", true, "drop the seeds from the results")
 		pool        = fs.Int("pool", 0, "candidate pool size (0 = the mode's default)")

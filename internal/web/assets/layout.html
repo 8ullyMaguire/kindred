@@ -27,17 +27,34 @@
       {{template "content" .}}
     </div>
 
+    {{/* A nav, not a footer link dump. There were four reader-facing pages when
+         this was a paragraph of links; there are ten now, and the ones that got
+         lost in the middle are exactly the ones a reader needs most (rank from
+         a seed, rank fandoms, find what is underrated). Grouped by what the
+         reader is trying to do, so the list is short enough to scan. */}}
+    <nav id="nav" aria-label="Main">
+      <ul>
+        <li><a href="/">Search</a></li>
+        <li><a href="/recommend">Rank from seeds</a></li>
+        <li><a href="/fandoms">Fandoms</a></li>
+        <li><a href="/underrated">Underrated</a></li>
+        <li><a href="/neighbours">Tag neighbours</a></li>
+        <li><a href="/profiles">Taste profiles</a></li>
+      </ul>
+      <ul>
+        <li><a href="/arena">Arena</a></li>
+        <li><a href="/leaderboard">Rankings</a></li>
+        <li><a href="/my-ranking">Your ranking</a></li>
+        <li><a href="/block">Block tags</a></li>
+      </ul>
+      <ul>
+        <li><a href="/stats">Stats</a></li>
+        <li><a href="/healthz">Health</a></li>
+        <li><a href="/api/v1/stats">JSON API</a></li>
+      </ul>
+    </nav>
+
     <div id="footer">
-      <p>
-        <a href="/">Search</a> &middot;
-        <a href="/arena">Arena</a> &middot;
-        <a href="/leaderboard">Rankings</a> &middot;
-        <a href="/my-ranking">Your ranking</a> &middot;
-        <a href="/block">Block tags</a> &middot;
-        <a href="/stats">Stats</a> &middot;
-        <a href="/healthz">Health</a> &middot;
-        <a href="/api/v1/stats">JSON API</a>
-      </p>
       <p>
         kindred{{if .Version}} {{.Version}}{{end}}{{if .Mode}} &middot; {{.Mode}} mode{{end}}.
         The API is the product; these pages are a front for it.

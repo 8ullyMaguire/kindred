@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
+	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
+	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
 
@@ -29,6 +31,50 @@ type Deps struct {
 	Version string
 	Lite    bool
 	Log     *slog.Logger
+
+	// CorpusQuery runs the corpus-analysis modes (fandom ranking, underrated,
+	// tag neighbours) that have no seeds.
+	//
+	// It is an interface rather than the concrete type so a page test can
+	// supply a canned result. The corpus queries are pure functions of the DB,
+	// so faking them loses nothing worth testing.
+	CorpusQuery CorpusQuerier
+
+	// Profiles is the writable store of taste profiles.
+	//
+	// It is deliberately NOT the corpus handle: the corpus is opened read-only
+	// (the mirror is 1.7 GB and shared with the API), and writing a profile
+	// into a read-only database fails with "attempt to write a readonly
+	// database" -- an error that names the symptom rather than the design
+	// error. Two handles, two jobs, stated here rather than discovered at the
+	// call site that breaks.
+	Profiles ProfileStore
+}
+
+// CorpusQuerier is the corpus-analysis surface the pages need.
+//
+// These are the Runner's own methods, so *corpusquery.Runner satisfies the
+// interface without a wrapper. Options (not a bespoke Request struct) because
+// that is what the Runner takes, and an adapter layer whose only job is to
+// rename a struct is a layer that can disagree with it.
+type CorpusQuerier interface {
+	FandomRanking(ctx context.Context, seedTagIDs []int32, opts corpusquery.Options) (corpusquery.Result, error)
+	Underrated(ctx context.Context, opts corpusquery.Options) (corpusquery.Result, error)
+	TagNeighbours(ctx context.Context, tag string, opts corpusquery.Options) (corpusquery.Result, error)
+}
+
+// ProfileStore is the read/write profile surface the pages need.
+//
+// Save/Load/List are the profile.Store methods. Put and Apply are NOT: the
+// real package builds a profile from works (BuildFromWorks) and folds feedback
+// in memory (Apply returns the new profile for the caller to inspect and
+// save). So the page layer keeps that shape -- it inspects, then saves --
+// rather than inventing a Store method that would save without showing anyone
+// what changed.
+type ProfileStore interface {
+	Save(ctx context.Context, p *profile.Profile) error
+	Load(ctx context.Context, name string) (*profile.Profile, error)
+	List(ctx context.Context) ([]string, error)
 }
 
 // Pages returns the handler for every HTML page.
@@ -82,9 +128,28 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 	// not a page, and answering it with HTML answers a different question
 	// than the one asked. Writes go to /arena/judge or the API under
 	// /api/v1/.
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+	// POST is allowed on exactly two pages: /profiles and /profile, which
+	// build a taste profile and record a rating. Those are the only mutable
+	// things a reader can do here, and hiding both behind curl would make the
+	// profile feature unreachable from the site it is a profile OF.
+	//
+	// Everything else stays read-only, and the gate below says which: a 405
+	// that names the methods that do work beats a 405 that says "writes go to
+	// the API" when half of them no longer do.
+	mutable := r.URL.Path == "/profiles" || r.URL.Path == "/profile"
+
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+	case http.MethodPost:
+		if !mutable {
+			d.fail(w, r, http.StatusMethodNotAllowed,
+				fmt.Errorf("%s is not allowed on %s; only /profiles and /profile accept a POST",
+					r.Method, r.URL.Path))
+			return
+		}
+	default:
 		d.fail(w, r, http.StatusMethodNotAllowed,
-			fmt.Errorf("%s is not a page method; writes go to the API under /api/v1/", r.Method))
+			fmt.Errorf("%s is not a page method; use GET, or POST for /profiles and /profile", r.Method))
 		return
 	}
 
@@ -100,6 +165,16 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 		d.renderTag(w, r, strings.TrimPrefix(p, "/tag/"))
 	case p == "/recommend":
 		d.renderRecommend(w, r)
+	case p == "/fandoms":
+		d.renderFandoms(w, r)
+	case p == "/underrated":
+		d.renderUnderrated(w, r)
+	case p == "/neighbours":
+		d.renderNeighbours(w, r)
+	case p == "/profiles":
+		d.renderProfiles(w, r)
+	case p == "/profile":
+		d.renderProfile(w, r)
 	case p == "/arena":
 		d.renderArena(w, r)
 	case p == "/leaderboard":
@@ -116,6 +191,689 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 }
 
 // -- pages ------------------------------------------------------------------
+// -- corpus analysis --------------------------------------------------------
+
+// renderFandoms answers "which fandoms would this reader enjoy".
+//
+// The profile is optional and its absence is a different answer, not a
+// failure: without one this is the corpus's own distribution, which is worth
+// knowing and worth being able to say out loud.
+func (d Deps) renderFandoms(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	base := d.base("Fandoms", "Fandoms")
+
+	if d.CorpusQuery == nil {
+		d.fail(w, r, http.StatusServiceUnavailable,
+			errors.New("corpus queries are not enabled on this server"))
+		return
+	}
+
+	q := r.URL.Query()
+	gate, err := parseBoundedInt(q.Get("min_co_works"), -1, 100000,
+		corpusquery.DefaultMinCoWorksToRank)
+	if err != nil {
+		d.fail(w, r, http.StatusBadRequest, fmt.Errorf("min_co_works: %w", err))
+		return
+	}
+	limit, err := parseBoundedInt(q.Get("n"), 1, 500, 100)
+	if err != nil {
+		d.fail(w, r, http.StatusBadRequest, fmt.Errorf("n: %w", err))
+		return
+	}
+
+	name := q.Get("profile")
+	opts := corpusquery.Options{Limit: limit, MinCoWorks: gate, ProfileName: name}
+
+	page := FandomsPage{Base: base, Profile: name, Gate: gate}
+	if avail, err := d.profileNames(ctx); err == nil {
+		page.Available = avail
+	}
+
+	// Fandom ranking is seeded by tag ids, and a named profile supplies them:
+	// the profile is a bag of weighted tag ids, which is exactly what this
+	// query ranks fandoms against.
+	var seeds []int32
+	if name != "" {
+		if d.Profiles == nil {
+			d.fail(w, r, http.StatusServiceUnavailable,
+				errors.New("profiles are not enabled on this server"))
+			return
+		}
+		p, err := d.Profiles.Load(ctx, name)
+		if err != nil {
+			d.fail(w, r, http.StatusNotFound,
+				fmt.Errorf("no profile %q: %w (build one at /profiles)", name, err))
+			return
+		}
+		seeds = profileTagIDs(p, 20)
+		opts.ProfileName = p.Name
+	}
+
+	res, err := d.CorpusQuery.FandomRanking(ctx, seeds, opts)
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	page.Rows = res.Rows
+	page.Notes = res.Notes
+	page.Truncated = res.Truncated
+	d.page(w, "fandoms.html", page, http.StatusOK)
+}
+
+// renderUnderrated answers "what is good and under-looked-at".
+//
+// The filters shrink the candidate pool before scoring, which the page states:
+// filtering a previous result set is not the same set, and a reader who
+// believed otherwise would be surprised by the row that vanished.
+func (d Deps) renderUnderrated(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if d.CorpusQuery == nil {
+		d.fail(w, r, http.StatusServiceUnavailable,
+			errors.New("corpus queries are not enabled on this server"))
+		return
+	}
+
+	q := r.URL.Query()
+	words, err := parseBoundedInt(q.Get("min_words"), 0, 10000000, 0)
+	if err != nil {
+		d.fail(w, r, http.StatusBadRequest, fmt.Errorf("min_words: %w", err))
+		return
+	}
+	limit, err := parseBoundedInt(q.Get("n"), 1, 500, 100)
+	if err != nil {
+		d.fail(w, r, http.StatusBadRequest, fmt.Errorf("n: %w", err))
+		return
+	}
+	complete := q.Get("complete") != ""
+
+	// The eligibility filters go INTO the query, not onto its results.
+	//
+	// The first draft of this handler filtered the returned rows, which is a
+	// different and worse operation: ranking a wide pool and dropping half the
+	// results returns the top half of the old ranking, and the works a deeper
+	// query would have promoted into the gap never get considered. The query
+	// narrows the pool first, so the ranking is over what is left.
+	res, err := d.CorpusQuery.Underrated(ctx, corpusquery.Options{
+		Limit:       limit,
+		MinWords:    int64(words),
+		Complete:    complete,
+		ProfileName: q.Get("profile"),
+	})
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+
+	page := UnderratedPage{
+		Base: d.base("Underrated", "Underrated"), Rows: res.Rows, Notes: res.Notes,
+		Truncated: res.Truncated, MinWords: int64(words), Complete: complete,
+	}
+	d.page(w, "underrated.html", page, http.StatusOK)
+}
+
+// renderNeighbours is the tag-co-occurrence view.
+func (d Deps) renderNeighbours(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tag := strings.TrimSpace(r.URL.Query().Get("tag"))
+	base := d.base("Tag neighbours", "Tag neighbours")
+
+	// No tag is the untouched form, not a 404: the page has to be able to say
+	// "name a tag" in its own voice.
+	if tag == "" {
+		if d.CorpusQuery == nil {
+			d.fail(w, r, http.StatusServiceUnavailable,
+				errors.New("corpus queries are not enabled on this server"))
+			return
+		}
+		d.page(w, "neighbours.html", NeighboursPage{Base: base}, http.StatusOK)
+		return
+	}
+	if d.CorpusQuery == nil {
+		d.fail(w, r, http.StatusServiceUnavailable,
+			errors.New("corpus queries are not enabled on this server"))
+		return
+	}
+
+	limit, err := parseBoundedInt(r.URL.Query().Get("n"), 1, 500, 50)
+	if err != nil {
+		d.fail(w, r, http.StatusBadRequest, fmt.Errorf("n: %w", err))
+		return
+	}
+
+	res, err := d.CorpusQuery.TagNeighbours(ctx, tag, corpusquery.Options{Limit: limit})
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+
+	page := NeighboursPage{
+		Base: base, Tag: tag, Rows: res.Rows, Notes: res.Notes,
+		Truncated: res.Truncated,
+	}
+	// The tag's own frequency is needed to read a PMI value: 0.4 over 12 works
+	// and 0.4 over 12,000 are not the same claim, and without the denominator
+	// the page cannot tell which one a reader is looking at.
+	if total, err := d.tagWorkCount(ctx, tag); err == nil {
+		page.TotalCo = total
+	}
+	d.page(w, "neighbours.html", page, http.StatusOK)
+}
+
+// -- profiles ---------------------------------------------------------------
+
+// renderProfiles lists stored profiles and builds new ones.
+func (d Deps) renderProfiles(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	page := ProfilesPage{Base: d.base("Taste profiles", "Taste profiles")}
+
+	names, err := d.profileNames(ctx)
+	if err != nil {
+		// A missing profile store is a configuration fact, not a fault in the
+		// request, and the page still renders its empty list so the reader is
+		// not met with a bare 500.
+		d.log().Warn("profile list unavailable", "err", err)
+	} else {
+		page.Profiles, _ = d.profileRows(ctx, names)
+	}
+
+	if r.Method == http.MethodPost {
+		if err := d.buildProfile(w, r, &page); err != nil {
+			return
+		}
+		d.page(w, "profiles.html", page, http.StatusOK)
+		return
+	}
+	d.page(w, "profiles.html", page, http.StatusOK)
+}
+
+// buildProfile handles the POST on /profiles.
+//
+// Errors are returned on the PAGE, not as a status: "work 999999 is not in
+// this corpus" is something a reader can fix, and a 500 that says it is
+// something they can only report.
+func (d Deps) buildProfile(w http.ResponseWriter, r *http.Request, page *ProfilesPage) error {
+	ctx := r.Context()
+	if d.Profiles == nil || d.Engine == nil {
+		page.Err = "profiles are not enabled on this server"
+		return nil
+	}
+	if err := r.ParseForm(); err != nil {
+		page.Err = fmt.Sprintf("could not read the form: %v", err)
+		return nil
+	}
+
+	name := strings.TrimSpace(r.PostFormValue("name"))
+	worksRaw := strings.TrimSpace(r.PostFormValue("works"))
+	if name == "" {
+		page.Err = "a profile needs a name"
+		return nil
+	}
+	page.Works = worksRaw
+
+	ids, err := parseWorkList(worksRaw)
+	if err != nil {
+		page.Err = err.Error()
+		return nil
+	}
+	if len(ids) == 0 {
+		page.Err = "list at least one work id, comma separated"
+		return nil
+	}
+
+	p, err := profile.BuildFromWorks(ctx, d.Engine.Corpus.DB, ids, name)
+	if err != nil {
+		page.Err = fmt.Sprintf("could not build the profile: %v", err)
+		return nil
+	}
+	if len(p.Tags) == 0 {
+		page.Err = fmt.Sprintf(
+			"works %s carry no tags in this corpus, so the profile would be empty",
+			joinInts(ids))
+		return nil
+	}
+	if err := d.Profiles.Save(ctx, p); err != nil {
+		page.Err = fmt.Sprintf("could not save the profile: %v", err)
+		return nil
+	}
+
+	page.Built = p.Name
+	page.Works = ""
+	names, err := d.profileNames(ctx)
+	if err == nil {
+		page.Profiles, _ = d.profileRows(ctx, names)
+	}
+	d.log().Info("profile built from web", "profile", p.Name, "works", len(ids), "tags", len(p.Tags))
+	return nil
+}
+
+// renderProfile shows one profile's weights and takes a rating.
+func (d Deps) renderProfile(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if r.Method == http.MethodPost && name == "" {
+		name = strings.TrimSpace(r.PostFormValue("name"))
+	}
+	// Heading is set here rather than left to the caller: every other page sets
+	// both, and a page whose only heading is the <title> is a page with no
+	// <h1> at all. Six pages shipped that way (an <h1> is the document's main
+	// heading for a screen reader, and its absence is invisible in a rendered
+	// screenshot).
+	base := d.base("Taste profile", "Taste profile")
+
+	page := ProfilePage{Base: base}
+	if p, ok := d.loadProfile(&page, ctx, name); ok {
+		page.Profile = *p
+		page.Tags = d.profileTagRows(ctx, p)
+	}
+
+	if r.Method == http.MethodPost {
+		d.rateWork(r, &page, name)
+		// Reload, so the table shows the effect of the rating that was just
+		// recorded rather than the state before it.
+		if p, ok := d.loadProfile(&page, ctx, name); ok {
+			page.Profile = *p
+			page.Tags = d.profileTagRows(ctx, p)
+		}
+	}
+
+	if page.Profile.Name != "" {
+		base.Title = "Taste profile: " + page.Profile.Name
+		d.page(w, "profile.html", page, http.StatusOK)
+		return
+	}
+
+	// No name, or a name that does not load.
+	//
+	// 404 for "named but missing" and 200 for "untouched form", because they
+	// are different facts and a reader needs to tell them apart. The first
+	// draft of this was a map lookup keyed on `page.Err == ""` mapping true to
+	// StatusNotFound, which returned 404 for a blank form and 200 for a
+	// profile that does not exist -- exactly inverted, and the Playwright test
+	// for it passed while both were wrong.
+	status := http.StatusOK
+	if name != "" && page.Err != "" {
+		status = http.StatusNotFound
+	}
+	d.page(w, "profile.html", page, status)
+}
+
+// loadProfile fetches a profile, writing a reader-usable error into the page.
+func (d Deps) loadProfile(page *ProfilePage, ctx context.Context, name string) (*profile.Profile, bool) {
+	if name == "" {
+		return nil, false
+	}
+	if d.Profiles == nil {
+		page.Err = "profiles are not enabled on this server"
+		return nil, false
+	}
+	p, err := d.Profiles.Load(ctx, name)
+	if err != nil {
+		page.Err = fmt.Sprintf("no profile %q: %v", name, err)
+		return nil, false
+	}
+	return p, true
+}
+
+// rateWork records a rating against a profile.
+func (d Deps) rateWork(r *http.Request, page *ProfilePage, name string) {
+	ctx := r.Context()
+	if name == "" {
+		page.Err = "a rating needs a profile name"
+		return
+	}
+	if d.Profiles == nil {
+		page.Err = "profiles are not enabled on this server"
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		page.Err = fmt.Sprintf("could not read the form: %v", err)
+		return
+	}
+
+	workID, err := strconv.ParseInt(strings.TrimSpace(r.PostFormValue("work")), 10, 64)
+	if err != nil || workID <= 0 {
+		page.Err = fmt.Sprintf("%q is not a work id", r.PostFormValue("work"))
+		return
+	}
+	liked, err := parseRating(r.PostFormValue("rating"))
+	if err != nil {
+		page.Err = err.Error()
+		return
+	}
+
+	p, err := d.Profiles.Load(ctx, name)
+	if err != nil {
+		page.Err = fmt.Sprintf("no profile %q: %v", name, err)
+		return
+	}
+
+	// The work's tags are the ones that move. Without them a rating would
+	// touch nothing, which is the same accepted-and-ignored shape as the
+	// --profile-from-user bug: a form that records a click and changes no
+	// weight.
+	tagIDs, err := d.workTagIDs(ctx, workID)
+	if err != nil {
+		page.Err = fmt.Sprintf("work %d: %v", workID, err)
+		return
+	}
+	if len(tagIDs) == 0 {
+		page.Err = fmt.Sprintf("work %d carries no tags in this corpus, so a rating "+
+			"of it would move no weights", workID)
+		return
+	}
+
+	before := cloneWeights(p.Tags)
+	updated := profile.Apply(p, profile.Feedback{
+		WorkID: workID, Liked: liked, TagIDs: tagIDs,
+		At: time.Now().UTC().Format(time.RFC3339),
+	})
+	if err := d.Profiles.Save(ctx, updated); err != nil {
+		page.Err = fmt.Sprintf("could not save the rating: %v", err)
+		return
+	}
+
+	page.Rated = workID
+	page.RatedTags = d.movedTags(ctx, before, updated.Tags)
+	d.log().Info("work rated from web", "profile", name, "work", workID, "liked", liked,
+		"tags", len(tagIDs))
+}
+
+// parseRating maps the form's rating to a liked flag.
+//
+// Only two outcomes are representable. A "neutral" rating that did not move
+// anything would be indistinguishable from a rating that was never submitted,
+// so the form's neutral option is spelled out as making no change rather than
+// as a value the code pretends to store.
+func parseRating(s string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "like", "love", "1", "true", "yes":
+		return true, nil
+	case "dislike", "0", "false", "no":
+		return false, nil
+	case "neutral", "":
+		return false, errors.New("neutral records nothing; pick like or dislike")
+	default:
+		return false, fmt.Errorf("%q is not a rating; use like or dislike", s)
+	}
+}
+
+// -- profile helpers --------------------------------------------------------
+
+// profileNames lists stored profile names, or nil if there is no store.
+func (d Deps) profileNames(ctx context.Context) ([]string, error) {
+	if d.Profiles == nil {
+		return nil, errors.New("profiles are not enabled")
+	}
+	return d.Profiles.List(ctx)
+}
+
+// profileRows resolves names into display rows, skipping any that fail to
+// load: one unreadable profile should not empty the list.
+func (d Deps) profileRows(ctx context.Context, names []string) ([]ProfileRow, error) {
+	if d.Profiles == nil {
+		return nil, errors.New("profiles are not enabled")
+	}
+	out := make([]ProfileRow, 0, len(names))
+	for _, n := range names {
+		p, err := d.Profiles.Load(ctx, n)
+		if err != nil {
+			d.log().Warn("profile unreadable, skipping in list", "profile", n, "err", err)
+			continue
+		}
+		out = append(out, ProfileRow{
+			Name: n, Source: p.Source, Works: p.Works, Tags: len(p.Tags),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// profileTagRows resolves a profile's tag ids into named rows, heaviest first.
+//
+// Names come from the corpus, which is the only place they still exist: the
+// in-memory CSR drops its name table after building, to return 25 MiB to the
+// budget. A tag id with no name is dropped rather than shown blank, because a
+// blank row is indistinguishable from a rendering bug.
+func (d Deps) profileTagRows(ctx context.Context, p *profile.Profile) []ProfileTagRow {
+	if p == nil || d.Engine == nil {
+		return nil
+	}
+	ids := profileTagIDs(p, 200)
+	if len(ids) == 0 {
+		return nil
+	}
+	names := d.tagNames(ctx, ids)
+	if len(names) == 0 {
+		return nil
+	}
+
+	out := make([]ProfileTagRow, 0, len(ids))
+	for _, id := range ids {
+		n, ok := names[id]
+		if !ok || n == "" {
+			continue
+		}
+		out = append(out, ProfileTagRow{ID: id, Name: n, Weight: p.Tags[id]})
+	}
+	return out
+}
+
+// movedTags reports the weights that changed, largest movement first, so a
+// rating shows its effect instead of asking the reader to infer it.
+//
+// The cap is on the RETURNED rows, not on what was compared: a work can carry
+// forty tags and the reader only needs to see the ones that actually moved,
+// heaviest first. Comparing every tag is what makes the effect checkable.
+//
+// Names are resolved in one query rather than one-per-row, because a rate that
+// issues forty single-row lookups turns a one-click action into a visible stall.
+func (d Deps) movedTags(ctx context.Context, before, after map[int32]float64) []ProfileTagRow {
+	if len(after) == 0 || d.Engine == nil {
+		return nil
+	}
+	type move struct {
+		id int32
+		dv float64
+	}
+	var moves []move
+	for id, av := range after {
+		if dv := av - before[id]; dv != 0 {
+			moves = append(moves, move{id: id, dv: dv})
+		}
+	}
+	if len(moves) == 0 {
+		return nil
+	}
+	sort.Slice(moves, func(i, j int) bool {
+		// Largest magnitude first: the movement that matters is the biggest,
+		// whether it is up or down. A sort by signed value would put every
+		// dislike below every like, which is not what "what changed" means.
+		if absf(moves[i].dv) != absf(moves[j].dv) {
+			return absf(moves[i].dv) > absf(moves[j].dv)
+		}
+		return moves[i].id < moves[j].id
+	})
+	if len(moves) > 12 {
+		moves = moves[:12]
+	}
+
+	ids := make([]int32, len(moves))
+	for i, m := range moves {
+		ids[i] = m.id
+	}
+	names := d.tagNames(ctx, ids)
+
+	out := make([]ProfileTagRow, 0, len(moves))
+	for _, m := range moves {
+		name, ok := names[m.id]
+		if !ok || name == "" {
+			continue // a blank row reads as a rendering bug
+		}
+		out = append(out, ProfileTagRow{ID: m.id, Name: name, Weight: m.dv})
+	}
+	return out
+}
+
+// tagNames resolves tag ids to names in one query.
+//
+// It returns nil rather than an error on a bad handle: every caller uses it to
+// decorate a page, and a missing name is a cosmetic loss while a 500 is a lost
+// page.
+func (d Deps) tagNames(ctx context.Context, ids []int32) map[int32]string {
+	if d.Engine == nil || len(ids) == 0 || ctx == nil {
+		return nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := d.Engine.Corpus.DB.QueryContext(ctx,
+		`SELECT id, name FROM tags WHERE id IN (`+ph+`)`, args...)
+	if err != nil {
+		d.log().Warn("tag name lookup failed", "ids", len(ids), "err", err)
+		return nil
+	}
+	defer rows.Close()
+
+	out := make(map[int32]string, len(ids))
+	for rows.Next() {
+		var id int32
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return out
+		}
+		out[id] = name
+	}
+	return out
+}
+
+// profileTagIDs returns a profile's heaviest tag ids, capped at n.
+//
+// Sorted by weight rather than taken from the map, because Go map order is
+// randomised per iteration: an unsorted list would make the same profile rank
+// fandoms differently on every page load, which is indistinguishable from a
+// bug and impossible to reproduce.
+func profileTagIDs(p *profile.Profile, n int) []int32 {
+	if p == nil || len(p.Tags) == 0 {
+		return nil
+	}
+	type kv struct {
+		id int32
+		w  float64
+	}
+	kvs := make([]kv, 0, len(p.Tags))
+	for id, w := range p.Tags {
+		kvs = append(kvs, kv{id, w})
+	}
+	sort.Slice(kvs, func(i, j int) bool {
+		if kvs[i].w != kvs[j].w {
+			return kvs[i].w > kvs[j].w
+		}
+		return kvs[i].id < kvs[j].id
+	})
+	if n > 0 && len(kvs) > n {
+		kvs = kvs[:n]
+	}
+	out := make([]int32, len(kvs))
+	for i, k := range kvs {
+		out[i] = k.id
+	}
+	return out
+}
+
+// tagWorkCount counts the works carrying a tag name.
+func (d Deps) tagWorkCount(ctx context.Context, name string) (int, error) {
+	if d.Engine == nil {
+		return 0, errors.New("no corpus")
+	}
+	var n int
+	err := d.Engine.Corpus.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM work_tags wt JOIN tags t ON t.id = wt.tag_id WHERE t.name = ?`,
+		name).Scan(&n)
+	return n, err
+}
+
+// workTagIDs returns the tag ids on a work.
+func (d Deps) workTagIDs(ctx context.Context, workID int64) ([]int32, error) {
+	if d.Engine == nil {
+		return nil, errors.New("no corpus")
+	}
+	rows, err := d.Engine.Corpus.DB.QueryContext(ctx,
+		`SELECT tag_id FROM work_tags WHERE work_id = ?`, workID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []int32
+	for rows.Next() {
+		var id int32
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// parseWorkList parses a comma-separated work id list.
+//
+// Spaces and repeated commas are tolerated, because a list typed by hand is
+// mostly spaces and a trailing comma, and rejecting it teaches nothing.
+func parseWorkList(s string) ([]int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	var out []int64
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(part, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a work id; the list is comma separated, like 111, 222", part)
+		}
+		if n <= 0 {
+			return nil, fmt.Errorf("work id %d is not positive", n)
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+// joinInts renders ids for an error message, capped.
+func joinInts(ids []int64) string {
+	const max = 12
+	parts := make([]string, 0, len(ids))
+	for i, id := range ids {
+		if i == max {
+			parts = append(parts, fmt.Sprintf("... and %d more", len(ids)-max))
+			break
+		}
+		parts = append(parts, strconv.FormatInt(id, 10))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// absf is a local abs for float64.
+func absf(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// cloneWeights copies a weight map so a before/after comparison is possible.
+func cloneWeights(m map[int32]float64) map[int32]float64 {
+	out := make(map[int32]float64, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
 
 func (d Deps) renderSearch(w http.ResponseWriter, r *http.Request, q string) {
 	ctx := r.Context()
@@ -159,7 +917,15 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 
 	ent, err := d.Engine.Corpus.Entity(ctx, id)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		// BOTH sentinels mean "not found", from two layers: the corpus has
+		// its own vocabulary and returns corpus.ErrNotFound. Checking only
+		// store.ErrNotFound sent every missing work to the 500 branch --
+		// measured by the browser suite, which found /work/999999999
+		// answering 500 while /work/1 answered 200. A reader following a
+		// stale link got a server fault instead of "no such work".
+		if errors.Is(err, store.ErrNotFound) ||
+			errors.Is(err, corpus.ErrNotFound) ||
+			errors.Is(err, sql.ErrNoRows) {
 			d.notFound(w, r)
 			return
 		}
@@ -284,13 +1050,29 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	raw := r.URL.Query()["seed"]
-	if len(raw) == 0 {
-		d.notFound(w, r)
-		return
-	}
 
+	// No seed parameter at all is NOT a 404.
+	//
+	// This guard used to be here and returned notFound, on the reasoning that a
+	// ranking with no seeds has no meaning. But /recommend is a linked page
+	// (it is in the nav, and it is where "rank from this" on a work page points
+	// with the seed already filled in), so a reader who clicks it first sees a
+	// 404 for a page they were invited to. The empty form renders instead, and
+	// the empty-SEED case further down does the same.
+	//
+	// A 404 stays correct for a path kindred does not serve; this is a path it
+	// does serve.
 	seeds := make([]engine.Seed, 0, len(raw))
+	// The seed boxes are echoed back even for ones that fail to parse, so a
+	// typo comes back in the form with the other seeds intact instead of as a
+	// 400 that loses the whole request.
+	echo := make([]SeedRef, 0, len(raw))
+
 	for _, s := range raw {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue // the blank "add another" slot; not a seed
+		}
 		kind, idStr, ok := strings.Cut(s, ":")
 		if !ok {
 			d.fail(w, r, http.StatusBadRequest,
@@ -304,41 +1086,161 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seeds = append(seeds, engine.Seed{Kind: kind, ID: n})
+		echo = append(echo, SeedRef{Kind: kind, ID: n, Raw: s})
 	}
-	// Five is enough to describe a taste and few enough that the ranking
-	// still means something. A twentieth seed averages the signal away.
-	if len(seeds) > 5 {
-		seeds = seeds[:5]
+	if len(seeds) == 0 {
+		// Every slot was empty, which is what the form looks like before
+		// anyone types. A 404 here would be right for a bad URL and wrong for
+		// an untouched form, so the form is rendered empty instead.
+		d.page(w, "recommend.html",
+			RecommendPage{Base: d.base("Recommendations", "Recommendations"), MaxSeeds: maxSeeds},
+			http.StatusOK)
+		return
 	}
 
-	res, err := d.Engine.Recommend(ctx, engine.Request{
+	// Five is enough to describe a taste and few enough that the ranking
+	// still means something. A twentieth seed averages the signal away.
+	seedLimitHit := len(seeds) > maxSeeds
+	if seedLimitHit {
+		seeds = seeds[:maxSeeds]
+		echo = echo[:maxSeeds]
+	}
+
+	q := r.URL.Query()
+	capN, err := parseBoundedInt(q.Get("max_per_fandom"), 0, 100, 0)
+	if err != nil {
+		d.fail(w, r, http.StatusBadRequest,
+			fmt.Errorf("max_per_fandom: %w (it caps results per group, 0-100)", err))
+		return
+	}
+	groupBy := q.Get("group_by")
+	switch groupBy {
+	case "", "fandom", "tag", "author":
+	default:
+		d.fail(w, r, http.StatusBadRequest,
+			fmt.Errorf("group_by %q is not a diversity axis; use fandom, tag or author", groupBy))
+		return
+	}
+
+	n := 20
+	if v := q.Get("n"); v != "" {
+		n, err = parseBoundedInt(v, 1, 100, 20)
+		if err != nil {
+			d.fail(w, r, http.StatusBadRequest, fmt.Errorf("n: %w", err))
+			return
+		}
+	}
+
+	req := engine.Request{
 		Seeds:   seeds,
 		Kind:    corpus.AO3Kind,
-		N:       20,
+		N:       n,
 		Exclude: true,
-	})
+		// The cap and its axis are passed through rather than applied to the
+		// result list here. Post-filtering a top-N list is a different and much
+		// worse algorithm: if the top 20 are all Harry Potter and the cap is 3,
+		// filtering the 20 returns 3 when the corpus had 200 eligible works
+		// outside that fandom. The cap has to shape the query.
+		MaxPerGroup: capN,
+		GroupBy:     groupBy,
+	}
+
+	res, err := d.Engine.Recommend(ctx, req)
 	if err != nil {
+		// A seed kind this mirror does not carry is the reader's mistake, and
+		// gets a 400 naming the kind rather than a 500: "ao3_book:1" is a typo,
+		// not a server fault.
+		if errors.Is(err, engine.ErrUnsupportedKind) {
+			d.fail(w, r, http.StatusBadRequest, err)
+			return
+		}
 		d.fail(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
-	heading := "Recommendations"
+	heading := fmt.Sprintf("Recommendations from %d seeds", len(seeds))
 	if len(seeds) == 1 {
 		heading = "Recommendations from one seed"
-	} else {
-		heading = fmt.Sprintf("Recommendations from %d seeds", len(seeds))
 	}
-	page := WorkPage{Base: d.base(heading, heading), Similar: res.Items}
 
-	// The first seed becomes the page subject so there is a real title
-	// block, but a failure to load it is not fatal: the ranking is the
-	// point of this page, not the metadata of one work.
-	if ent, err := d.Engine.Corpus.Entity(ctx, seeds[0].ID); err == nil {
-		page.Work = ent
-	} else {
-		d.log().Warn("seed work unavailable on recommend page", "seed", seeds[0].ID, "err", err)
+	page := RecommendPage{
+		Base:            d.base(heading, heading),
+		Similar:         res.Items,
+		Seeds:           echo,
+		N:               n,
+		Returned:        len(res.Items),
+		MaxPerFandom:    capN,
+		GroupBy:         groupBy,
+		SeedLimitHit:    seedLimitHit,
+		MaxSeeds:        maxSeeds,
+		ShortfallReason: shortfallReason(n, len(res.Items), capN, groupBy),
 	}
+	page.Tune = weightRows(res.Tune)
 	d.page(w, "recommend.html", page, http.StatusOK)
+}
+
+// maxSeeds is the seed ceiling. Five describes a taste; twenty averages it
+// into mush, which is a worse answer than refusing to answer.
+const maxSeeds = 5
+
+// shortfallReason explains a short list, or returns "" when it needs none.
+//
+// It exists because "showing 12 of 20" reads as a complete answer, and the
+// reader cannot otherwise tell a diversity cap from an exhausted corpus. The
+// distinction matters: raising the cap is the fix for one and does nothing for
+// the other.
+func shortfallReason(want, got, capN int, groupBy string) string {
+	if got >= want {
+		return ""
+	}
+	if capN > 0 && groupBy != "" {
+		return fmt.Sprintf(
+			"The cap of %d per %s removed the rest; kindred will not pad the list "+
+				"back up with the works it just excluded. Raise or clear the cap for more.",
+			capN, groupBy)
+	}
+	return fmt.Sprintf("Only %d of %d works scored above zero, which is the whole of "+
+		"what this corpus supports for these seeds. Widen the seeds before expecting more.", got, want)
+}
+
+// weightRows turns the engine's weight vector into display rows, heaviest
+// first, dropping zero weights because a row of 0.00 teaches nothing.
+func weightRows(w map[string]float64) []WeightRow {
+	var out []WeightRow
+	for name, v := range w {
+		if v == 0 {
+			continue
+		}
+		out = append(out, WeightRow{Name: name, Weight: v})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Weight != out[j].Weight {
+			return out[i].Weight > out[j].Weight
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// parseBoundedInt parses an optional integer within bounds.
+//
+// The bounds are a feature, not validation boilerplate: max_per_fandom=10000
+// would make the ranking do more work than the corpus, and n=100000 would page
+// a list nobody reads. Out of range is a 400 rather than a clamp, because a
+// silently clamped cap is a cap the reader did not ask for.
+func parseBoundedInt(s string, lo, hi, def int) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a number", s)
+	}
+	if n < lo || n > hi {
+		return 0, fmt.Errorf("%d is outside %d-%d", n, lo, hi)
+	}
+	return n, nil
 }
 
 // neighbours scores the tags around one tag and attaches their names.
