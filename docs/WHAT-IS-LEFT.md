@@ -87,12 +87,31 @@ alternates full/delta.
 build first — two were aimed at the wrong expression and two did not compile, so
 counting them would have been flattering the suite.
 
-### 2. SPEC §4.4 row 3 — the `go list -deps` assertion
+### 2. ~~SPEC §4.4 row 3 — the `go list -deps` assertion~~ — DONE
+**Implemented 2026-10-05** (`internal/api/linkgraph_test.go`), mutation-verified
+3/3 by adding each forbidden import and confirming the assertion fires.
 
-The serving binary's link graph is never asserted to contain no outbound HTTP
-client. Named in the spec since it was written, never implemented.
-`TestTransportHasNoPlainDialFallback` covers the fetch transport, which is a
-different claim. This is the only §4.4 row still named-but-unwritten.
+The assertion the spec implies is FALSE as written. "The serving binary's
+request path links no HTTP client" cannot be tested, because `internal/api` *is*
+an HTTP server and imports `net/http` to do its job — a gate forbidding that
+would be forbidding the product. So the claim became REACHABILITY:
+
+| Path | may link `net/http` | must not link |
+|---|---|---|
+| `internal/api` (serves) | **yes** | `internal/onion`, `internal/crawl` |
+| `internal/signal` (computes) | no | any outbound client package |
+| `internal/onion` (fetches) | yes | a plain dialer |
+
+`internal/crawl` really does fetch `archiveofourown.org` over clearnet. It is a
+deliberate corpus-seeding tool, nothing imports it, and
+`TestCrawlStaysUnreachableFromTheServingBinary` pins that. A gate that scanned
+the whole repo for outbound clients would flag the crawler and be wrong — this
+assertion is what makes the gate honest rather than satisfiable by deleting it.
+
+A fourth test asserts the harness itself returns a non-empty dependency set with
+the stdlib flag correct, because a harness returning an empty set for every
+package would make the other three pass vacuously.
+
 
 ### 3b. ~~The doc gate was reading a stale binary~~ — DONE
 
@@ -315,8 +334,18 @@ it does not exist under that name or any other.
 - [x] row 3 (`go list -deps` assertion that no HTTP client is linked into the
       serving path) is still genuinely missing — see item 9 below
 
-### 9. SPEC §4.4 row 3: the `go list -deps` assertion — STILL OPEN, and the
-last unverified privacy claim
+### 9. ~~SPEC §4.4 row 3: the `go list -deps` assertion~~ — DONE, see item 2
+
+Every row of §4.4 is now either implemented or marked NOT IMPLEMENTED with the
+reason. Row 4 (the `KINDRED_DUMP_REQUIRE_ONION` check) remains unimplemented and
+remains **unreachable**: nothing serves snapshots, so there is no onion service
+to be silent about. Row 1's gate is written to constrain the serving path when
+it appears.
+
+The old text below is kept as the record of what was claimed:
+
+### 9. SPEC §4.4 row 3: the `go list -deps` assertion — was STILL OPEN, and the
+last unverified privacy claim  (superseded, quoted below)
 
 - [ ] the serving binary's link graph is never asserted to contain no outbound
       HTTP client. `TestTransportHasNoPlainDialFallback` covers the *fetch*

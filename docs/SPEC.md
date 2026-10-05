@@ -329,8 +329,8 @@ alternates full/delta, because a delta's successor cannot be a delta.
 |---|---|---|
 | Peer learns my IP | snapshot is served **only** on a Tor onion service; no clearnet listener exists for it | `TestNoClearnetRouteIsRegisteredForASnapshot` (internal/dump) asserts that any snapshot-serving declaration carries onion-only evidence **in its own body**, and `TestTheClearnetListenerWouldHaveToBeDeliberate` asserts internal/dump opens no listener at all |
 | Fetch client falls back to clearnet | the fetcher accepts **only** `.onion` hosts, refuses redirects off `.onion`, has no DNS path and no proxy-less dialer | unit test points it at `127.0.0.1` and at a redirect-to-clearnet, asserts refusal |
-| A bug makes an outbound request | the serving binary's request path links no HTTP client; the fetch path dials only through the Tor SOCKS proxy | **NOT IMPLEMENTED** — no `go list -deps` assertion exists. Partially covered by `TestTransportHasNoPlainDialFallback` (internal/onion), which checks the transport has no clearnet dialer but does not check the serving binary's link graph |
-| Onion service is silently disabled | `KINDRED_DUMP_REQUIRE_ONION=1` (default) makes the dump task exit non-zero if no onion service is up | **NOT IMPLEMENTED** — the env var does not exist and there is no such integration test. Currently unreachable because nothing serves snapshots at all (see the note below) |
+| A bug makes an outbound request | the serving binary's request path links no HTTP client; the fetch path dials only through the Tor SOCKS proxy | `internal/api/linkgraph_test.go` — `go list -deps` assertions. Mutation-verified 3/3 |
+| Onion service is silently disabled | `KINDRED_DUMP_REQUIRE_ONION=1` (default) makes the dump task exit non-zero if no onion service is up | **NOT IMPLEMENTED, and unreachable** — the env var does not exist and there is no such integration test. Nothing serves snapshots at all (see the note below), so there is no onion service to be silent about. Implementing this means writing the serving path first, and row 1's gate is written to constrain that path when it appears |
 | Timing/pattern reveals scale | fixed rebuild cadence, no "new dump" notification push — peers poll | design property |
 | Salt leaks and pseudonymises | salt is stored in the manifest, which is public — so a stable salt is *not* a secret, and is treated as a privacy trade-off rather than a security control | §4.2 |
 
@@ -339,9 +339,40 @@ protection, it is linkage. Calling it protection would be wrong.
 
 **Revised 2026-10-04, after auditing this table against the tree.** Three of
 the six rows named a test that did not exist, and the two marked
-NOT IMPLEMENTED above were the ones found. Row 1 is now implemented, and the
-way it is implemented is worth stating because it is not what the table
+NOT IMPLEMENTED above were the ones found. Rows 1 and 3 are now implemented, and
+the way each is implemented is worth stating because neither is what the table
 originally described.
+
+**Row 3, and the assertion the table implies is false.** "The serving binary's
+request path links no HTTP client" cannot be asserted as written, because
+`internal/api` **is** an HTTP server and imports `net/http` to do its job. A
+gate that forbade it would be forbidding the product. So the claim is about
+REACHABILITY rather than presence:
+
+| Path | May link `net/http` | Must not link |
+|---|---|---|
+| `internal/api` (serves) | **yes** | `internal/onion`, `internal/crawl` |
+| `internal/signal` (computes) | no | any outbound client package |
+| `internal/onion` (fetches) | yes | a plain dialer; every dial goes through SOCKS |
+
+`internal/crawl` really does fetch `archiveofourown.org` over clearnet. It is a
+deliberate tool for seeding a corpus, nothing imports it, and
+`TestCrawlStaysUnreachableFromTheServingBinary` pins that: a gate that scanned
+the repository for outbound clients would flag the crawler as a violation and be
+wrong, and this is the assertion that makes the gate honest rather than
+satisfiable by deleting the crawler.
+
+Why a link graph and not a grep: a grep for `http.Get` finds call sites but not
+a client constructed elsewhere and passed in — which is how an outbound request
+arrives with no new `http.Get` anywhere. It also cannot be satisfied by a
+comment, which is the same trap row 1 fell into.
+
+All three link-graph assertions were mutation-checked by adding the import they
+forbid and confirming each fires: `internal/api` → `internal/onion`,
+`internal/api` → `internal/crawl`, `internal/signal` → `net/http`. All 3 killed.
+A fourth test asserts the harness itself returns a non-empty dependency set with
+the stdlib flag set correctly, because a harness that returned an empty set for
+every package would make the other three pass vacuously.
 
 `kindred dump verify --no-clearnet` does not exist and, on inspection, could
 not usefully: **this project has no snapshot-serving code at all.** `dump`
