@@ -11,9 +11,10 @@ tree or the running service, not against a plan.
 | Browser | 79 Playwright tests pass (69 pre-existing + 10 new for the filters) |
 | Spec gate | `docs/goal-check.py` — all 7 clauses pass |
 | Deployment | live on thinkcentre `:8010`, binary sha256 matches the build, unit restarted 2026-10-05 01:02 |
-| Deploy gate | `scripts/check-deploy.sh` — **32 checks, all pass** |
-| Doc gate | `scripts/check-doc-commands.sh` — exit 0, 28 invocations checked |
-| Index age | **128h.** Correct: the index was built 2026-09-29, and the header reports the age of the *data*. A deploy does not rebuild an index — `kindred ingest` does. |
+| Deploy gate | `scripts/check-deploy.sh` — **32 behaviour checks, all pass** |
+| Provenance gate | `scripts/check-provenance.sh` — **IN SYNC**, deployed binary built from HEAD |
+| Doc gate | `scripts/check-doc-commands.sh` — exit 0, 30 invocations, 3 exits (0 clean / 1 docs wrong / 2 stale binary) |
+| Index age | **~130h, and correct.** The index was built 2026-09-29; the header reports the age of the *data*. A deploy does not rebuild an index — `kindred ingest` does. |
 
 ## Done this session
 
@@ -212,7 +213,7 @@ against it passed unconditionally.
 | Real corpus | 112,935 works / 6,261 users / 180,677 interactions, on thinkcentre |
 | Deployed instance | thinkcentre `127.0.0.1:8010`, systemd **system** unit `kindred.service` |
 | **Deployed binary** | **rebuilt from 11bcaed and deployed 2026-10-04, verified live** |
-| Deploy-drift gate | `scripts/check-deploy.sh`, 22 checks, mutation-checked |
+| Deploy-drift gate | `scripts/check-deploy.sh`, 32 behaviour checks, mutation-checked |
 | Index age on the live instance | **127h — honest.** The index was built 2026-10-01, not by a stale binary |
 
 ### Deploy: DONE, and the drift that caused it is now gated
@@ -220,7 +221,7 @@ against it passed unconditionally.
 The live instance ran a Sep 29 binary for six days. It was up the whole time —
 no `X-Kindred-Index-Age`, no `Server: kindred`, no sort controls, no dark mode.
 Rebuilt, deployed with a pre-flight gate on a scratch port, and verified **on
-the live wire** rather than in the repo. `scripts/check-deploy.sh` now runs 22
+the live wire** rather than in the repo. `scripts/check-deploy.sh` now runs 32
 checks against any deployment URL and is mutation-checked by building the
 pre-headers revision and watching it fail 20 of 22.
 
@@ -299,9 +300,51 @@ appears before reporting it.
 - [x] verified on the live wire: headers present, sort reorders, dark mode
       served, peak RSS 144 MB against the 220 MB cap
 
+### 2b. ~~The behaviour gate could not see the BUILD~~ — DONE
+
+`check-deploy.sh` makes 32 checks and every one is about behaviour. Behaviour
+cannot distinguish "correct" from "correct, from six days ago", which is the
+failure it was written to catch — and on 2026-10-05 it reported
+"all 32 checks pass" against a binary from 2026-09-29 while the tree carried the
+delta/retention work. It was green, and wrong in the most expensive way
+available.
+
+`scripts/check-provenance.sh` asks instead whether the deployed binary was built
+from HEAD. It reads the commit out of the binary's own build metadata.
+
+**It compares COMMITS, not binary hashes, after getting that wrong three times.**
+Hashing the live binary against a local build cannot work:
+
+- `go build` stamps the binary with the vcs revision, so **committing changes the
+  bytes without changing a line of source**, and an uncommitted tree stamps
+  `+dirty` — a different binary from identical source.
+- `CGO_ENABLED` must match exactly. Without it the local build is a cgo build,
+  45 KB larger, and can never match, so the gate was permanently red. **A gate
+  that is always red gets ignored, which is worse than having no gate.**
+- `git log -1 --format=%h` is 7 hex characters and the stamp is 12, so the
+  equality test was false on a *perfect* deployment. It reported DRIFTED for a
+  binary installed from HEAD minutes earlier. The previous commit claimed this
+  gate was "verified in both directions"; the IN SYNC case had never run against
+  a correct deployment.
+
+`+dirty` is its own verdict: a binary built from uncommitted source is not
+reproducible, cannot be rolled back, and cannot be reviewed.
+
+The gate also deleted its own evidence on the way: it stripped the `+dirty`
+suffix off the stamp and then asked whether the stripped result contained
+`+dirty`. A real problem reported under the wrong name, in a gate meant to be
+believed.
+
+All three verdicts verified against the live host: dirty → DRIFTED, HEAD~1 →
+DRIFTED naming the commit and the count, clean HEAD → IN SYNC.
+
+`scripts/deploy.sh` builds, ships, verifies the copy's sha on the far side,
+installs, restarts, waits for `/healthz` by observation rather than a sleep, and
+then runs BOTH gates, failing if either does.
+
 ### 2. ~~A deploy-drift gate~~ — DONE
 
-- [x] `scripts/check-deploy.sh`, 22 checks, exits 1 on drift / 2 on unreachable
+- [x] `scripts/check-deploy.sh`, 32 behaviour checks, exits 1 on drift / 2 on unreachable
 - [x] mutation-checked by building `a95e224^` and serving it: **20 of 22 fail**
 
 Run it after every deploy:
