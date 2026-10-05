@@ -36,15 +36,56 @@ tree or the running service, not against a plan.
 
 ## Still open, in the order I would do it
 
-### 1. SPEC §4.2 retention and §4.3 delta log — the largest functional gap
+### 1. ~~SPEC §4.2 retention and §4.3 delta log~~ — DONE
 
-`grep -rn 'retention|delta' internal/dump/ cmd/kindred/` returns nothing. Every
-dump is a full 7 MB rebuild, so §4.3's "peers pull a few hundred KB per day" is
-false by three orders of magnitude. `Manifest` carries no version-chain field.
+`internal/dump/version.go`. `ForceInterval = 20`, `RetentionVersions = 3`.
+`--version 0` now means next-after-newest (it always claimed to and always wrote
+`v0`), `--full` forces a full snapshot, `--keep N` sets retention, and a delta
+carries only the shards whose content hash changed.
 
-- [ ] retention: keep the three most recent versions, then delete
-- [ ] delta: a parent pointer plus a changed-rows-only shard
-- [ ] the retention gate needs a mutation too, or it will be a comment
+Measured on the real 1.7 GB mirror, `--stable-salt`, unchanged corpus:
+
+| | |
+|---|---|
+| v0 full | 6.7 MB, 256 shards |
+| v1 delta against v0 | **614 B, 0 shards** |
+
+**Three bugs, all of which passed every unit test**, because they were in the
+writer rather than the reader:
+
+1. **The delta never omitted anything.** The rule looked up
+   `base.Shards["shard-042.json"]`; the map is keyed by shard NUMBER (`"42"`).
+   Every lookup missed, so every shard was written. The snapshot verified, called
+   itself a delta, printed "carries 256 of 256, consider --stable-salt" to an
+   operator already using `--stable-salt`, and was the size of a full snapshot.
+   Caught by running eight real dumps. No test could have caught it: the unit
+   tests build manifests by hand and cannot see how `dump` writes one.
+2. **`base_version` was `omitempty`**, so a delta against **v0** published no
+   base at all — v0 being both "the first version" and "unset". A peer could not
+   tell those apart in the signed bytes. A full snapshot now names `-1`, which is
+   not a valid version, so "is this a delta" is decidable from the field alone.
+3. **The manifest never recorded its own snapshot version.** It existed only as
+   the directory name `v12`, which is not signed. `fetch` consequently reported
+   "fetched snapshot **v1**" for every peer, and `Manifest.Version` — the
+   *format* version — is 1 for every snapshot this build has ever written.
+
+`internal/dump/delta_integration_test.go` exists because of the first one: it runs
+the whole dump → delta → retain → verify cycle over a real corpus file, and it
+builds its fixture from the queries in `dump.go` rather than an invented schema
+(my first fixture used a `bookmarks` table and failed on "no such column", which
+is the correct outcome for a fixture that does not match the code it feeds).
+
+Retention refuses to delete a version a retained delta names as its base: such a
+delta verifies its own signature perfectly and then cannot be applied by anyone
+who did not already hold the base, so nothing downstream would ever report it.
+
+**Rejected: delta-on-delta chaining.** A delta whose base is a delta is refused
+and the next version is written full. Measured consequence: an unchanged corpus
+alternates full/delta.
+
+20 mutations over the retention/delta logic, all killed, all verdicts verified to
+build first — two were aimed at the wrong expression and two did not compile, so
+counting them would have been flattering the suite.
 
 ### 2. SPEC §4.4 row 3 — the `go list -deps` assertion
 
@@ -52,6 +93,22 @@ The serving binary's link graph is never asserted to contain no outbound HTTP
 client. Named in the spec since it was written, never implemented.
 `TestTransportHasNoPlainDialFallback` covers the fetch transport, which is a
 different claim. This is the only §4.4 row still named-but-unwritten.
+
+### 3b. ~~The doc gate was reading a stale binary~~ — DONE
+
+`check-doc-commands.sh` asks "does the CLI know this command", so its verdict
+depends entirely on which binary it asks. `bin/kindred` was three days old, and
+the gate confidently reported `--full` and `--keep` as "flag provided but not
+defined" — flags the tree defines, and flags it had just been shown.
+
+It now exits 2 if any source file under `internal/` or `cmd/` is newer than the
+binary. Three exits, three meanings: 0 clean, 1 the documents are wrong, 2 the
+binary is stale and the verdict would describe a build that no longer exists.
+
+That is the third stale-binary-gives-a-confident-wrong-answer instance here,
+after a six-day-old deployed binary and a fixture corpus whose uniform ratings
+made every filter test pass unconditionally. The rule: **a gate whose verdict
+depends on a build artefact must check that the artefact is current.**
 
 ### 3. ~~A CI check that every command in the docs parses~~ — DONE
 
@@ -270,11 +327,10 @@ last unverified privacy claim
       beyond what the onion transport needs. Named in the spec, never written.
 - [ ] `TestTransportHasNoPlainDialFallback` covers the *fetch* transport only.
 
-### 10. SPEC §4.2 retention (3 versions) and §4.3 delta log — not implemented
+### 10. ~~SPEC §4.2 retention and §4.3 delta log~~ — DONE, see item 1 above
 
-- [ ] `grep -rn 'retention|delta' internal/dump/ cmd/kindred/` finds nothing
-- [ ] every dump is a full snapshot; §4.3's "peers pull a few hundred KB per
-      day" is currently a 7 MB full rebuild every time
+- [x] `grep -rn 'retention|delta' internal/dump/` now finds `version.go`
+- [x] a delta against an unchanged corpus measures 614 B against a 6.7 MB base
 
 ### 4. ~~`docs/PLAN.md` §6.4 documents commands that do not exist~~ — DONE
 

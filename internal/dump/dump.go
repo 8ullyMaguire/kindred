@@ -35,8 +35,30 @@ const ShardCount = 256
 // Manifest describes a snapshot: what is in it, what it is made of, and
 // what it is worth trusting.
 type Manifest struct {
-	Version     int    `json:"version"`
-	BaseVersion int    `json:"base_version,omitempty"`
+	// Version is the MANIFEST FORMAT version, not the snapshot number. Every
+	// snapshot this build has ever written carries 1 here, which is why
+	// `verify` printed "manifest v1 verified" for all of them.
+	//
+	// The snapshot number used to exist ONLY as the directory name "v12", which
+	// is not part of what gets signed. Two consequences, both live until this
+	// field was added: `fetch` reported "fetched snapshot v1 from ..." for every
+	// peer, and a peer could not check which version it was verifying except by
+	// trusting a directory name it had just written itself. A version that is
+	// not in the signed bytes is not verifiable.
+	Version         int `json:"version"`
+	SnapshotVersion int `json:"snapshot_version"`
+
+	// BaseVersion is the snapshot this one is a delta against. For a delta
+	// against v0 it is legitimately 0, which is why this field is NOT omitempty:
+	// dropping it makes a delta against the first snapshot indistinguishable
+	// from a manifest that names no base at all, in the signed bytes.
+	//
+	// A full snapshot names -1, which is not a valid version, so "is this a
+	// delta" is answerable from the field alone and Full becomes redundant for
+	// that purpose. Full is kept because §4.3's prose and every peer-facing log
+	// line talk about it, and two ways to say one thing is better than one way
+	// to say it and a gap in the other.
+	BaseVersion int    `json:"base_version"`
 	BuildTime   string `json:"build_time"`
 
 	// RowCounts is the published table's row count per shard family. It
@@ -72,6 +94,20 @@ type Shard struct {
 	Hash string `json:"hash"`
 	Rows int64  `json:"rows"`
 	Path string `json:"path"`
+
+	// Removed marks a shard the base published and this snapshot does not: the
+	// bucket exists in neither the base's successor nor here.
+	//
+	// Without it an emptied bucket and a deleted bucket are the same manifest
+	// entry, and a peer applying a delta cannot tell "replace this with an empty
+	// set" from "drop this". It would keep the rows for a bucket that no longer
+	// exists, and its own copy would stay self-consistent while being wrong --
+	// which is why nothing downstream would ever report the discrepancy.
+	//
+	// A full snapshot never sets it: it publishes every live bucket, and a
+	// reader replacing its state wholesale does not need to be told about the
+	// ones that vanished.
+	Removed bool `json:"removed,omitempty"`
 }
 
 // Sign writes the manifest and its detached minisig-style signature.

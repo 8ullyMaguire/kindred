@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/config"
@@ -30,6 +32,8 @@ func runDump(ctx context.Context, args []string) error {
 	out := fs.String("out", "", "output directory for the snapshot (required)")
 	stableSalt := fs.Bool("stable-salt", false, "reuse one salt across dumps (linkage, not secrecy)")
 	version := fs.Int("version", 0, "snapshot version (0 = next after the newest on disk)")
+	full := fs.Bool("full", false, "force a full snapshot even when a delta would do")
+	keep := fs.Int("keep", dump.RetentionVersions, "versions to retain after this dump (0 = no pruning)")
 	c, err := finishConfig(c, fs, args)
 	if err != nil {
 		return err
@@ -37,6 +41,22 @@ func runDump(ctx context.Context, args []string) error {
 	if *out == "" {
 		return errors.New("--out is required: the snapshot goes to a directory, never to a listener")
 	}
+
+	// The version has to be resolved BEFORE the expensive work, so a refusal to
+	// overwrite costs a second rather than an anonymisation pass over the whole
+	// corpus.
+	ver, err := dump.AllocateVersion(*out, *version)
+	if err != nil {
+		return err
+	}
+	isFull, baseVer, baseReason := dump.IsFullSnapshot(*out, ver, *full)
+	if isFull {
+		// A full snapshot names no base. -1 is not a valid version number, so
+		// "this is a delta" is decidable from the field alone. Leaving it at the
+		// zero value would make a full v0 claim v0 as its own base.
+		baseVer = -1
+	}
+	fmt.Printf("writing a %s snapshot (%s)\n", map[bool]string{true: "FULL", false: "DELTA"}[isFull], baseReason)
 
 	s, err := store.Open(ctx, c.DB, c.CorpusDB)
 	if err != nil {
@@ -73,20 +93,22 @@ func runDump(ctx context.Context, args []string) error {
 		return fmt.Errorf("anonymise: %w", err)
 	}
 
-	snapDir := filepath.Join(*out, fmt.Sprintf("v%d", *version))
+	snapDir := filepath.Join(*out, dump.VersionDirName(ver))
 	if err := os.MkdirAll(snapDir, 0o755); err != nil {
 		return err
 	}
 
 	m := &dump.Manifest{
-		Version:   dump.ManifestVersion,
-		BuildTime: time.Now().UTC().Format(time.RFC3339),
-		KAnon:     c.KAnon,
-		SaltMode:  saltMode(*stableSalt),
-		Salt:      salt,
-		Full:      true,
-		Shards:    map[string]dump.Shard{},
-		RowCounts: map[string]int64{"tag_affinity": int64(len(affinity))},
+		Version:         dump.ManifestVersion,
+		SnapshotVersion: ver,
+		BaseVersion:     baseVer,
+		BuildTime:       time.Now().UTC().Format(time.RFC3339),
+		KAnon:           c.KAnon,
+		SaltMode:        saltMode(*stableSalt),
+		Salt:            salt,
+		Full:            isFull,
+		Shards:          map[string]dump.Shard{},
+		RowCounts:       map[string]int64{"tag_affinity": int64(len(affinity))},
 	}
 
 	// Shard the affinity rows by the low bits of the pseudonym, so the
@@ -96,6 +118,33 @@ func runDump(ctx context.Context, args []string) error {
 		shard := dump.ShardOfPseudonym(row.Pseudonym)
 		shards[shard] = append(shards[shard], row)
 	}
+
+	// A delta carries only the shards whose contents differ from the base.
+	// The base is read by hashing what it published and hashing what would be
+	// published now -- no row-by-row diff, and no assumption that a shard
+	// "should" have changed, which is how a delta silently omits a row a peer
+	// needed.
+	baseDir := filepath.Join(*out, dump.VersionDirName(baseVer))
+	var base *dump.Manifest
+	if !isFull {
+		var err error
+		base, err = dump.LoadManifest(baseDir)
+		if err != nil {
+			return fmt.Errorf("load base manifest: %w", err)
+		}
+	}
+
+	// A deleted bucket is one the base published and this dump has no rows for.
+	// The peer must be told, or it keeps rows for a bucket that no longer exists
+	// and its own copy stays self-consistent while being wrong.
+	if base != nil {
+		removed := missingShards(base, shards)
+		for _, key := range removed {
+			m.Shards[key] = dump.Shard{Removed: true}
+			fmt.Printf("  shard %s removed (no rows in this snapshot)\n", key)
+		}
+	}
+
 	for shard, rows := range shards {
 		sort.Slice(rows, func(i, j int) bool { return rows[i].Pseudonym < rows[j].Pseudonym })
 		blob, err := json.Marshal(rows)
@@ -103,6 +152,21 @@ func runDump(ctx context.Context, args []string) error {
 			return fmt.Errorf("shard %d: %w", shard, err)
 		}
 		hash := dump.HashBytes(blob)
+		key := fmt.Sprint(shard)
+		name := dump.ShardFileName(key)
+
+		// Delta rule: omit a shard that is byte-identical to the base's.
+		//
+		// The key is the shard NUMBER as a string, not the file name. This
+		// lookup used the file name, so base.Shards["shard-042.json"] was always
+		// absent, `ok` was always false, and every shard was written even though
+		// the hashes were equal. The snapshot verified, called itself a delta,
+		// and was the size of a full one.
+		if base != nil {
+			if prev, ok := base.Shards[key]; ok && prev.Hash == hash {
+				continue // unchanged; the peer already has it
+			}
+		}
 		// .json.zst, and the content is plain JSON.
 		//
 		// The first version of this wrote uncompressed JSON under a .zst
@@ -119,14 +183,28 @@ func runDump(ctx context.Context, args []string) error {
 		// saves 7.0 MB to about 2 MB on a snapshot that is fetched over
 		// Tor, so it is worth doing eventually -- as its own decision with
 		// its own measurement, not as a lie in a filename.
-		name := fmt.Sprintf("shard-%03d.json", shard)
 		if err := os.WriteFile(filepath.Join(snapDir, name), blob, 0o644); err != nil {
 			return err
 		}
-		m.Shards[fmt.Sprint(shard)] = dump.Shard{
+		m.Shards[key] = dump.Shard{
 			Hash: hash,
 			Rows: int64(len(rows)),
 			Path: name,
+		}
+	}
+
+	// Report what the delta actually saved, rather than calling it a delta and
+	// shipping the whole snapshot. With a per-dump salt every shard changes, so
+	// a delta against a per-dump-salted base is a full snapshot wearing a delta's
+	// name -- which is exactly what a peer would measure.
+	if base != nil {
+		carried, total := dump.DeltaAccounting(base, m)
+		onDisk := dump.DeltaBytesOnDisk(snapDir, m)
+		fmt.Printf("  delta carries %d of %d shards (%d bytes on disk, base is %s)\n",
+			carried, total, onDisk, humanBytes(baseDir, base))
+		if carried == total {
+			fmt.Println("  NOTE: every shard changed, so this delta is the size of a")
+			fmt.Println("        full snapshot. That is what --stable-salt is for.")
 		}
 	}
 
@@ -141,7 +219,7 @@ func runDump(ctx context.Context, args []string) error {
 		return err
 	}
 
-	fmt.Printf("snapshot v%d written to %s\n", *version, snapDir)
+	fmt.Printf("snapshot v%d written to %s\n", ver, snapDir)
 	fmt.Printf("  tag_affinity rows : %d (k=%d, salt=%s)\n", len(affinity), c.KAnon, m.SaltMode)
 	fmt.Printf("  shards            : %d\n", len(m.Shards))
 	fmt.Printf("  public key        : %s\n", hex.EncodeToString(pub))
@@ -149,7 +227,67 @@ func runDump(ctx context.Context, args []string) error {
 		fmt.Println("  NOTE: --stable-salt makes readers linkable across dumps. That is a")
 		fmt.Println("        research affordance and a re-identification risk, not protection.")
 	}
+
+	// Retention last, so a failure above leaves the previous versions alone.
+	if *keep > 0 {
+		removed, err := dump.Prune(*out, *keep)
+		if err != nil {
+			return fmt.Errorf("retention: %w", err)
+		}
+		if len(removed) > 0 {
+			fmt.Printf("  retention: removed v%s (keeping %d)\n",
+				joinInts(removed), *keep)
+		}
+	}
 	return nil
+}
+
+// missingShards returns the KEYS of the base's shards that this dump has no rows
+// for. The key is the shard number as a string, because that is what
+// Manifest.Shards is keyed by -- returning file names here put entries into the
+// new manifest under a key no reader would look up.
+func missingShards(base *dump.Manifest, shards map[int][]dump.Affinity) []string {
+	var out []string
+	for key := range base.Shards {
+		n, err := strconv.Atoi(key)
+		if err != nil {
+			continue
+		}
+		if _, ok := shards[n]; !ok {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// humanBytes is the size of everything the BASE published, so the log line can
+// show the saving as a ratio rather than asking the reader to divide.
+func humanBytes(baseDir string, base *dump.Manifest) string {
+	var n int64
+	for _, sh := range base.Shards {
+		st, err := os.Stat(filepath.Join(baseDir, sh.Path))
+		if err != nil {
+			continue
+		}
+		n += st.Size()
+	}
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.0f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+func joinInts(xs []int) string {
+	parts := make([]string, len(xs))
+	for i, v := range xs {
+		parts[i] = strconv.Itoa(v)
+	}
+	return strings.Join(parts, " ")
 }
 
 func saltMode(stable bool) string {

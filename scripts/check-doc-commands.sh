@@ -33,6 +33,28 @@ R=$(cd "$(dirname "$0")/.." && pwd)
 cd "$R"
 
 BIN=${KINDRED_BIN:-$R/bin/kindred}
+
+# Refuse to run against a stale binary.
+#
+# This gate asks "does the CLI know this command", so its answer depends entirely
+# on WHICH binary it asks. A stale bin/kindred reports "flag provided but not
+# defined" for flags the current tree defines, which the gate faithfully reports
+# as BROKEN. It was three days stale and reporting confidently wrong verdicts on
+# `--full` and `--keep`, both of which exist.
+#
+# This is the third time in this project a stale binary produced a confident
+# wrong answer (the other two: a six-day-old deployed binary, and a fixture
+# corpus whose ratings made every filter test pass unconditionally). The general
+# rule: any gate whose verdict depends on a build artefact must check that the
+# artefact is current, or it is reporting on the past.
+STALE=$(( $(date +%s) - $(stat -c %Y "$BIN" 2>/dev/null || echo 0) ))
+NEWEST=$(find "$R/internal" "$R/cmd" -name '*.go' -newer "$BIN" 2>/dev/null | head -1)
+if [ -n "$NEWEST" ]; then
+  echo "STALE: $BIN is older than $(basename "$NEWEST")."
+  echo "       Rebuild it, or the verdicts below describe a build that no longer exists:"
+  echo "         go build -o bin/kindred ./cmd/kindred"
+  exit 2
+fi
 if [ ! -x "$BIN" ]; then
   echo "building the binary to parse against..."
   mkdir -p "$R/bin"

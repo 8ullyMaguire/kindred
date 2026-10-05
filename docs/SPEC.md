@@ -283,6 +283,46 @@ opt-in, and enabling it is a logged decision in the manifest.
   older than that is reproducible from a newer one plus the delta log, but
   the log itself is pruned, so retention is 3.
 
+**Implemented 2026-10-05** (`internal/dump/version.go`, `ForceInterval = 20`,
+`RetentionVersions = 3`). The measured result, against the real 1.7 GB mirror
+with `--stable-salt` and an unchanged corpus:
+
+| | |
+|---|---|
+| v0 (full) | 6.7 MB, 256 shards |
+| v1 (delta against v0) | **614 B, 0 shards** |
+
+That is the "few hundred KB per day" claim, and it only holds with a stable
+salt: with the default per-dump salt every pseudonym changes, so every shard
+changes and the delta is the full snapshot. `dump` says so on stdout rather
+than shipping 7 MB under a delta's name.
+
+**Three things §4.3 did not say, which the implementation had to decide:**
+
+1. **A full snapshot names `base_version: -1`, and a delta names its base
+   explicitly.** `base_version` was `omitempty`, which meant a delta against
+   **v0** published no `base_version` at all — v0 being both "the first
+   version" and "unset". A peer could not tell those apart in the signed
+   bytes. `-1` is not a valid version, so "is this a delta" is now
+   answerable from the field alone.
+2. **The manifest carries `snapshot_version`, which it never did.** It used
+   to exist only as the directory name `v12`, which is not signed. `fetch`
+   consequently reported "fetched snapshot **v1**" for every peer, and
+   `Manifest.Version` — the manifest *format* version — is 1 for every
+   snapshot this build has ever written.
+3. **Retention refuses to delete a version that a retained delta names as its
+   base.** A delta whose base is gone verifies its own signature perfectly
+   and then cannot be applied by anyone who did not already hold the base, so
+   nothing downstream would ever report it. Prune prints what it kept and
+   why, since "retention is 3" and four directories exist should not be a
+   surprise.
+
+**Rejected: delta-on-delta chaining.** A delta whose own base is a delta is
+refused and the next version is written full. §4.3 says deltas are listed
+against a *base*; chaining makes the size claim depend on every link the peer
+happens to hold. Measured consequence of refusing: an unchanged corpus
+alternates full/delta, because a delta's successor cannot be a delta.
+
 ### 4.4 No local IP leak — threat model
 
 | Threat | Mitigation | Test |
