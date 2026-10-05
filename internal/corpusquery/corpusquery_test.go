@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -244,36 +245,85 @@ func TestFandomRankingSetsLimitAndReportsTruncation(t *testing.T) {
 //   - every declared mode NOT in Modes() is documented as unimplemented.
 //
 // If someone adds a mode to the constant block and forgets both, this fails.
+// modeMethods is the one place the kebab-case mode VALUE and the CamelCase Go
+// method name are related. Reflection cannot derive one from the other.
+var modeMethods = map[Mode]string{
+	ModeFandomRanking:   "FandomRanking",
+	ModeFandomLandscape: "FandomLandscape",
+	ModeTagNeighbours:   "TagNeighbours",
+	ModeUnderrated:      "Underrated",
+	ModeSimilar:         "Similar",
+}
+
 func TestEveryWorkingModeHasARunnerMethod(t *testing.T) {
-	// A method per mode. Adding a mode to Modes() without adding it here is
-	// the drift this watches for, and the two lists are the only places it
-	// can happen.
-	for m, hasMethod := range map[Mode]bool{
-		ModeFandomRanking: true, // (*Runner).FandomRanking
-		ModeTagNeighbours: true, // (*Runner).TagNeighbours
-		ModeUnderrated:    true, // (*Runner).Underrated
-	} {
-		if !hasMethod {
-			t.Errorf("mode %q is in Modes() but has no Runner method", m)
+	// The invariant: every mode Modes() advertises has a Runner method behind
+	// it, and every Runner method corresponds to a mode Modes() advertises.
+	// The CLI's "declared but not implemented; working modes: ..." message is
+	// built from Modes(), so a mode missing from this list is a mode the
+	// product runs but never tells anyone about.
+	//
+	// The first version of this test iterated a map LITERAL of `true` values:
+	//
+	//     for m, hasMethod := range map[Mode]bool{ModeUnderrated: true, ...}
+	//
+	// which cannot fail, because the only value in it is true. It read like a
+	// guard on the mode list and guarded nothing. Removing ModeUnderrated from
+	// Modes() left this package's tests green.
+	//
+	// So the check is against the RUNTIME TYPE, and the map is built by
+	// reflection over *Runner rather than written down by hand. A mode added
+	// to Modes() without a method now fails here.
+	//
+	// The mapping is explicit because a mode's VALUE is kebab-case
+	// ("fandom-ranking") while its Go identifier is CamelCase
+	// (ModeFandomRanking), and reflect cannot derive one from the other
+	// without inventing a mangling rule that would be wrong for
+	// ModeFandomLandscape -> FandomLandscape only by accident.
+	rt := reflect.TypeOf(&Runner{})
+	for _, m := range Modes() {
+		name, ok := modeMethods[m]
+		if !ok {
+			t.Errorf("Modes() advertises %q but this test has no method name "+
+				"for it, so nothing here is checking it", m)
+			continue
+		}
+		if _, ok := rt.MethodByName(name); !ok {
+			t.Errorf("mode %q is in Modes() but *Runner has no method %q; "+
+				"it parses, runs, and is never advertised", m, name)
 		}
 	}
 }
 
 func TestDeclaredButUnimplementedModesAreHonestAboutIt(t *testing.T) {
-	// The two halves of the invariant. Modes() must not contain anything
-	// unimplemented (a caller must never get a mode that parses and then
-	// refuses), and IsImplemented must agree with it for every DECLARED
-	// name, so there is exactly one source of truth.
-	for _, m := range DeclaredModes() {
-		want := false
-		for _, w := range Modes() {
-			if w == m {
-				want = true
-			}
+	// Modes() is the list of modes that WORK, so it must not contain anything
+	// unimplemented: a caller must never get a mode that parses and then
+	// refuses.
+	//
+	// IsImplemented is DEFINED as membership in Modes(), so asserting that the
+	// two agree is asserting that a function equals its own definition -- it
+	// cannot fail for any edit to Modes(). The meaningful direction is against
+	// the runtime type, which TestEveryWorkingModeHasARunnerMethod now does.
+	// What is left here is the direction that matters to a caller: ParseMode
+	// accepts DeclaredModes, so every declared mode outside Modes() must be
+	// refused with a message that names the working modes instead of pretending
+	// the name was a typo.
+	//
+	// Checked against the method set rather than against Modes(), because
+	// IsImplemented is membership in Modes() and comparing the two would be
+	// comparing a function to its own definition.
+	methods := map[Mode]bool{}
+	rt := reflect.TypeOf(&Runner{})
+	for m, name := range modeMethods {
+		if _, ok := rt.MethodByName(name); ok {
+			methods[m] = true
 		}
-		if got := IsImplemented(m); got != want {
-			t.Errorf("IsImplemented(%q) = %v, want %v (Modes() is the list of "+
-				"modes that actually run)", m, got, want)
+	}
+	for _, m := range DeclaredModes() {
+		if got, want := IsImplemented(m), methods[m]; got != want {
+			t.Errorf("%q: IsImplemented says %v but *Runner has a method: %v. "+
+				"Modes() and the method set have drifted apart, so a mode "+
+				"either runs unadvertised or is advertised without running.",
+				m, got, want)
 		}
 	}
 }

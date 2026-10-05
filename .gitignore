@@ -5,3 +5,15 @@ bin/
 *.graph
 *.graph.tmp
 /dumps/
+
+# Mutation-harness and scratch leftovers. *.bak is covered by the user's GLOBAL
+# gitignore, which is why corpusquery_test.go.bak was invisible to `git status`
+# while corpusquery_test.go.backup2 -- not matched by that rule -- was committed
+# in ecd3f3f and has been sitting in the tree ever since.
+#
+# The two files were identical copies of a test that no longer exists, and
+# `go test` ignores them because they are not *.go, so nothing noticed.
+*.bak
+*.backup[0-9]*
+*.orig
+*.rej
