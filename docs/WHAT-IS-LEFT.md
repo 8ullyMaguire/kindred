@@ -8,6 +8,7 @@ tree or the running service, not against a plan.
 | | |
 |---|---|
 | Go | 21 packages, `go test ./... -count=1` exit 0, `go vet` clean, `gofmt` clean |
+| One command | `make verify` — gofmt, vet, test, spec, docs, deploy + both gates, memory budget |
 | Browser | 79 Playwright tests pass (69 pre-existing + 10 new for the filters) |
 | Spec gate | `docs/goal-check.py` — all 7 clauses pass |
 | Deployment | live on thinkcentre `:8010`, binary sha256 matches the build, unit restarted 2026-10-05 01:02 |
@@ -387,18 +388,6 @@ it appears.
 
 The old text below is kept as the record of what was claimed:
 
-### 9. SPEC §4.4 row 3: the `go list -deps` assertion — was STILL OPEN, and the
-last unverified privacy claim  (superseded, quoted below)
-
-- [ ] the serving binary's link graph is never asserted to contain no outbound
-      HTTP client. `TestTransportHasNoPlainDialFallback` covers the *fetch*
-      transport, which is a different claim.
-- [ ] this is the only row of §4.4 still named-but-unwritten
-
-- [ ] assert the serving binary's link graph contains no outbound HTTP client
-      beyond what the onion transport needs. Named in the spec, never written.
-- [ ] `TestTransportHasNoPlainDialFallback` covers the *fetch* transport only.
-
 ### 10. ~~SPEC §4.2 retention and §4.3 delta log~~ — DONE, see item 1 above
 
 - [x] `grep -rn 'retention|delta' internal/dump/` now finds `version.go`
@@ -418,11 +407,50 @@ Both say `kindred dump verify --in <dir>`. The real command is
 
 ### 5. M5 — budgets and parity (partial)
 
-- [ ] `make budget` cannot run on the repo host (it refuses without a corpus);
-      it should run against the thinkcentre mirror. The measurement was done
-      by hand instead: 0.06 s / 6.2 MB for the works search, 144 MB peak RSS
-      against a 220 MB cap.
-- [ ] `scripts/budget-pi.sh` is named in PLAN §7 and does not exist
+- [x] ~~`make budget` cannot run on the repo host~~ — DONE, and it was measuring
+      nothing
+
+`scripts/budget-remote.sh` builds here, ships the binary and the gate, copies the
+state db into a scratch directory, measures on thinkcentre, and brings the
+verdict back. `make budget` picks whichever path is possible.
+
+**The first version of it measured a server with no index and reported PASS.**
+
+The index is a **separate file**: `kindred.db` (217 MB of SQLite) and
+`kindred.db.graph` (28 MB, the mmapped CSR). The runner copied only the first, so
+the booted server had no index beside it — it started, answered every route, and
+peaked at **24 MiB**. `budget.sh` accepted the resulting 503 from tag-similarity
+as *"a correct answer for a host that has not been ingested"*, so the gate
+reported a pass at **47 MiB** against a 220 MiB cap.
+
+The real number, with the index present:
+
+    healthz (index mmapped at startup)        140 MiB
+    recommend, wide pool n=50                 144 MiB
+    ao3 works list                            159 MiB
+    tag similarity (graph-backed)             159 MiB
+    arena API (leaderboard + rank)            168 MiB   <- peak
+    ------------------------------------------------
+    168 MiB against a 220 MiB cap: 76% of budget, not 21%.
+
+140 MiB of that is the index being mapped in, which is why `healthz` is already
+the largest step. **SPEC §6.1 recorded `serve (full)` as 34 MB**, so the spec's
+own table has been claiming a pass for a path the product does not run. Corrected,
+with the per-route table and the reason.
+
+Both layers now fail rather than pass: a scratch directory with no `.graph`
+beside it is refused by the pre-flight (exit 2), and a 503 from tag-similarity is
+a failure inside `budget.sh` (exit 1). Both verified by removing the copy and by
+running `budget.sh` with no index at all.
+
+Why this matters more than a wrong number: a memory gate that measures a server
+*without its index* would pass a build that OOMs the moment the index is present,
+which is the build anyone actually runs.
+
+- [ ] `scripts/budget-pi.sh` is named in PLAN §7 and does not exist. `lite` mode's
+      26 MiB is measured and correct, so the Pi question is answerable without a
+      Pi — but the *host* is named, and a number from thinkcentre is not a number
+      from a Pi 3 with 512 MB.
 - [ ] arm64 run under `MemoryMax` on real hardware (SPEC §12)
 
 ### 5b. ~~M5: budgets and parity~~ — partially done; script still missing
@@ -439,13 +467,36 @@ API docs cannot use them in the browser.
 
 From `IDEA-AUDIT.md`, in order:
 
-- [ ] **surprise me** (#22) — one random well-tagged seed; engine is done
-- [ ] **CSV export** (#20) — `?format=` does not exist at all
-- [ ] **author page** (#25) — verify `/v1/users/{username}/works` exists first
-- [ ] **index version in the footer** (#85) — `/stats` does not render it either
+**Every claim below re-verified against the tree on 2026-10-05, not carried
+forward from the ideas list.** Two of the five were wrong about what exists.
+
+- [ ] **surprise me** (#22) — one random well-tagged seed. The engine is done;
+      this is a route plus a template. Genuinely small, and it is the one idea
+      whose whole value is that it needs no new logic.
+- [ ] **CSV export** (#20) — **confirmed absent.** No `?format=` anywhere; grep
+      for it turns up only `fmt.Sprintf` and one prose string.
+- [ ] **author page** (#25) — **confirmed absent.** The route table is 17
+      routes and none is a user route. `users` exists in the corpus and the
+      arena ranks readers, so there is per-reader data to show — but §4.2 drops
+      the user tables from snapshots, which is a different surface and does not
+      license this.
+- [x] ~~**index version in the footer** (#85)~~ — **the claim was wrong: the
+      footer already renders the index age**, in three states including "the age
+      of this mirror is not recorded", and `X-Kindred-Index-Version` is already on
+      every response. What genuinely does not exist is an index *identity*:
+      `store` writes no `index_version`, and `Base` carries `IndexBuiltAt` and
+      `CorpusBuiltAt` but no build id. Age answers "how stale", not "which
+      build". Folded into item 8 below rather than done.
 - [ ] **tag autocomplete** (#4) — *not* the "10 minutes, endpoint exists" the
-      ideas list claims. SPEC §1.1 forbids JS; a `<datalist>` needs static
-      options or JS, so this is a design decision before it is code
+      ideas list claims. SPEC §1.1 forbids JS and a `<datalist>` needs either
+      static options (useless at 100k+ tags) or JS (forbidden), so this is a
+      design decision before it is code: the honest no-JS answer is a
+      "browse popular tags" page, which may already exist.
+
+**Removed from this list:** `SPEC §4.4 row 3` was here twice, once as an open
+item and once as a superseded quote. Both are gone; the work is done and recorded
+at item 2. A superseded quote with live checkboxes in it is how a tracker
+reports work that does not exist.
 
 ### 8. Deliberately out of scope
 

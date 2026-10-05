@@ -17,6 +17,7 @@ CORPUS   ?= $(HOME)/kindling-data/ao3_metadata.db
 DB       ?= $(HOME)/.local/share/kindred/kindred.db
 PORT     ?= 8010
 MODE     ?= full
+DEPLOY_HOST ?= thinkcentre
 
 .PHONY: all
 all: build test
@@ -72,9 +73,40 @@ ingest: build
 
 # The budget gate. Boots the server, exercises the routes, reads VmHWM
 # from the kernel, and fails if the peak is over the cap for the mode.
+# `make budget` cannot run here: the 1.7 GB mirror lives on thinkcentre, and the
+# gate correctly refuses to run without it rather than measuring nothing and
+# calling it a pass. So it runs there instead -- build here, ship, measure, bring
+# the verdict back. See scripts/budget-remote.sh.
 .PHONY: budget
 budget: build
-	@./scripts/budget.sh $(BIN) $(CORPUS) $(DB) $(PORT) $(MODE)
+	@if [ -r "$(CORPUS)" ]; then \
+		./scripts/budget.sh $(BIN) $(CORPUS) $(DB) $(PORT) $(MODE); \
+	else \
+		echo "budget: $(CORPUS) is not readable here; measuring on $(DEPLOY_HOST)"; \
+		MODE=$(MODE) ./scripts/budget-remote.sh; \
+	fi
+
+# One command that runs every gate in this project, in the order they can fail
+# cheapest-first, and stops at the first failure.
+#
+# Every step below has been, at some point in this project's history, a gate
+# that reported success while measuring nothing: a stale bin/kindred, a
+# scratch state db with no index beside it, a six-day-old deployed binary. They
+# all run here so that a person does not have to remember the list.
+.PHONY: verify
+verify:
+	@echo "=== gofmt ==="; \
+	  out=$$(gofmt -l .); \
+	  if [ -n "$$out" ]; then echo "$$out"; exit 1; fi; echo "  clean"
+	@echo "=== go vet ==="; $(GO) vet ./...
+	@echo "=== go test ==="; $(GO) test ./... -count=1
+	@echo "=== spec (7 clauses) ==="; python3 docs/goal-check.py
+	@echo "=== docs ==="; \
+	  $(GO) build -o bin/kindred ./cmd/kindred && ./scripts/check-doc-commands.sh
+	@echo "=== deploy + both gates ==="; ./scripts/deploy.sh
+	@echo "=== memory budget ==="; $(MAKE) --no-print-directory budget
+	@echo
+	@echo "ALL GATES PASS"
 
 # The arena batch timer. Prints what would be installed; the install itself
 # needs root, so it is not done for you.

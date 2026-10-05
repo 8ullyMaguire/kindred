@@ -168,9 +168,28 @@ step "tag similarity (the graph-backed path)"
 body=$(curl -sS --max-time 20 "http://127.0.0.1:$PORT/api/v1/tags/363/similar?n=5" || echo '{}')
 code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "http://127.0.0.1:$PORT/api/v1/tags/363/similar" || echo 000)
 case "$code" in
-  # 503 means no index was loaded at all, which is a correct answer for a
-  # host that has not been ingested -- there is nothing to check.
-  503) : ;;
+  # 503 means NO INDEX WAS LOADED. It used to be accepted here as "a correct
+  # answer for a host that has not been ingested -- there is nothing to check",
+  # and that sentence is the whole bug: the gate was run against an ingested
+  # host, so the 503 meant the copy was missing kindred.db.graph, and the gate
+  # measured a server with no index at 24 MiB and reported PASS against a 220
+  # cap. The live service, which has the index, peaks at 152 MiB.
+  #
+  # A memory gate that measures a server without its index is not a lenient
+  # gate, it is a gate measuring the wrong thing: it would pass a build that
+  # OOMs the moment the index is present, which is the build anyone runs.
+  #
+  # So 503 is now a failure, and the message says which file is missing because
+  # "no index" is a symptom and "state.db.graph is not beside your state db" is
+  # the fix.
+  503)
+    echo "budget: FAIL tag similarity answered 503: no co-occurrence index loaded." >&2
+    echo "budget:   The index is a SEPARATE file, <state db>.graph, and a memory" >&2
+    echo "budget:   measurement without it describes a server the product does" >&2
+    echo "budget:   not run -- it peaks about six times lighter than the real one." >&2
+    echo "budget:   Check that \$SCRATCH/state.db.graph exists alongside the state db." >&2
+    exit 1
+    ;;
   # 200 means the graph IS loaded, so an empty list is now a wrong answer
   # rather than an absent one. This is the case the status check alone
   # let through.

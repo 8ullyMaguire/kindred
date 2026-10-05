@@ -473,7 +473,36 @@ places worth recording.
 | `ingest` (full) | **181.4 MB** | 220 MB | pass, 1m24s |
 | `embed` (full, dim=32) | **203.2 MB** | 220 MB | pass, 3m10s |
 | `serve` (lite) | **26 MB** | 60 MB | pass |
-| `serve` (full) | **34 MB** | 220 MB | pass |
+| `serve` (full, **with the index loaded**) | **168 MB** | 220 MB | pass, 76% of cap |
+
+**`serve (full)` was recorded as 34 MB and that number was wrong by 5×.**
+Re-measured 2026-10-05 with `scripts/budget-remote.sh`, the gate reported
+**47 MB** — which was also wrong, and in the same direction.
+
+The index is a separate file: `kindred.db` (217 MB of SQLite) and
+`kindred.db.graph` (28 MB, the mmapped CSR). The remote runner copied only the
+first, so the booted server had no index beside it: it started, answered every
+route, and peaked at 24 MB. `budget.sh` accepted the resulting **503** from
+tag-similarity as "a correct answer for a host that has not been ingested", so
+the gate passed while measuring a server six times lighter than the product.
+
+The same 503 is now a **failure**, and so is a scratch directory with no `.graph`
+beside it, because a memory gate that measures a server without its index is not
+a lenient gate — it would pass a build that OOMs the moment the index is present,
+which is the build anyone actually runs.
+
+| Route step | VmHWM |
+|---|---|
+| `healthz` (index mmapped at startup) | 140 MB |
+| `recommend`, wide pool n=50 | 144 MB |
+| `ao3 works` list | 159 MB |
+| tag similarity (graph-backed) | 159 MB |
+| arena API (leaderboard + rank) | 168 MB |
+
+140 MB of the peak is the index being mapped in, which is why the `healthz` step
+is already the largest. The remaining 28 MB is what twelve routes cost.
+
+`lite` mode's 26 MB is unaffected and still correct: it loads no graph.
 
 The embed step is a **separate command**, not a flag on ingest. The index
 build peaks at 181 MB — SQLite holding a 216 MB state database — and the
