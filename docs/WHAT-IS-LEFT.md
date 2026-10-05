@@ -1,7 +1,10 @@
 # kindred — what is left
 
-Written 2026-10-05, from measurement. Every claim below was checked against the
-tree or the running service, not against a plan.
+Written 2026-10-05, updated 2026-10-05 08:30 CEST after the CSV/Pi/null-tracking session. Every claim
+below was checked against the tree or the running service, not against a plan.
+Figures here are re-measured, not remembered: a row count this file once carried
+(`bookmarks` NULL for 112,890 of 112,935) went stale when the mirror file was
+rewritten, which is why the current table names what was measured and when.
 
 ## Where it stands
 
@@ -9,13 +12,27 @@ tree or the running service, not against a plan.
 |---|---|
 | Go | 21 packages, `go test ./... -count=1` exit 0, `go vet` clean, `gofmt` clean |
 | One command | `make verify` — gofmt, vet, test, spec, docs, deploy + both gates, memory budget |
-| Browser | 79 Playwright tests pass (69 pre-existing + 10 new for the filters) |
+| Browser | **87** Playwright tests pass, in 4 files (`npx playwright test --list` → `Total: 87`) |
 | Spec gate | `docs/goal-check.py` — all 7 clauses pass |
-| Deployment | live on thinkcentre `:8010`, binary sha256 matches the build, unit restarted 2026-10-05 01:02 |
-| Deploy gate | `scripts/check-deploy.sh` — **32 behaviour checks, all pass** |
+| Deployment | live on thinkcentre `:8010`, binary `eff27072d6607f19`, built from `f78e4af` = HEAD |
+| Deploy gate | `scripts/check-deploy.sh` — **38 behaviour checks, all pass** (was 32) |
 | Provenance gate | `scripts/check-provenance.sh` — **IN SYNC**, deployed binary built from HEAD |
-| Doc gate | `scripts/check-doc-commands.sh` — exit 0, 30 invocations, 3 exits (0 clean / 1 docs wrong / 2 stale binary) |
+| Doc gate | `scripts/check-doc-commands.sh` — exit 0, 3 exits (0 clean / 1 docs wrong / 2 stale binary) |
+| Doc gate, reverse | `scripts/check-cli-coverage.py` — **COVERED**: every command-specific flag is documented |
+| arm64 | cross-builds clean to a static aarch64 binary; **not measured** — no arm64 host (`budget-pi.sh` exits 2, SKIPPED) |
+| Runtime | `serve (full)`: peak RSS **167 MB** against a 220 MB cap, 112,935 works, heap 63 MiB |
 | Index age | **~130h, and correct.** The index was built 2026-09-29; the header reports the age of the *data*. A deploy does not rebuild an index — `kindred ingest` does. |
+
+**Three open items. Two are blocked on something that is not code.**
+
+| # | item | blocked on |
+|---|---|---|
+| 1 | **arm64 run under `MemoryMax`** | hardware — neither host is arm64 |
+| 2 | **author page** | a *decision* about pseudonym normalisation |
+| 3 | **tag autocomplete** | a design call — no `/tags` route exists |
+
+Plus three PLAN §7 files still unwritten: `docs/measurements.md`,
+`docs/parity/compare.py`, `docs/PARITY.md`.
 
 ## Done this session
 
@@ -264,27 +281,35 @@ against it passed unconditionally.
 |---|---|
 | `go build ./...` + `go vet` + `gofmt -l` | clean |
 | `go test ./...` | 21 packages, exit 0 |
-| Playwright | 69 passed |
+| Playwright | **87** passed, 4 files |
 | `python3 docs/goal-check.py` | all 7 clauses pass |
-| Real corpus | 112,935 works / 6,261 users / 180,677 interactions, on thinkcentre |
+| `scripts/check-cli-coverage.py` | **COVERED** — no flag is undocumented |
+| Real corpus | 112,935 works / 6,261 users, on thinkcentre; **0 NULLs** in any CSV column (re-measured — see below) |
 | Deployed instance | thinkcentre `127.0.0.1:8010`, systemd **system** unit `kindred.service` |
-| **Deployed binary** | **rebuilt from 11bcaed and deployed 2026-10-04, verified live** |
-| Deploy-drift gate | `scripts/check-deploy.sh`, 32 behaviour checks, mutation-checked |
-| Index age on the live instance | **127h — honest.** The index was built 2026-10-01, not by a stale binary |
+| **Deployed binary** | **`eff27072d6607f19`, built from `f78e4af` = HEAD**, verified live |
+| Deploy-drift gate | `scripts/check-deploy.sh`, **38** behaviour checks, mutation-checked |
+| Index age on the live instance | **136h24m — honest.** `X-Kindred-Index-Version: 2026-09-29`, so the header reports the age of the *data*, not the binary |
 
 ### Deploy: DONE, and the drift that caused it is now gated
 
 The live instance ran a Sep 29 binary for six days. It was up the whole time —
 no `X-Kindred-Index-Age`, no `Server: kindred`, no sort controls, no dark mode.
 Rebuilt, deployed with a pre-flight gate on a scratch port, and verified **on
-the live wire** rather than in the repo. `scripts/check-deploy.sh` now runs 32
-checks against any deployment URL and is mutation-checked by building the
-pre-headers revision and watching it fail 20 of 22.
+the live wire** rather than in the repo. `scripts/check-deploy.sh` now runs **38**
+checks against any deployment URL (32 when the `/surprise` and CSV sections
+landed this session) and is mutation-checked by building the pre-headers revision
+and watching it fail.
 
 One number on the live instance is worth not misreading: the index age reads
-**127 hours**. That is correct — the index was built 2026-10-01, and the header
+**136h24m** (`X-Kindred-Index-Version: 2026-09-29`). That is correct — the header
 reports the age of the *data*, not the age of the binary. A deploy does not
 rebuild the index; `kindred ingest` does.
+
+An earlier draft of this file said **127 hours, built 2026-10-01**, which was
+never consistent with the header's own version string. Two numbers for one fact,
+in one document, is how a stale claim survives review: each looked plausible and
+neither was checked against the thing it described. The header is now read
+directly rather than remembered.
 
 ---
 
@@ -400,7 +425,7 @@ then runs BOTH gates, failing if either does.
 
 ### 2. ~~A deploy-drift gate~~ — DONE
 
-- [x] `scripts/check-deploy.sh`, 32 behaviour checks, exits 1 on drift / 2 on unreachable
+- [x] `scripts/check-deploy.sh`, **38** behaviour checks (was 32), exits 1 on drift / 2 on unreachable
 - [x] mutation-checked by building `a95e224^` and serving it: **20 of 22 fail**
 
 Run it after every deploy:
@@ -552,7 +577,21 @@ scale: lite measures **26 MiB** on x86 against the 60 MiB cap, and the Pi unit's
 just above the figure would kill the service for a 10 MiB regression instead of
 reporting it.
 
-### 5b. ~~M5: budgets and parity~~ — partially done; script still missing
+### 5b. ~~M5: budgets and parity~~ — the script exists; the arm64 RUN does not
+
+`scripts/budget-pi.sh` and `deploy/kindred-pi.service` were both written this
+session (2026-10-05). What is missing is the measurement, because **neither host
+is arm64**. `budget-pi.sh` therefore prints only the cross-build result and
+exits **2**, which `make verify` records as SKIPPED rather than as a pass — in a
+log a skip and a green look identical, and this one must not be mistaken for the
+second.
+
+Still unwritten from PLAN §7: `docs/measurements.md`, `docs/parity/compare.py`,
+`docs/PARITY.md`.
+
+*(The rest of this section is the tag-page filter work, which is item 5's
+subject and not M5's — the two were merged by an earlier edit and the heading
+never matched the body.)*
 
 `complete=`, `rating=`, `lang=` work in `/api/v1/ao3/works`. The tag page
 accepts `?sort=` and `?words=` only. A reader who learns the filters from the
@@ -757,7 +796,7 @@ gofmt -l .                                   # must print nothing
 go build ./... && go vet ./...               # must be silent
 go test ./... -count=1                       # 21 packages, exit 0
 python3 docs/goal-check.py                   # all 7 clauses
-cd e2e && CI=1 npx playwright test           # 69 passed
+cd e2e && CI=1 npx playwright test           # 87 passed, 4 files
 ```
 
 And for anything added: **mutation-check it**. A gate that cannot be made to
