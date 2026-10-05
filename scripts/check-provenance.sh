@@ -21,15 +21,34 @@
 # script do both meant a missing half was silently a pass, so they are two
 # scripts and `deploy.sh` runs both.
 #
-# ## What it compares
+# ## ## What it compares, and why NOT the binary's sha256
 #
-# The live binary's sha256 against a fresh `-trimpath` build of ./cmd/kindred from
-# this tree, with the same flags deploy.sh uses. Same source + same flags +
-# same toolchain = same bytes, so equality is meaningful.
+# The obvious implementation -- hash the live binary, build this tree, compare
+# the hashes -- is what I wrote first, and it is wrong twice over.
 #
-# It does NOT compare against a recorded "last deployed sha", because a recorded
-# value is only as good as the moment it was written, and the whole problem here
-# was a value that was written once and then went stale silently.
+# 1. `go build` stamps the binary with the vcs revision. `go version -m` shows
+#    `v0.1.1-0.2026...-1892cd1f9173` on a clean tree and the same string with
+#    `+dirty` appended when anything is uncommitted. So committing changes the
+#    bytes without changing a line of source, and a working tree that is one
+#    commit behind produces a different binary from identical source.
+# 2. CGO_ENABLED has to match exactly. With cgo the binary is ~45 KB larger and
+#    can never equal the deployed one -- which made the gate report DRIFTED
+#    against a binary that genuinely was built from this tree. A gate that is
+#    always red gets ignored, which is worse than having no gate.
+#
+# So the comparison is between COMMITS, read out of the binary's own build
+# metadata, and the dirty flag is reported rather than ignored:
+#
+#   live says +dirty   -> the binary was built from a tree with uncommitted
+#                         changes, and this gate cannot tell you WHICH. That is
+#                         the finding: the deployed binary is not reproducible
+#                         from any commit.
+#   live says a commit -> that commit must be HEAD. If it is an ancestor, the
+#                         deployment is behind and the drift is named.
+#
+# A hash is still recorded, but as provenance evidence rather than as the
+# comparison: it says which bytes were installed, and it survives the source
+# moving on.
 set -uo pipefail
 
 REPO=${KINDRED_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
@@ -40,14 +59,27 @@ pass=0; fail=0
 ok()  { pass=$((pass+1)); echo "  PASS  $*"; }
 bad() { fail=$((fail+1)); echo "  FAIL  $*"; }
 
+REPO_HEAD=$(git -C "$REPO" log -1 --format=%H 2>/dev/null)
+REPO_SHORT=$(git -C "$REPO" log -1 --format=%h 2>/dev/null)
+DIRTY=$(git -C "$REPO" status --porcelain 2>/dev/null | grep -c . || true)
+
 echo "Provenance — is $REMOTE_BIN on $DEPLOY_HOST built from this tree?"
 echo "  repo    : $REPO"
 echo "  host    : $DEPLOY_HOST"
-echo "  head    : $(git -C "$REPO" log -1 --format='%h %s' 2>/dev/null)"
+echo "  head    : $REPO_SHORT ($REPO_HEAD)"
+if [ "$DIRTY" -gt 0 ]; then
+  echo "  tree    : $DIRTY uncommitted change(s)"
+fi
 echo
 
+# Read the build metadata out of the LIVE binary on the deploy host. No copying
+# a 15 MB binary over ssh just to read a string out of it.
+LIVE_META=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$DEPLOY_HOST" \
+  "go version -m $REMOTE_BIN 2>/dev/null | grep -E '^\\s*(path|mod|build)' || strings $REMOTE_BIN 2>/dev/null | grep -m1 'v0.1.1-0' || true" \
+  2>/dev/null)
 LIVE_SHA=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$DEPLOY_HOST" \
   "sha256sum $REMOTE_BIN 2>/dev/null | cut -d' ' -f1" 2>/dev/null)
+
 if [ -z "$LIVE_SHA" ]; then
   bad "could not read $REMOTE_BIN's sha256 over ssh (host reachable? sudo?)"
   echo
@@ -55,51 +87,71 @@ if [ -z "$LIVE_SHA" ]; then
   echo "UNREACHABLE: no provenance verdict. That is not a pass."
   exit 2
 fi
-echo "  live    : $LIVE_SHA"
+echo "  live sha: $LIVE_SHA"
 
-if ! command -v go >/dev/null 2>&1; then
-  bad "go is not on PATH here, so there is nothing to compare against"
-  exit 2
-fi
-
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
-echo "  building ./cmd/kindred with the deploy flags..."
-if ! CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
-     -o "$TMP/kindred" "$REPO/cmd/kindred" 2>"$TMP/err"; then
-  bad "build failed: $(head -3 "$TMP/err" | tr '\n' ' ')"
-  exit 2
-fi
-LOCAL_SHA=$(sha256sum "$TMP/kindred" | cut -d' ' -f1)
-LOCAL_SIZE=$(stat -c %s "$TMP/kindred")
-echo "  local   : $LOCAL_SHA ($LOCAL_SIZE bytes)"
-
+# The stamped revision looks like  v0.1.1-0.20261005003031-1892cd1f9173
+#                    or, on a dirty tree, the same with +dirty appended.
+# Keep the RAW stamp and the commit SEPARATE. An earlier version stripped the
+# "+dirty" suffix off first and then asked whether the result contained "+dirty",
+# so the evidence was deleted one line before it was read: a binary built from a
+# dirty tree was reported as "built from <commit>, which is BEHIND HEAD" when it
+# was in fact built from HEAD, just not reproducibly.
+LIVE_STAMP=$(printf '%s' "$LIVE_META" | grep -oE 'v0\.[0-9.]+-0\.[0-9]+-[0-9a-f]{7,}(\+dirty)?' | tail -1)
+LIVE_COMMIT=$(printf '%s' "$LIVE_STAMP" | sed 's/.*-//; s/+.*//')
+LIVE_DIRTY=no
+case "$LIVE_STAMP" in
+  *+dirty) LIVE_DIRTY=yes ;;
+esac
+# `go version -m` also states it outright as a build flag, which is a second
+# independent source. If either says dirty, treat it as dirty.
+case "$LIVE_META" in
+  *"vcs.modified=true"*) LIVE_DIRTY=yes ;;
+esac
+LIVE_REV=$LIVE_STAMP
+echo "  live rev: ${LIVE_REV:-<not stamped>}"
+echo "  dirty   : $LIVE_DIRTY"
 echo
-if [ "$LIVE_SHA" = "$LOCAL_SHA" ]; then
-  ok "deployed binary is byte-identical to a build of this tree"
+
+echo "Comparing:"
+if [ -z "$LIVE_REV" ]; then
+  bad "the deployed binary carries no readable build revision, so its origin"
+  echo "        cannot be established."
+  echo "-----------------------------------------------------------"
+  echo "UNVERIFIABLE: the deployed binary's origin cannot be read."
+  exit 2
+fi
+
+if [ "$LIVE_DIRTY" = "yes" ]; then
+  bad "the deployed binary was built from a DIRTY working tree"
+  echo "        +dirty means uncommitted source changes were compiled in. Those"
+  echo "        changes are in no commit, so the deployment cannot be reproduced,"
+  echo "        cannot be rolled back, and cannot be reviewed."
+  echo "        Commit the tree, then: bash scripts/deploy.sh"
+  echo "-----------------------------------------------------------"
+  echo "DRIFTED: the deployed binary was built from uncommitted source."
+  exit 1
+fi
+
+if [ "$LIVE_COMMIT" = "$REPO_SHORT" ]; then
+  ok "the deployed binary was built from $LIVE_COMMIT, which is HEAD"
+  echo "        sha $LIVE_SHA"
   echo
   echo "-----------------------------------------------------------"
-  echo "IN SYNC: the deployed binary matches this tree."
+  echo "IN SYNC: the deployed binary was built from this tree's HEAD."
+  echo "sha $LIVE_SHA"
   exit 0
 fi
 
-LIVE_SIZE=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$DEPLOY_HOST" \
-  "stat -c %s $REMOTE_BIN 2>/dev/null" 2>/dev/null)
-bad "deployed binary differs from a build of this tree"
-echo "        live sha : $LIVE_SHA  (${LIVE_SIZE:-?} bytes)"
-echo "        local sha: $LOCAL_SHA  ($LOCAL_SIZE bytes)"
-if [ -n "$LIVE_SIZE" ] && [ "$LIVE_SIZE" != "$LOCAL_SIZE" ]; then
-  echo "        The sizes differ too, so this is a different build and not a"
-  echo "        rebuild of the same source."
+if git -C "$REPO" merge-base --is-ancestor "$LIVE_COMMIT" "$REPO_HEAD" 2>/dev/null; then
+  bad "the deployed binary was built from $LIVE_COMMIT, which is BEHIND HEAD"
+  AHEAD=$(git -C "$REPO" rev-list --count "$LIVE_COMMIT..$REPO_HEAD" 2>/dev/null || echo '?')
+  echo "        $AHEAD commit(s) behind. Redeploy: bash scripts/deploy.sh"
 else
-  echo "        Same size, different bytes: source changed, or the build flags"
-  echo "        differ from the ones deploy.sh uses."
+  bad "the deployed binary was built from $LIVE_COMMIT, which is not in this"
+  echo "        repository's history at all -- a different tree, or a rewritten"
+  echo "        history. Do not assume which; check before redeploying."
 fi
 echo
-echo "        Behaviour can still pass here, and that is the point: the product"
-echo "        may be fine while the BUILD is not what anyone believes is deployed."
-echo "        Redeploy:  bash scripts/deploy.sh"
-echo
 echo "-----------------------------------------------------------"
-echo "DRIFTED: the deployed binary is not a build of this tree."
+echo "DRIFTED: the deployed binary is not a build of HEAD."
 exit 1
