@@ -60,6 +60,10 @@ ok()  { pass=$((pass+1)); echo "  PASS  $*"; }
 bad() { fail=$((fail+1)); echo "  FAIL  $*"; }
 
 REPO_HEAD=$(git -C "$REPO" log -1 --format=%H 2>/dev/null)
+# %h is 7 hex chars; the revision stamped into a binary by `go build` is 12.
+# Comparing them is false on a PERFECT deployment, which is how this gate
+# reported DRIFTED for a binary built from exactly HEAD. Compare FULL hashes and
+# abbreviate only for display.
 REPO_SHORT=$(git -C "$REPO" log -1 --format=%h 2>/dev/null)
 DIRTY=$(git -C "$REPO" status --porcelain 2>/dev/null | grep -c . || true)
 
@@ -97,6 +101,7 @@ echo "  live sha: $LIVE_SHA"
 # dirty tree was reported as "built from <commit>, which is BEHIND HEAD" when it
 # was in fact built from HEAD, just not reproducibly.
 LIVE_STAMP=$(printf '%s' "$LIVE_META" | grep -oE 'v0\.[0-9.]+-0\.[0-9]+-[0-9a-f]{7,}(\+dirty)?' | tail -1)
+# The stamp's commit is 12 hex chars. Keep it FULL and let git compare.
 LIVE_COMMIT=$(printf '%s' "$LIVE_STAMP" | sed 's/.*-//; s/+.*//')
 LIVE_DIRTY=no
 case "$LIVE_STAMP" in
@@ -132,8 +137,11 @@ if [ "$LIVE_DIRTY" = "yes" ]; then
   exit 1
 fi
 
-if [ "$LIVE_COMMIT" = "$REPO_SHORT" ]; then
-  ok "the deployed binary was built from $LIVE_COMMIT, which is HEAD"
+# Compare FULL hashes, then also accept the short form explicitly so a binary
+# stamped by a different git version is not called drift for a cosmetic reason.
+if [ "$LIVE_COMMIT" = "$REPO_HEAD" ] || \
+   [ "$LIVE_COMMIT" = "$(git -C "$REPO" rev-parse --short=12 "$REPO_HEAD" 2>/dev/null)" ]; then
+  ok "the deployed binary was built from ${LIVE_COMMIT}, which is HEAD"
   echo "        sha $LIVE_SHA"
   echo
   echo "-----------------------------------------------------------"
