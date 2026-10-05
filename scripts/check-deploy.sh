@@ -33,6 +33,13 @@
 set -uo pipefail
 
 TARGET="${1:-}"
+
+# REPO is the tree this gate compares against. Overridable so the gate can run
+# from a copy, at the cost of comparing against the wrong tree if someone points
+# it somewhere else -- which is why it defaults to the script's own location
+# rather than to $PWD.
+REPO=${KINDRED_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+
 VERBOSE="${2:-}"
 
 if [ -z "$TARGET" ]; then
@@ -380,5 +387,8 @@ if [ "$fail" -gt 0 ]; then
   echo "Rebuild, redeploy, re-run this gate."
   exit 1
 fi
-echo "IN SYNC: all $pass checks pass against $TARGET."
+echo "BEHAVIOUR IN SYNC: all $pass checks pass against $TARGET."
+echo "This says the PRODUCT matches. It does NOT say the BUILD does."
+echo "Run scripts/check-provenance.sh for that -- behaviour alone is the false"
+echo "clean sheet that let a six-day-old binary survive."
 exit 0
