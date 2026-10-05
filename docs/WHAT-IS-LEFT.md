@@ -469,6 +469,8 @@ From `IDEA-AUDIT.md`, in order:
 
 **Every claim below re-verified against the tree on 2026-10-05, not carried
 forward from the ideas list.** Two of the five were wrong about what exists.
+Checking them turned up two defects that had nothing to do with the ideas, both
+in the mode-list tests this item was never about (see item 8).
 
 - [ ] **surprise me** (#22) — one random well-tagged seed. The engine is done;
       this is a route plus a template. Genuinely small, and it is the one idea
@@ -497,6 +499,14 @@ forward from the ideas list.** Two of the five were wrong about what exists.
 item and once as a superseded quote. Both are gone; the work is done and recorded
 at item 2. A superseded quote with live checkboxes in it is how a tracker
 reports work that does not exist.
+
+**The next four are all one route plus one template, and none is started.** They
+are listed in the order the ideas file does, not by value. "Surprise me" is the
+only one whose value needs no new logic at all: the engine is done, so a random
+well-tagged seed is a `RANDOM()` over works with tags, and the corpus layer has
+no `RANDOM()` anywhere yet — so it is one new query, not one new page. Author page
+is the largest (17 routes, no user route exists, and there is per-reader data to
+show).
 
 ### 8. Deliberately out of scope
 
@@ -545,3 +555,54 @@ fail is decoration. Several in this repo have been:
 - `systemd` units are **system** units under `/etc/systemd/system/`, needing
   root; not `--user`.
 - two remotes: `forgejo` (14 behind) and `github` (12 behind). Push both.
+
+### 8. Two tests that could not fail — FOUND AND FIXED, recorded so the shape is recognisable
+
+Found while re-verifying item 7's claims, and in a file item 7 has nothing to do
+with. Both are the same defect, and the second is the subtler one.
+
+**`TestEveryWorkingModeHasARunnerMethod` iterated a map literal of `true`:**
+
+```go
+for m, hasMethod := range map[Mode]bool{
+    ModeFandomRanking: true, ModeTagNeighbours: true, ModeUnderrated: true,
+} {
+    if !hasMethod { t.Errorf("mode %q is in Modes() but has no Runner method", m) }
+}
+```
+
+Every value is `true`, so the failure branch is unreachable. It read like a guard
+on the mode list and guarded nothing.
+
+**`TestDeclaredButUnimplementedModesAreHonestAboutIt` compared a function with its
+own definition.** `IsImplemented(m)` is *defined* as membership in `Modes()`, so
+asserting the two agree cannot fail for any edit to `Modes()`.
+
+The survivor, found by mutation and not by reading:
+
+| mutation | before | after |
+|---|---|---|
+| `ModeUnderrated` dropped from `Modes()` | **13 tests PASS** | FAIL |
+| `TagNeighbours` dropped from `Modes()` | pass | FAIL |
+| a mode advertised with no method behind it | pass | FAIL |
+| a `Runner` method present but unadvertised | pass | FAIL |
+
+Nothing else in the tree noticed either, because the `Runner` method still exists
+and still works, so Go compiles. The consequence is a *user-visible* one: the
+CLI's `corpus-query: mode %q is declared but not implemented; working modes: %s`
+error silently stops naming a mode the product runs, so anyone who typos into
+that error, or reads `--help`, is told `underrated` does not exist.
+
+Both tests now check the invariant against the **runtime type** via `reflect`
+rather than against a hand-written list. The mode value is kebab-case
+(`fandom-ranking`) and the Go identifier CamelCase (`ModeFandomRanking`), and
+reflect cannot derive one from the other — so the mapping is one explicit map
+(`modeMethods`), not a mangling rule that would hold only by accident.
+
+**Also removed:** `internal/corpusquery/corpusquery_test.go.backup2`, tracked since
+`ecd3f3f`, and its `.bak` twin. Identical copies of a test file that no longer
+exists; `go test` ignores them because they are not `*.go`, so nothing complained.
+`.bak` was invisible because the **user's global** gitignore covers `*.bak` while
+`.backup2` was matched by nothing — which is why one was committed and the other
+was not. `.gitignore` now carries the rule, so the next harness run cannot do it
+again silently.
