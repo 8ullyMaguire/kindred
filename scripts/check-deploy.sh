@@ -356,6 +356,35 @@ else
   ok "?words= excludes rows ($short of $all)"
 fi
 
+# --- 4b. /surprise picks a real, seedable work ---------------------------
+# A status-only assertion would pass on the empty state, so this checks the
+# seed link AND the tag count, and then that two calls differ. The "random"
+# query was deterministic once already -- a random offset with no ordering
+# returned the same work every time -- and a 200 cannot see that.
+check "surprise offers a seed"      "$TARGET/surprise" 'seed=ao3_work(%3a|:)[0-9]+'
+check "surprise explains the pick"  "$TARGET/surprise" '[0-9]+ tags, so there is a neighbourhood'
+
+surprise_picks=""
+for _ in 1 2 3; do
+  surprise_picks="$surprise_picks $(curl -fsS --max-time 20 "$TARGET/surprise" 2>/dev/null \
+    | grep -oE 'seed=ao3_work(%3a|:)[0-9]+' | head -1)"
+done
+surprise_distinct=$(tr ' ' '\n' <<<"$surprise_picks" | grep -c . | tr -d ' ')
+surprise_unique=$(tr ' ' '\n' <<<"$surprise_picks" | grep . | sort -u | grep -c . | tr -d ' ')
+if [ "$surprise_distinct" -ge 2 ] && [ "$surprise_unique" -ge 2 ]; then
+  ok "surprise varies between calls ($surprise_unique of $surprise_distinct distinct)"
+else
+  bad "surprise returns the same work every call ($surprise_unique of $surprise_distinct distinct) — the selection is not random"
+fi
+
+# The seed the page offers must be a seed /recommend accepts: a link to a
+# ranking that 400s is worse than no link.
+surprise_seed=$(curl -fsS --max-time 20 "$TARGET/surprise" 2>/dev/null \
+  | grep -oE 'seed=ao3_work(%3a|:)[0-9]+' | head -1)
+if [ -n "$surprise_seed" ]; then
+  check "the surprise seed ranks" "$TARGET/recommend?$surprise_seed" 'data-testid="results"'
+fi
+
 # --- 5. the stylesheet --------------------------------------------------
 echo
 echo "stylesheet — dark mode, print, narrow screens, focus"
