@@ -1,482 +1,481 @@
-# kindred — what is left
-
-Written 2026-10-05, from measurement. Every claim below was checked against the
-tree or the running service, not against a plan.
-
-## Where it stands
-
-| | |
-|---|---|
-| Go | 21 packages, `go test ./... -count=1` exit 0, `go vet` clean, `gofmt` clean |
-| Browser | 79 Playwright tests pass (69 pre-existing + 10 new for the filters) |
-| Spec gate | `docs/goal-check.py` — all 7 clauses pass |
-| Deployment | live on thinkcentre `:8010`, binary sha256 matches the build, unit restarted 2026-10-05 01:02 |
-| Deploy gate | `scripts/check-deploy.sh` — **32 checks, all pass** |
-| Doc gate | `scripts/check-doc-commands.sh` — exit 0, 28 invocations checked |
-| Index age | **128h.** Correct: the index was built 2026-09-29, and the header reports the age of the *data*. A deploy does not rebuild an index — `kindred ingest` does. |
-
-## Done this session
-
-- **Deployed.** The instance had been serving a Sep 29 binary for six days.
-  Rebuilt, deployed behind a pre-flight gate on a scratch port, verified on the
-  wire.
-- **A deploy-drift gate**, because every other gate runs against the repo and a
-  deploy is the one step where the code under test and the code being run are
-  different objects. Mutation-checked twice by building the pre-headers
-  revision and serving it: 20 of 22 checks fail, then 28 of 32.
-- **SPEC §4.4 row 1 implemented**, as a source-level AST gate rather than the
-  `dump verify --no-clearnet` flag the spec named — this project has no
-  snapshot-serving code at all, so the guarantee is a property of the codebase.
-  Rows 3 and 4 are marked **NOT IMPLEMENTED** rather than left aspirational.
-- **`complete` / `rating` / `lang` on the tag page.** Three real bugs fixed
-  (see below), and the fixture that had been hiding one of them rewritten.
-- **PLAN and SPEC corrected** where they named commands and files that do not
-  exist — `dump verify --in` is `verify --dir`, and all eight filenames in
-  PLAN §6.1 are fiction.
-
-## Still open, in the order I would do it
-
-### 1. ~~SPEC §4.2 retention and §4.3 delta log~~ — DONE
-
-`internal/dump/version.go`. `ForceInterval = 20`, `RetentionVersions = 3`.
-`--version 0` now means next-after-newest (it always claimed to and always wrote
-`v0`), `--full` forces a full snapshot, `--keep N` sets retention, and a delta
-carries only the shards whose content hash changed.
-
-Measured on the real 1.7 GB mirror, `--stable-salt`, unchanged corpus:
-
-| | |
-|---|---|
-| v0 full | 6.7 MB, 256 shards |
-| v1 delta against v0 | **614 B, 0 shards** |
-
-**Three bugs, all of which passed every unit test**, because they were in the
-writer rather than the reader:
-
-1. **The delta never omitted anything.** The rule looked up
-   `base.Shards["shard-042.json"]`; the map is keyed by shard NUMBER (`"42"`).
-   Every lookup missed, so every shard was written. The snapshot verified, called
-   itself a delta, printed "carries 256 of 256, consider --stable-salt" to an
-   operator already using `--stable-salt`, and was the size of a full snapshot.
-   Caught by running eight real dumps. No test could have caught it: the unit
-   tests build manifests by hand and cannot see how `dump` writes one.
-2. **`base_version` was `omitempty`**, so a delta against **v0** published no
-   base at all — v0 being both "the first version" and "unset". A peer could not
-   tell those apart in the signed bytes. A full snapshot now names `-1`, which is
-   not a valid version, so "is this a delta" is decidable from the field alone.
-3. **The manifest never recorded its own snapshot version.** It existed only as
-   the directory name `v12`, which is not signed. `fetch` consequently reported
-   "fetched snapshot **v1**" for every peer, and `Manifest.Version` — the
-   *format* version — is 1 for every snapshot this build has ever written.
-
-`internal/dump/delta_integration_test.go` exists because of the first one: it runs
-the whole dump → delta → retain → verify cycle over a real corpus file, and it
-builds its fixture from the queries in `dump.go` rather than an invented schema
-(my first fixture used a `bookmarks` table and failed on "no such column", which
-is the correct outcome for a fixture that does not match the code it feeds).
-
-Retention refuses to delete a version a retained delta names as its base: such a
-delta verifies its own signature perfectly and then cannot be applied by anyone
-who did not already hold the base, so nothing downstream would ever report it.
-
-**Rejected: delta-on-delta chaining.** A delta whose base is a delta is refused
-and the next version is written full. Measured consequence: an unchanged corpus
-alternates full/delta.
-
-20 mutations over the retention/delta logic, all killed, all verdicts verified to
-build first — two were aimed at the wrong expression and two did not compile, so
-counting them would have been flattering the suite.
-
-### 2. ~~SPEC §4.4 row 3 — the `go list -deps` assertion~~ — DONE
-**Implemented 2026-10-05** (`internal/api/linkgraph_test.go`), mutation-verified
-3/3 by adding each forbidden import and confirming the assertion fires.
-
-The assertion the spec implies is FALSE as written. "The serving binary's
-request path links no HTTP client" cannot be tested, because `internal/api` *is*
-an HTTP server and imports `net/http` to do its job — a gate forbidding that
-would be forbidding the product. So the claim became REACHABILITY:
-
-| Path | may link `net/http` | must not link |
-|---|---|---|
-| `internal/api` (serves) | **yes** | `internal/onion`, `internal/crawl` |
-| `internal/signal` (computes) | no | any outbound client package |
-| `internal/onion` (fetches) | yes | a plain dialer |
-
-`internal/crawl` really does fetch `archiveofourown.org` over clearnet. It is a
-deliberate corpus-seeding tool, nothing imports it, and
-`TestCrawlStaysUnreachableFromTheServingBinary` pins that. A gate that scanned
-the whole repo for outbound clients would flag the crawler and be wrong — this
-assertion is what makes the gate honest rather than satisfiable by deleting it.
-
-A fourth test asserts the harness itself returns a non-empty dependency set with
-the stdlib flag correct, because a harness returning an empty set for every
-package would make the other three pass vacuously.
-
-
-### 3b. ~~The doc gate was reading a stale binary~~ — DONE
-
-`check-doc-commands.sh` asks "does the CLI know this command", so its verdict
-depends entirely on which binary it asks. `bin/kindred` was three days old, and
-the gate confidently reported `--full` and `--keep` as "flag provided but not
-defined" — flags the tree defines, and flags it had just been shown.
-
-It now exits 2 if any source file under `internal/` or `cmd/` is newer than the
-binary. Three exits, three meanings: 0 clean, 1 the documents are wrong, 2 the
-binary is stale and the verdict would describe a build that no longer exists.
-
-That is the third stale-binary-gives-a-confident-wrong-answer instance here,
-after a six-day-old deployed binary and a fixture corpus whose uniform ratings
-made every filter test pass unconditionally. The rule: **a gate whose verdict
-depends on a build artefact must check that the artefact is current.**
-
-### 3. ~~A CI check that every command in the docs parses~~ — DONE
-
-`scripts/check-doc-commands.sh`, exit 0 today. It found one more error than the
-two I already knew about:
-
-    SPEC 8.1   kindred ingest ao3  ->  kindred ingest --corpus <mirror>
-
-That one is the interesting shape. The wrong form does not error on the bad
-subcommand — the CLI reads `ingest`, treats `ao3` as a stray argument, and
-fails with `--corpus is required`, which is an error about something else. So
-the exit code says the command works, and only `kindred ingest -h` reveals
-that `ingest ao3` is not a thing. The verdict is now made that way.
-
-Five versions of the extractor failed before one worked, and three of them
-reported SUCCESS while matching nothing at all:
-
-  v1 matched prose anywhere    -> "43 of 43 broken", every one fake
-  v2 grep -oE with \s          -> 0 matches, reported CLEAN
-  v3 array read in a subshell  -> 0 matches, reported CLEAN
-  v4 `local` in a subshell     -> 0 matches, reported CLEAN
-  v5 `*"  "*` skip pattern     -> 21 real commands skipped, reported CLEAN
-
-All three clean-looking failures were found by reading the output rather than
-trusting it. The script now refuses to run if it cannot read the subcommand
-list from the binary, and runs a self-test against a fixture it writes itself
-before it says anything about the documents.
-
-### 4. Docs-command drift, root cause — lower priority than it looks
-
-The docs were written before the CLI settled, and the check in item 3 now
-catches the drift. What the check cannot do is notice a command that exists and
-is described wrongly — the verdict is "does the CLI know this invocation", not
-"does the CLI do what the prose says". Fixing that means either generating the
-command sections from `--help` or accepting the limit.
-
-- [ ] decide: generate the CLI reference from `--help`, or document the limit
-      in the script header (it is already stated there)
-
-## Three bugs worth remembering
-
-1. **`?rating=Z` returned Mature works.** The mapping had P/S/D/Z from other
-   systems' age-rating tables. Those letters mean different things elsewhere. A
-   filter that confidently answers a different question is worse than one that
-   admits ignorance.
-
-2. **"The tag has 0 works in total" whenever a filter matched nothing.** The
-   message read `Tag.WorkCount`, which is the *filtered* count. Found by a
-   Playwright assertion on the sentence — the Go test for that branch asserted
-   the filters were NAMED and never looked at the number beside them.
-
-3. **Work 1 listed twice, "of 29" over 28 distinct works.** `work_tags` is
-   keyed on `(work_id, tag_id, tag_type)`. `internal/api` had a private copy of
-   the corpus schema with the PK as `(work_id, tag_id)` — without `tag_type` —
-   so the copy could not express the bug and every test passed. That private
-   copy also lacked `users` and the `NOT NULL`s on `works.title`/`authors`,
-   which is why three fixtures were writing rows production would reject.
-
-## Two lessons about gates, from this session
-
-**A gate that cannot discriminate produces false failures, and a false failure
-gets a gate ignored.** The deploy gate twice reported working code as broken —
-once by counting rendered cards against a 100-row page limit, once by picking
-the "explicit" tag where all 42,796 works are Explicit so `rating=E` returns
-everything and `rating=G` returns nothing. Both are *correct*. It now requires
-a tag that discriminates on every axis it checks, and says which tag it chose.
-
-**A fixture can remove a bug from the tests while leaving it in the product.**
-The old `testcorpus` made every work "Explicit" with no language or completion,
-so `rating=G` and `lang=English` each returned either everything or nothing —
-and a missing filter produces the same two answers. Every filter test written
-against it passed unconditionally.
-
-## Current state
-
-| | |
-|---|---|
-| `go build ./...` + `go vet` + `gofmt -l` | clean |
-| `go test ./...` | 21 packages, exit 0 |
-| Playwright | 69 passed |
-| `python3 docs/goal-check.py` | all 7 clauses pass |
-| Real corpus | 112,935 works / 6,261 users / 180,677 interactions, on thinkcentre |
-| Deployed instance | thinkcentre `127.0.0.1:8010`, systemd **system** unit `kindred.service` |
-| **Deployed binary** | **rebuilt from 11bcaed and deployed 2026-10-04, verified live** |
-| Deploy-drift gate | `scripts/check-deploy.sh`, 22 checks, mutation-checked |
-| Index age on the live instance | **127h — honest.** The index was built 2026-10-01, not by a stale binary |
-
-### Deploy: DONE, and the drift that caused it is now gated
-
-The live instance ran a Sep 29 binary for six days. It was up the whole time —
-no `X-Kindred-Index-Age`, no `Server: kindred`, no sort controls, no dark mode.
-Rebuilt, deployed with a pre-flight gate on a scratch port, and verified **on
-the live wire** rather than in the repo. `scripts/check-deploy.sh` now runs 22
-checks against any deployment URL and is mutation-checked by building the
-pre-headers revision and watching it fail 20 of 22.
-
-One number on the live instance is worth not misreading: the index age reads
-**127 hours**. That is correct — the index was built 2026-10-01, and the header
-reports the age of the *data*, not the age of the binary. A deploy does not
-rebuild the index; `kindred ingest` does.
-
----
-
-## Milestone status (measured)
-
-| M | Scope | State |
-|---|---|---|
-| M0 | skeleton, memory gate | done |
-| M1 | corpus read, ingest, CSR index | done |
-| M2 | signals, embedder, ranking | done |
-| M3 | HTTP API, unofficial AO3 surface | done |
-| M4 | anonymised signed snapshots over Tor | **done, under different filenames than PLAN says** |
-| M5 | budgets, deploy, parity | **partial — see below** |
-| M6 | web UI | done |
-
-M4's files are `internal/dump/dump.go` and `internal/onion/onion.go`, not the
-six `anonymise.go`/`shard.go`/`manifest.go`/`sign.go`/`delta.go`/`retention.go`
-PLAN §6.1 names, and the subcommand is `dumpcmd.go`. The *obligations* are met
-— verified by running them, see below — but PLAN §6.1 is wrong and should be
-corrected so the next reader is not misled.
-
-### M4 verified for real, on the 1.7 GB mirror
-
-PLAN §6.4 says "verify with the tool, not by eye". That had never been run
-against real data. Now it has:
-
-```
-kindred dump --corpus <1.7GB mirror> --out /tmp/kdumps --k-anon 20
-  tag_affinity rows : 4065 (k=20, salt=per-dump)
-  shards            : 256
-  public key        : 0dc13c64...
-  real 19.1s / user 12.0s / sys 1.8s
-
-kindred verify --dir /tmp/kdumps/v0
-  manifest v1 verified (k=20, salt=per-dump, full=true)
-  256 shards verified by content hash          exit 0
-
-  same, after editing one float in shard-000.json:
-  BAD  shard-000.json: hash f19a2ff6... does not match manifest 97fa8320...
-  1 of 256 shards failed their hash             exit 1
-```
-
-The signature detects tampering and the exit code is non-zero. That is the
-property the whole snapshot feature rests on, and it had never been observed.
-
-Privacy, checked directly on the artefact because the named test does not
-exist: shards contain exactly two keys, `p` (a salted pseudonym) and `w` (tag
-weights). No user id, no username. 200 sampled usernames → 0 occurrences.
-4,103 users are above k=20 and pseudonymised; 2,158 are below and absent.
-
-**One scare worth recording.** A first leak-check reported 125 raw user ids in
-the dump. All 125 were *shard keys* — `"149":{"hash":…,"path":"shard-149.json"}`
-— colliding with user id 149 by coincidence, because shard numbers and user
-ids are both small integers. A bare `grep -E "\b$id\b"` cannot tell a leak from
-a collision. Anyone repeating this check must look at *where* the token
-appears before reporting it.
-
----
-
-## Open work, highest value first
-
-### 1. ~~Deploy the current binary~~ — DONE
-
-- [x] cross-compiled static binary (the deploy host has Go 1.22.2, the module
-      needs 1.27.1, so the build happens on the repo host)
-- [x] pre-flight gate on a scratch port with its own state db — the live WAL is
-      never opened by a second process
-- [x] atomic replace (`mv`, not `cp`), `systemctl restart kindred`
-- [x] verified on the live wire: headers present, sort reorders, dark mode
-      served, peak RSS 144 MB against the 220 MB cap
-
-### 2b. ~~The behaviour gate could not see the BUILD~~ — DONE
-
-`check-deploy.sh` makes 32 checks and all 32 are about behaviour. Behaviour
-cannot distinguish "correct" from "correct, from six days ago", which is exactly
-the failure it was written to catch — and on 2026-10-05 it reported
-"IN SYNC: all 32 checks pass" against a binary from 2026-09-29, while the tree
-carried the delta/retention work. It was green and wrong in the most expensive
-way available.
-
-`scripts/check-provenance.sh` compares the live binary's sha256 against a fresh
-`-trimpath` build of this tree. It caught the staleness above minutes after the
-behaviour gate called it in sync.
-
-Two scripts rather than a thirty-third check, because the two halves need
-different places: the behaviour gate needs `curl` against 127.0.0.1:8010 and the
-service binds localhost only, so it runs on the deploy host; provenance needs
-`go` and `.git`, which are here. An earlier attempt at one script meant a missing
-half was silently a pass.
-
-`scripts/deploy.sh` builds, ships, verifies the copy's sha on the far side,
-installs, restarts, waits for `/healthz` by observation rather than a sleep, and
-then runs BOTH gates, failing if either does.
-
-Proven in both directions: a real code change without a redeploy reports
-DRIFTED (exit 1); the unchanged tree reports IN SYNC (exit 0). A comment-only
-edit correctly reports IN SYNC, because it does not change the machine code —
-which is why the first attempt at this test, mutating a comment, "passed" and
-proved nothing.
-
-### 2. ~~A deploy-drift gate~~ — DONE
-
-- [x] `scripts/check-deploy.sh`, 22 checks, exits 1 on drift / 2 on unreachable
-- [x] mutation-checked by building `a95e224^` and serving it: **20 of 22 fail**
-
-Run it after every deploy:
-```bash
-scripts/check-deploy.sh http://127.0.0.1:8010
-```
-
-### 3. ~~SPEC §4.4's headline privacy assertion~~ — DONE, and rows 3/4 marked NOT IMPLEMENTED
-
-- [x] row 1 implemented as a source-level AST gate (a flag could not work:
-      nothing serves snapshots, so the guarantee is about the codebase)
-- [x] rows 3 and 4 marked **NOT IMPLEMENTED** in the spec rather than left
-      aspirational
-- [x] mutation-checked: a bare `net.Listen` fails, a bare `ServeSnapshot`
-      fails, a compliant `ServeSnapshot` guarded by `IsOnionHost` passes
-
-SPEC §4.4 states, as the mitigation for "peer learns my IP":
-
-> `kindred dump verify --no-clearnet` asserts no non-onion route is registered
-
-There is no `--no-clearnet` flag anywhere (`grep -rn 'no-clearnet' --include='*.go'`
-→ nothing) and no test. What exists is `TestTransportHasNoPlainDialFallback`
-in `internal/onion`, which is a different and weaker claim: it checks the
-transport has no clearnet dialer, not that the *service* registers only an
-onion listener. PLAN §6.2 names the stronger test as `TestNoClearnetRouteForDump`;
-it does not exist under that name or any other.
-
-- [x] decided: amend the spec to describe what is actually enforced, and
-      implement it as a source gate
-- [x] row 3 (`go list -deps` assertion that no HTTP client is linked into the
-      serving path) is still genuinely missing — see item 9 below
-
-### 9. ~~SPEC §4.4 row 3: the `go list -deps` assertion~~ — DONE, see item 2
-
-Every row of §4.4 is now either implemented or marked NOT IMPLEMENTED with the
-reason. Row 4 (the `KINDRED_DUMP_REQUIRE_ONION` check) remains unimplemented and
-remains **unreachable**: nothing serves snapshots, so there is no onion service
-to be silent about. Row 1's gate is written to constrain the serving path when
-it appears.
-
-The old text below is kept as the record of what was claimed:
-
-### 9. SPEC §4.4 row 3: the `go list -deps` assertion — was STILL OPEN, and the
-last unverified privacy claim  (superseded, quoted below)
-
-- [ ] the serving binary's link graph is never asserted to contain no outbound
-      HTTP client. `TestTransportHasNoPlainDialFallback` covers the *fetch*
-      transport, which is a different claim.
-- [ ] this is the only row of §4.4 still named-but-unwritten
-
-- [ ] assert the serving binary's link graph contains no outbound HTTP client
-      beyond what the onion transport needs. Named in the spec, never written.
-- [ ] `TestTransportHasNoPlainDialFallback` covers the *fetch* transport only.
-
-### 10. ~~SPEC §4.2 retention and §4.3 delta log~~ — DONE, see item 1 above
-
-- [x] `grep -rn 'retention|delta' internal/dump/` now finds `version.go`
-- [x] a delta against an unchanged corpus measures 614 B against a 6.7 MB base
-
-### 4. ~~`docs/PLAN.md` §6.4 documents commands that do not exist~~ — DONE
-
-Both say `kindred dump verify --in <dir>`. The real command is
-`kindred verify --dir <dir>` — `verify` is top-level, not a `dump` subcommand.
-
-- [x] both documents corrected, with the observed output pasted in
-- [x] PLAN §6.1's eight fictional filenames corrected, and the genuinely
-      missing delta/retention called out rather than left implied
-- [ ] **still worth doing:** a CI check that every `kindred …` command quoted
-      in the docs actually parses. Two documents in a row named a command that
-      does not exist, and the failure mode reads as "the feature is broken"
-
-### 5. M5 — budgets and parity (partial)
-
-- [ ] `make budget` cannot run on the repo host (it refuses without a corpus);
-      it should run against the thinkcentre mirror. The measurement was done
-      by hand instead: 0.06 s / 6.2 MB for the works search, 144 MB peak RSS
-      against a 220 MB cap.
-- [ ] `scripts/budget-pi.sh` is named in PLAN §7 and does not exist
-- [ ] arm64 run under `MemoryMax` on real hardware (SPEC §12)
-
-### 5b. ~~M5: budgets and parity~~ — partially done; script still missing
-
-`complete=`, `rating=`, `lang=` work in `/api/v1/ao3/works`. The tag page
-accepts `?sort=` and `?words=` only. A reader who learns the filters from the
-API docs cannot use them in the browser.
-
-- [ ] add `complete` / `rating` / `lang` selects to the tag page controls
-- [ ] the rating control must send the AO3 letters (`G`/`T`/`M`/`E`); the
-      mirror stores full names and the mapping is `ao3RatingNames`
-
-### 7. Unbuilt, genuinely worth it
-
-From `IDEA-AUDIT.md`, in order:
-
-- [ ] **surprise me** (#22) — one random well-tagged seed; engine is done
-- [ ] **CSV export** (#20) — `?format=` does not exist at all
-- [ ] **author page** (#25) — verify `/v1/users/{username}/works` exists first
-- [ ] **index version in the footer** (#85) — `/stats` does not render it either
-- [ ] **tag autocomplete** (#4) — *not* the "10 minutes, endpoint exists" the
-      ideas list claims. SPEC §1.1 forbids JS; a `<datalist>` needs static
-      options or JS, so this is a design decision before it is code
-
-### 8. Deliberately out of scope
-
-Every idea whose mechanism is JavaScript, because SPEC §1.1 forbids it and
-that is the project's selling point: **#11** j/k navigation, **#35/#51/#74/
-#92/#99** session-local state, **#88** PWA, **#79** browser extension.
-
-Not "hard", not "later" — impossible as written.
-
----
-
-## Gates that must pass before every commit
-
-```bash
-gofmt -l .                                   # must print nothing
-go build ./... && go vet ./...               # must be silent
-go test ./... -count=1                       # 21 packages, exit 0
-python3 docs/goal-check.py                   # all 7 clauses
-cd e2e && CI=1 npx playwright test           # 69 passed
-```
-
-And for anything added: **mutation-check it**. A gate that cannot be made to
-fail is decoration. Several in this repo have been:
-
-- `make budget` passing is impossible without a corpus, so it always "passes"
-  vacuously on the repo host
-- the tune-table CSS rule is asserted but its *rendering* is unreachable: the
-  e2e corpus (~40 works) produces no recommendations, so the `<details>` is
-  never emitted
-- two of eight CSS mutations initially "passed" because the edit never
-  applied — an anchor assert checked the input, not the result
-
----
-
-## Ops notes
-
-- **thinkcentre** holds the corpus at `/home/alvaro/kindling-data/ao3_metadata.db`
-  and the state DB at `/var/lib/kindred/kindred.db`. Service listens on
-  `127.0.0.1:8010` only — not reachable off-host, by design.
-- **The repo has no checkout on thinkcentre.** Verification there means
-  `scp` the binary plus a script file. Do not `scp` into a git working tree;
-  commit scripts instead, or an untracked file blocks the next fast-forward.
-- zsh on thinkcentre glob-expands pipes inside `ssh "..."`, so a `grep -cE`
-  with alternation returns "no matches found" and the next command reports 127
-  for something that never ran. **Put greps in a remote script file.**
-- `systemd` units are **system** units under `/etc/systemd/system/`, needing
-  root; not `--user`.
-- two remotes: `forgejo` (14 behind) and `github` (12 behind). Push both.
+package dump
+
+// Version allocation, delta manifests and retention — SPEC §4.3.
+//
+// ## Why this is a new file rather than more of dump.go
+//
+// §4.3 names three things that did not exist:
+//
+//   - "Deltas: a delta manifest lists only shards whose contents changed
+//     against its `base`, so a peer pulls a few hundred KB per day instead of
+//     600 MB."
+//   - "A full snapshot every 20 versions."
+//   - "Retention: the three most recent versions, then delete."
+//
+// `dump --version 0` advertised "next after the newest on disk" and wrote to
+// `v0`. So there was no notion of a next version at all, which is why nothing
+// downstream could exist: a delta needs a base to differ from, and retention
+// needs a version to count.
+//
+// ## The three claims, and what each is worth
+//
+// **Retention is easy to state and easy to get wrong.** "Keep 3" is one line of
+// sort-and-slice. Getting it wrong is what matters: deleting the wrong
+// directory destroys a snapshot someone is still serving, and the delta log
+// makes that worse, because a delta against a pruned base is unreconstructable.
+// So Prune refuses to touch a version that is the base of a retained delta, and
+// TestPruneRefusesToRemoveABaseStillReferenced is the gate for it.
+//
+// **Deltas are only useful if they are small, and "small" is a property of the
+// data, not of the code.** A shard is included in a delta when its content hash
+// changed against the base. With a per-dump salt the pseudonym changes on every
+// dump, so EVERY shard changes and the delta is the full snapshot. That is not
+// a bug, it is what `--stable-salt` is for, and the delta code reports the
+// resulting size rather than claiming a saving it did not achieve.
+//
+// **A full snapshot every 20 versions is a floor, not a ceiling.** ForceFull is
+// what makes the claim true regardless of how few shards moved, and
+// ForceInterval is the constant the spec's "20" lives in so a change to the
+// policy is one edit plus one test rather than a search.
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// ForceInterval is how many versions pass between full snapshots — SPEC §4.3's
+// "a full snapshot every 20 versions".
+//
+// Exported because the number is a POLICY, and a policy buried as a literal in
+// the middle of a function is a policy nobody can find to argue with.
+const ForceInterval = 20
+
+// RetentionVersions is how many versions survive a Prune — SPEC §4.3's "the
+// three most recent versions, then delete".
+//
+// Three is also what makes a delta chain reconstructable: a peer holding v_n
+// can walk back through at most ForceInterval-1 deltas to a full base, so as
+// long as RetentionVersions <= ForceInterval the oldest retained version is
+// always a full one. If you raise Retention below ForceInterval the peer is
+// fine; if you ever raise ForceInterval without raising Retention, a peer that
+// has fallen behind can find its base gone. NewForceFull checks that
+// relationship rather than trusting a reader to notice.
+const RetentionVersions = 3
+
+// VersionDirName is the directory name for a version: "v12".
+func VersionDirName(v int) string { return fmt.Sprintf("v%d", v) }
+
+// ParseVersionDir parses "v12" into 12. Returns ok=false for anything else, so a
+// stray directory in the snapshot root is ignored rather than crashing a dump.
+func ParseVersionDir(name string) (int, bool) {
+	if !strings.HasPrefix(name, "v") {
+		return 0, false
+	}
+	n, err := strconv.Atoi(name[1:])
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// ListVersions returns the version numbers present in dir, ascending.
+//
+// It reads the DIRECTORY rather than trusting a manifest or an index file,
+// because the directory is what a peer sees over the wire and what an operator
+// sees with `ls`. A versions list that disagreed with the filesystem would be a
+// second source of truth, and retention acting on it would delete the wrong
+// thing.
+//
+// A v0 directory is a real version and is included. v0 is what `dump
+// --version 0` used to write unconditionally, so treating it as "no version"
+// would strand a snapshot a peer is already fetching.
+func ListVersions(dir string) ([]int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if v, ok := ParseVersionDir(e.Name()); ok {
+			out = append(out, v)
+		}
+	}
+	sort.Ints(out)
+	return out, nil
+}
+
+// NewestVersion returns the highest version on disk, and ok=false when there is
+// none. This is what `--version 0` means.
+func NewestVersion(dir string) (int, bool, error) {
+	vs, err := ListVersions(dir)
+	if err != nil || len(vs) == 0 {
+		return 0, false, err
+	}
+	return vs[len(vs)-1], true, nil
+}
+
+// AllocateVersion resolves a requested version to the one to write.
+//
+// requested == 0 means "the next after the newest on disk", which is what the
+// flag has always claimed and never did. Explicit positive versions are taken
+// at face value, EXCEPT that they are rejected if the directory already exists:
+// overwriting a version in place would silently invalidate a delta chain that
+// names it as a base, and a manifest that hashes shards which are then rewritten
+// is a snapshot that fails verification for reasons nobody will connect to this
+// decision.
+//
+// The error says what to do instead, because the operator's next move after
+// EEXIST is usually "use the next version". An earlier version also suggested
+// "--force-version to overwrite deliberately", and there is no such flag: an
+// error naming a flag the binary does not have sends the operator to try it, and
+// "flag provided but not defined" reads as a typo rather than as the tool having
+// lied about itself.
+func AllocateVersion(dir string, requested int) (int, error) {
+	vs, err := ListVersions(dir)
+	if err != nil {
+		return 0, err
+	}
+	if requested < 0 {
+		return 0, fmt.Errorf("--version %d is negative; versions start at 0", requested)
+	}
+	if requested == 0 && len(vs) > 0 {
+		return vs[len(vs)-1] + 1, nil
+	}
+	if requested > 0 {
+		if target := filepath.Join(dir, VersionDirName(requested)); dirExists(target) {
+			return 0, fmt.Errorf("--version %d already exists at %s; refusing to "+
+				"overwrite it, because a delta may name it as its base and "+
+				"rewriting it would break that chain. Use --version 0 for the next one.",
+				requested, target)
+		}
+	}
+	return requested, nil
+}
+
+func dirExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
+}
+
+// NewForceFull reports whether version v must be a full snapshot.
+//
+// True at v == 0, and every ForceInterval versions after. The modulo is on the
+// version NUMBER, not on the count of versions present, so a snapshot directory
+// that was pruned or copied still produces the same schedule.
+func NewForceFull(v int) bool {
+	if v <= 0 {
+		return true
+	}
+	return v%ForceInterval == 0
+}
+
+// DeltaAgainst decides whether version v should be a delta against base, and
+// returns the shard names the delta must carry.
+//
+// The rule is deliberately dumb: carry a shard if its hash differs from the
+// base's. There is no cleverness about which shards "should" have changed,
+// because a shard's contents depend on the corpus at dump time and predicting
+// that is how a delta silently omits a row a peer needed.
+//
+// Returns ok=false with an explanation when the decision cannot be made:
+//   - no base, or v is below the base: the caller must write a full snapshot
+//   - the base is not a full snapshot: a delta on a delta chains, and §4.3 says
+//     deltas are listed against a BASE. Chaining is not forbidden, but it means
+//     the "few hundred KB" claim depends on every link in the chain, so it is
+//     refused here rather than discovered as an unusable peer.
+func DeltaAgainst(base *Manifest, v int) (names []string, ok bool, reason string) {
+	if base == nil {
+		return nil, false, "no base manifest given"
+	}
+	if base.Full && base.BaseVersion >= 0 {
+		// A full snapshot must name -1. It was applied to every base at first,
+		// which refused every delta whose base was not v0 and printed "v3 claims
+		// base v2 but is marked full" about a delta that was fine.
+		return nil, false, fmt.Sprintf("v%d is marked full but names base v%d; "+
+			"a full snapshot must name -1", base.SnapshotVersion, base.BaseVersion)
+	}
+	if !base.Full && base.BaseVersion < 0 {
+		return nil, false, fmt.Sprintf("v%d is a delta but names no base; "+
+			"a delta must name one", base.SnapshotVersion)
+	}
+	if !base.Full {
+		return nil, false, fmt.Sprintf("base v%d is itself a delta; a delta on a "+
+			"delta chains, and §4.3 lists deltas against a base", base.SnapshotVersion)
+	}
+	// SnapshotVersion, NOT Version. Version is the manifest format version and is
+	// 1 for every snapshot ever written, so `v <= base.Version` reads as
+	// `v <= 1` and refuses every delta past v1 — which is every delta that
+	// matters. The test for this caught it; the comment on Manifest does not
+	// prevent it.
+	if v <= base.SnapshotVersion {
+		return nil, false, fmt.Sprintf("version %d is not newer than its base v%d",
+			v, base.SnapshotVersion)
+	}
+	names = make([]string, 0, len(base.Shards))
+	for name := range base.Shards {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, true, ""
+}
+
+// ChangedShards returns the subset of current whose content hash differs from
+// the same shard in base, plus the shards that are in current and not in base
+// at all (new buckets) and, symmetrically, the ones in base and not in current
+// (deleted buckets).
+//
+// The deleted case is the one that is easy to omit and impossible to recover
+// from: a peer applying only the changed and new shards keeps rows for a bucket
+// that no longer exists, and nothing downstream will ever report the
+// discrepancy because the peer's own copy is self-consistent.
+//
+// Returns the three groups separately so the caller can report the accounting
+// rather than just the union.
+func ChangedShards(base, current map[string]Shard) (changed, added, removed []string) {
+	for name, cur := range current {
+		prev, ok := base[name]
+		if !ok {
+			added = append(added, name)
+			continue
+		}
+		if prev.Hash != cur.Hash {
+			changed = append(changed, name)
+		}
+	}
+	for name := range base {
+		if _, ok := current[name]; !ok {
+			removed = append(removed, name)
+		}
+	}
+	sort.Strings(changed)
+	sort.Strings(added)
+	sort.Strings(removed)
+	return changed, added, removed
+}
+
+// Prune deletes every version beyond the newest RetentionVersions.
+//
+// It refuses to delete a version that is the BaseVersion of a RETAINED version.
+// That is the whole reason this function is more than a sort-and-slice: a delta
+// whose base is gone cannot be applied by anyone who did not already hold the
+// base, so pruning the base turns a retained delta into a file that verifies
+// its own signature and then cannot be used.
+//
+// Returned rather than logged: a caller that ignores the return value is
+// choosing to leave stale directories on disk, which is recoverable, but it
+// should be a choice.
+func Prune(dir string, keep int) (removed []int, err error) {
+	if keep < 1 {
+		return nil, errors.New("retention must keep at least one version; " +
+			"keeping zero would delete the only snapshot")
+	}
+	vs, err := ListVersions(dir)
+	if err != nil {
+		return nil, err
+	}
+	if len(vs) <= keep {
+		return nil, nil
+	}
+	survivors := vs[len(vs)-keep:]
+	protected, err := protectedBases(dir, survivors)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, v := range vs[:len(vs)-keep] {
+		if protected[v] {
+			// Kept despite being past the retention window, because a
+			// retained delta names it. Says so on stdout rather than silently
+			// leaving more versions than asked for, since "retention is 3" and
+			// "four directories exist" should not be a surprise.
+			fmt.Printf("  retention: keeping v%d — a retained delta has it as its base\n", v)
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, VersionDirName(v))); err != nil {
+			return removed, fmt.Errorf("prune v%d: %w", v, err)
+		}
+		removed = append(removed, v)
+	}
+	return removed, nil
+}
+
+// protectedBases returns the set of versions named as the base of any of the
+// given survivors.
+//
+// It reads manifest.canonical — the exact bytes Verify reads — rather than
+// trusting the directory name or the pretty manifest.json. Verify hashes what
+// it signs, so this must look at what it signs too, or retention could protect
+// a base computed from a different view of the manifest than the one a peer
+// will apply.
+//
+// Only a DELTA has a base, so `!Full` is the discriminator. BaseVersion 0 is
+// genuinely ambiguous — "the first version" and "unset" are the same integer,
+// and `omitempty` drops it — but a full snapshot has no base to protect
+// whatever its BaseVersion field happens to say, so the ambiguity is confined
+// to the case that does not need resolving.
+//
+// An unreadable manifest protects the version ITSELF and nothing else. That is
+// deliberate: we cannot know what it depends on, so retain rather than guess.
+// The cost is one extra directory; the cost of guessing wrong is a delta whose
+// base is gone, which verifies its own signature perfectly and then cannot be
+// applied by anyone who did not already have the base.
+func protectedBases(dir string, survivors []int) (map[int]bool, error) {
+	out := map[int]bool{}
+	for _, v := range survivors {
+		raw, err := os.ReadFile(filepath.Join(dir, VersionDirName(v), "manifest.canonical"))
+		if err != nil {
+			out[v] = true
+			continue
+		}
+		var m Manifest
+		if err := json.Unmarshal(raw, &m); err != nil {
+			out[v] = true
+			continue
+		}
+		// BaseVersion >= 0 means a base is named. -1 means none. This no
+		// longer depends on Full, which is the point: the earlier version keyed
+		// on Full and a mutation swapping one for the other survived, because
+		// every manifest the suite built had Full and BaseVersion agreeing.
+		if m.BaseVersion >= 0 {
+			out[m.BaseVersion] = true
+		}
+	}
+	return out, nil
+}
+
+// IsFullSnapshot decides whether version v should be a full snapshot, and
+// reports which base a delta would take (0 for a full snapshot).
+//
+// Four reasons produce a full snapshot, and the reason is returned because "why
+// is this full" is the question an operator asks when every third dump is one:
+//
+//  1. v == 0, or v lands on the ForceInterval boundary -- §4.3's schedule
+//  2. no previous version exists
+//  3. the previous version is itself a delta (chaining is refused)
+//  4. --full was passed
+//
+// The interval is a floor, not the only trigger: with a per-dump salt EVERY
+// shard changes and every dump would be a full snapshot anyway, which is correct
+// but worth SAYING rather than leaving the operator to infer it from the size.
+func IsFullSnapshot(dir string, v int, force bool) (full bool, baseVer int, reason string) {
+	if force {
+		return true, 0, "--full was requested"
+	}
+	if v == 0 {
+		return true, 0, "the first snapshot is full by definition"
+	}
+	if NewForceFull(v) {
+		return true, 0, fmt.Sprintf("version %d is on the every-%d full-snapshot boundary",
+			v, ForceInterval)
+	}
+	newest, ok, err := NewestVersion(dir)
+	if err != nil {
+		return true, 0, fmt.Sprintf("cannot read %s: %v", dir, err)
+	}
+	if !ok || newest < v-1 {
+		return true, 0, fmt.Sprintf("the previous version (v%d) is not on disk, so there is "+
+			"nothing to be a delta against", newest)
+	}
+	baseDir := filepath.Join(dir, VersionDirName(v-1))
+	raw, err := os.ReadFile(filepath.Join(baseDir, "manifest.canonical"))
+	if err != nil {
+		return true, 0, fmt.Sprintf("cannot read v%d's manifest: %v", v-1, err)
+	}
+	var base Manifest
+	if err := json.Unmarshal(raw, &base); err != nil {
+		return true, 0, fmt.Sprintf("v%d's manifest does not parse: %v", v-1, err)
+	}
+	if _, ok, reason := DeltaAgainst(&base, v); !ok {
+		return true, 0, reason
+	}
+	return false, v - 1, fmt.Sprintf("v%d is a delta against v%d", v, v-1)
+}
+
+// DeltaAccounting summarises what a delta would carry, so the caller can report
+// the saving rather than assert one.
+//
+// A delta that carries every shard saves nothing, and saying "delta" in the log
+// while shipping the full snapshot is how a peer ends up pulling 600 MB and
+// concluding the feature is broken. The size fields come from the shards on disk,
+// so this needs the base directory and the directory being written.
+// DeltaAccounting reports how many shards a delta actually carries, counted from
+// the NEW manifest rather than the base's.
+//
+// Counting from the base was the first version and it was wrong twice over: an
+// unchanged shard is deliberately ABSENT from the new directory, so reading it
+// failed and each failure counted as "carried". That reported "256 of 256, every
+// shard changed" for a delta carrying none of them, and printed the "consider
+// --stable-salt" note to an operator already using --stable-salt.
+func DeltaAccounting(base, m *Manifest) (carried, baseTotal int) {
+	return len(m.Shards), len(base.Shards)
+}
+
+// DeltaBytesOnDisk sums the actual file sizes for the shards a delta carries.
+// Kept separate from DeltaAccounting because the byte figure has to come from
+// the filesystem -- the manifest does not record sizes, and adding a size field
+// to a signed manifest to serve a log line would be a poor trade.
+func DeltaBytesOnDisk(dir string, m *Manifest) int64 {
+	var n int64
+	for _, sh := range m.Shards {
+		if sh.Removed || sh.Path == "" {
+			continue
+		}
+		st, err := os.Stat(filepath.Join(dir, sh.Path))
+		if err != nil {
+			continue
+		}
+		n += st.Size()
+	}
+	return n
+}
+
+// ShardFileName is the one place a shard key becomes a file name. It exists
+// because that mapping was written three times by hand and got it wrong twice:
+// once as "shard-%03d.json" against a key of "42", and once as key+".json",
+// which is "42.json".
+func ShardFileName(key string) string {
+	n, err := strconv.Atoi(key)
+	if err != nil {
+		return key
+	}
+	return fmt.Sprintf("shard-%03d.json", n)
+}
+
+// LoadManifest reads a version's manifest WITHOUT verifying its signature.
+//
+// Deliberately separate from Verify: retention and delta selection run inside
+// `dump`, before the new manifest has been signed, and they must be able to read
+// the previous version's own claims. Verify is for a peer deciding whether to
+// trust bytes from elsewhere.
+//
+// It reads manifest.canonical, the exact bytes that were signed, rather than
+// manifest.json. The pretty form is a rendering; the canonical form is the
+// claim, and a reader that consults the rendering is reading a file no signature
+// covers.
+func LoadManifest(dir string) (*Manifest, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.canonical"))
+	if err != nil {
+		return nil, err
+	}
+	var m Manifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("parse manifest in %s: %w", dir, err)
+	}
+	if m.Version != ManifestVersion {
+		return nil, fmt.Errorf("manifest format version %d is not supported (want %d)",
+			m.Version, ManifestVersion)
+	}
+	return &m, nil
+}
