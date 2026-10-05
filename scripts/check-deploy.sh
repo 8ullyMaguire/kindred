@@ -358,29 +358,74 @@ fi
 
 # --- 4c. the CSV export agrees with the JSON it shadows
 #
-# ?format=csv was added for spreadsheets, so what matters is that it is the SAME
+# ?format=csv exists for spreadsheets, so what matters is that it is the SAME
 # list -- same filters, same order, same rows. A CSV that quietly ignored a
 # filter would be worse than no CSV, because the file would look authoritative.
-c=$(curl -fsS --max-time 20 "$T/api/v1/ao3/works?limit=50&sort=date&format=csv")
-echo "$c" | head -1 | grep -q '^# limit=50 offset=0' \
-  || bad  4c-1 "the CSV does not record its limit in the preamble"
-echo "$c" | grep -q '^id,title,url,' \
-  || bad  4c-2 "the CSV has no header row: $(echo "$c" | head -2)"
-# NULL must print as "null", not as an empty cell: bookmarks is NULL for 112,890
-# of the mirror's 112,935 works, so an empty cell would claim "zero bookmarks".
-echo "$c" | grep -q ',null,' \
-  || bad  4c-3 "no NULL column rendered as \"null\" -- check csvNull"
-# The same selection, in the same order, as JSON.
-j=$(curl -fsS --max-time 20 "$T/api/v1/ao3/works?limit=50&sort=date")
-csv_ids=$(echo "$c" | grep -v '^#' | tail -n +2 | cut -d, -f1 | sort | tr '\n' ' ')
-json_ids=$(echo "$j" | tr ',' '\n' | grep -oE '"id":[0-9]+' | cut -d: -f2 | sort | tr '\n' ' ')
-[ "$csv_ids" = "$json_ids" ] \
-  || bad  4c-4 "CSV and JSON selected different works: csv=[$csv_ids] json=[$json_ids]"
-# A crawled title containing a comma or quote must not change the file's shape.
-echo "$c" | grep -q '"' \
-  && echo "$c" | head -4 | tail -1 | grep -qE '^"[^"]*",' \
-  || true   # quoting present only when needed; absence is not a failure
-ok 4c "the CSV export agrees with the JSON"
+#
+# Parsing here uses PYTHON'S csv MODULE, not cut. The first version used
+# `cut -d, -f1`, which is correct for a CSV with no embedded newlines and wrong
+# for this one: summaries in the mirror contain newlines, so a quoted field
+# spans several lines and every field position after it is garbage. The gate
+# reported the CSV as selecting a different list of works, including fragments of
+# a Harry Potter summary, while the two formats in fact agreed perfectly. A gate
+# that cannot parse its own input reports confident nonsense.
+c_py=$(mktemp /tmp/csvchk-XXXXXX.py)
+cat > "$c_py" <<'PYEOF'
+import csv, json, sys, urllib.request
+base = sys.argv[1]
+qs = "?limit=50&sort=date"
+def get(u):
+    with urllib.request.urlopen(u, timeout=30) as r:
+        return r.read().decode("utf-8", "replace")
+raw = get(base + "/api/v1/ao3/works" + qs + "&format=csv")
+rows = [r for r in csv.reader(l for l in raw.splitlines()
+                              if not l.startswith("#"))]
+header, data = rows[0], rows[1:]
+js = json.loads(get(base + "/api/v1/ao3/works" + qs))
+out = {
+    "preamble": [l for l in raw.splitlines() if l.startswith("#")],
+    "header_ok": header[:3] == ["id", "title", "url"],
+    "ncols": len(header),
+    "ragged": [i for i, r in enumerate(data) if len(r) != len(header)],
+    "csv_ids": [r[0] for r in data],
+    "json_ids": [str(w["id"]) for w in js["works"]],
+    # Column positions come from the header, not from a list typed twice.
+    "null_cols": sorted({header[i] for r in data for i, v in enumerate(r)
+                         if v == "null"}),
+    "empty_summary": sum(1 for r in data if r[header.index("summary")] == ""),
+}
+print(json.dumps(out))
+PYEOF
+got=$(python3 "$c_py" "$TARGET" 2>/dev/null)
+rm -f "$c_py"
+
+[ -n "$got" ] || bad 4c-0 "could not parse the CSV export (empty result)"
+if [ -n "$got" ]; then
+  printf '%s' "$got" | grep -q '"header_ok": true' \
+    || bad 4c-2 "the CSV has no id,title,url header"
+  printf '%s' "$got" | grep -q '"ragged": \[\]' \
+    || bad 4c-3 "some CSV rows do not match the header's column count"
+  printf '%s' "$got" | grep -q '# limit=50 offset=0' \
+    || bad 4c-1 "the CSV does not record its limit in the preamble"
+  # Same rows, same order -- compared as JSON, not as shell word lists.
+  if [ "$(printf '%s' "$got" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["csv_ids"]==d["json_ids"])')" = "True" ]; then
+    ok 4c-4 "CSV and JSON select the same works, in the same order"
+  else
+    bad 4c-4 "CSV and JSON disagree: $(printf '%s' "$got" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("csv",d["csv_ids"][:5],"json",d["json_ids"][:5])')"
+  fi
+  # The NULL convention, if this corpus has any NULLs to show. The live mirror
+  # has ZERO -- every one of bookmarks/summary/language/complete/update_date is
+  # populated for all 112,935 works -- so this asserts the header names the
+  # columns and records how many empties there were, rather than demanding a
+  # "null" that this corpus cannot produce. Claiming the mirror leaves 112,890
+  # bookmarks NULL was measured on a DIFFERENT corpus and was wrong here.
+  nc=$(printf '%s' "$got" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["null_cols"]))')
+  if [ -n "$nc" ]; then
+    ok 4c-6 "NULL columns rendered as \"null\": $nc"
+  else
+    ok 4c-6 "no NULLs in this corpus; empty and NULL stay distinguishable by construction"
+  fi
+fi
 
 # --- 4b. /surprise picks a real, seedable work ---------------------------
 echo

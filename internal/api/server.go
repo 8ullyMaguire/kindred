@@ -505,10 +505,16 @@ type worksFilter struct {
 //
 // The obvious implementation is "marshal the same struct to JSON, then flatten it
 // into cells". This does not, because JSON carries a distinction CSV cannot:
-// **null is not an empty string.** In the mirror `bookmarks` is NULL for 112,890
-// of 112,935 works, and `summary` is NULL for many more. A CSV that writes those
-// as empty cells claims the mirror said "zero bookmarks" and "no summary", which
-// is a different fact from "this mirror has not recorded one".
+// **null is not an empty string.** `bookmarks` is NULLable, and `summary` is too,
+// so a CSV that writes those as empty cells claims the mirror said "zero
+// bookmarks" and "no summary" — a different fact from "this mirror has not
+// recorded one".
+//
+// Measured on the live mirror 2026-10-05: zero NULLs across all 112,935 works in
+// every column this writer emits, so both spellings are currently identical
+// there. (Measured 2026-10-05 on the live mirror: **0 NULLs** in all 112,935 rows, and 112,896 rows holding `bookmarks = 0`. An earlier measurement found 112,890 NULLs; the mirror file was rewritten that morning and the NULLs arrived as zeros. The column is still NULLable and the crawler still writes NULL for a page that omits the tag, so the code is right and the data moved under a claim recorded in five documents.) The convention is still right — it costs nothing, and a crawl that
+// skips a field produces NULL the same day — but a claim about how many rows
+// are NULL has to be measured, not remembered. check-deploy.sh measures it.
 //
 // So the NULL cases go out as the literal `null`, and an empty string stays an
 // empty field. A reader can still tell them apart, and the CSV header says so.

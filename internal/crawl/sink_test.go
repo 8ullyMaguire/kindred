@@ -125,8 +125,14 @@ func TestSQLSinkDoesNotNullKnownBookmarksOnARecrawl(t *testing.T) {
 }
 
 // But a work whose FIRST crawl had no bookmarks must stay NULL, not become 0.
-// The corpus column is NULL for 112,890 of 112,935 real rows and a later sort
-// that treats NULL as 0 ranks the emptiest works highest.
+// The corpus column is NULLable and a later sort that treats NULL as 0 ranks
+// the emptiest works highest.
+//
+// This test is the ONLY thing keeping that true. The live mirror measured 0 NULLs
+// in 112,935 rows on 2026-10-05 -- it had 112,890 the day before, and was
+// rewritten with zeros -- so nothing in the real data exercises this path any
+// more. A test that guards a behaviour no fixture reaches is decoration; this
+// one writes the NULL itself.
 func TestSQLSinkKeepsNullBookmarksNull(t *testing.T) {
 	db := newMirrorDB(t)
 	s := NewSQLSink(db)

@@ -538,7 +538,9 @@ per candidate, which is bounded by the candidate pool cap, not the corpus.
 and `tags`, one statement with a LEFT JOIN and no N+1. Two rules from the
 measured schema (`SPEC.md` §0.2, §11.2):
 
-- `bookmarks` is NULL for 112,890 of 112,935 rows. Scan into `*int64` and
+- `bookmarks` is NULLable (it was NULL for 112,890 of 112,935 rows when measured;
+  see docs/WHAT-IS-LEFT.md — the mirror was rewritten and now has none).
+  Scan into `*int64` and
   record `Stats["has_bookmarks"] = 0` when NULL, so a later sort cannot
   accidentally treat NULL as zero.
 - `tag_type` is `freeforms` for 3,890,504 of 3,891,300 rows. Do **not**

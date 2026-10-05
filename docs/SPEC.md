@@ -59,7 +59,7 @@ effectively unused, so the generalisation to "any entity" costs nothing
 here — tags are already a freeform bag with an optional type label. That
 is the shape every source adapter can produce, which is why §2 works.
 
-`works.bookmarks` is empty for 112,890 of 112,935 rows (measured
+`works.bookmarks` was empty for 112,890 of 112,935 rows (measured, no longer true — see below)
 previously; ordering by it sorts by NULL). Kindling ranks on `kudos`. The
 new schema makes NULL-vs-zero explicit rather than inheriting the trap.
 
@@ -691,7 +691,9 @@ Every claim in this document is checkable, and the check is named:
 
 1. **A stale metadata row will lie to you.** `cooccurrence_graph_meta` says
    20,262 nodes; the edges reference 123,047. Measure, never read the meta.
-2. **`works.bookmarks` is NULL for 112,890 of 112,935 rows.** Sorting by
+2. **`works.bookmarks` is NULL for 112,890 of 112,935 rows.** **Re-measured 2026-10-05: no longer true of this mirror.** It had 112,890 NULLs; the file was rewritten that morning and now has 0 NULLs and 112,896 rows of `bookmarks = 0`. The column is still NULLable and the crawler still writes NULL, so the schema claim holds and only the row count was stale.
+
+   Sorting by
    it sorts by NULL. The new schema has `stats` with an explicit
    `has_bookmarks` flag, and a test asserts NULL never wins a sort.
 3. **MMR is O(k×n).** Bounding k to 500 and saying so in the log; passing

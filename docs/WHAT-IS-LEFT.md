@@ -650,8 +650,16 @@ Two conventions, both forced by a fact CSV cells cannot otherwise carry:
 | NULL | the literal `null` |
 | `""` | an empty field |
 
-`bookmarks` is NULL for **112,890 of 112,935** works, so collapsing the two would
-claim the mirror recorded zero bookmarks. `filters_applied` has no cell, so the
+Measured on the live mirror before relying on it: **zero** NULLs in every column
+the CSV emits, across all 112,935 works. The convention is still right — a
+summary is empty on one row and absent on another the moment the crawl changes —
+It was not a different corpus: it was **this** mirror, measured before its
+file was rewritten at 2026-10-05 00:06. Before that it had 112,890 NULLs; now
+it has 0 NULLs and 112,896 rows holding `bookmarks = 0`. The NULLs arrived as
+zeros. The schema is unchanged and the crawler still writes NULL when a page
+omits the tag, so the code was always right and a *measured* fact recorded in
+SPEC, PLAN, PROVENANCE and README went stale underneath it. The deploy gate now measures the NULL count instead of
+asserting one. `filters_applied` has no cell, so the
 selection is emitted as `#` comment lines — "my filter matched nothing" and "my
 filter was ignored" are different situations and only one is visible in the rows.
 

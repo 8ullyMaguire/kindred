@@ -615,7 +615,8 @@ func TestAO3WorksCSVQuotesHostileFields(t *testing.T) {
 
 	// The control work has an EMPTY summary and NULL bookmarks. If empty and
 	// NULL collapsed to the same cell, these two would be indistinguishable --
-	// and the mirror distinguishes them for 112,890 of its 112,935 works.
+	// and the schema distinguishes them: bookmarks is NULLable, and the fixture
+	// writes one NULL in seven so the two spellings are both live.
 	for _, rec := range records[1:] {
 		if rec[col["id"]] != "9002" {
 			continue
@@ -636,9 +637,8 @@ func TestAO3WorksCSVQuotesHostileFields(t *testing.T) {
 	}
 }
 
-// TestAO3WorksCSVNullIsNotEmpty: the mirror leaves bookmarks NULL for 112,890 of
-// 112,935 works, so a CSV that wrote those as empty cells would claim the mirror
-// recorded zero bookmarks.
+// TestAO3WorksCSVNullIsNotEmpty: bookmarks is NULLable, so a CSV that wrote
+// NULL as an empty cell would claim the mirror recorded zero bookmarks.
 func TestAO3WorksCSVNullIsNotEmpty(t *testing.T) {
 	ts := newTestServer(t)
 	status, body, _ := getRaw(t, ts, "/api/v1/ao3/works?limit=100&format=csv")

@@ -24,7 +24,9 @@ re-derived rather than believed.
 
 Facts that are not derivable from the schema and had to be measured:
 
-- `works.bookmarks` is NULL for 112,890 of 112,935 rows.
+- `works.bookmarks` is NULLable. It was NULL for 112,890 of 112,935 rows when
+  measured; the mirror was rewritten 2026-10-05 and now holds 0 NULLs and 112,896
+  rows of `bookmarks = 0`. The schema and the crawler's NULL handling are unchanged.
 - `user_work_interactions` holds the same work more than once per user:
   user 1 has 7 rows for 4 distinct works.
 - Distinct bookmarked works per user: 1 → 109 users, 2-3 → 220, 4-9 → 513,

@@ -95,8 +95,9 @@ func TestCandidateRowsLoadsEntitiesAndTags(t *testing.T) {
 }
 
 // TestNullBookmarksIsNotZero is the explicit NULL/zero distinction.
-// bookmarks is NULL for 112,890 of 112,935 real rows; collapsing NULL to
-// zero makes an unsorted column silently rank emptiest works highest.
+// bookmarks is NULLable and uncrawled works leave it NULL; collapsing NULL to
+// zero makes an unsorted column silently rank emptiest works highest. The
+// fixture writes one NULL in seven precisely so this path cannot rot.
 func TestNullBookmarksIsNotZero(t *testing.T) {
 	a := newFixture(t)
 	seed(t, a)

@@ -263,9 +263,9 @@ func resetVoteCache() { voteCache = newLRU(8) }
 
 // Quality scores kudos per 1k words, the "praise per effort" measure.
 //
-// kudos is used rather than bookmarks because bookmarks is NULL for
-// 112,890 of 112,935 works in the real corpus: ordering by it sorts by
-// NULL. A NULL is not a zero, and a zero is not a quality.
+// kudos is used rather than bookmarks because bookmarks is NULLable:
+// ordering by it sorts NULLs as though they were a number. A NULL is not a
+// zero, and a zero is not a quality.
 type Quality struct{}
 
 func (Quality) Name() string { return "quality" }

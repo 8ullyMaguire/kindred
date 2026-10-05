@@ -15,7 +15,10 @@ const AO3Kind = "ao3_work"
 //
 // Two measured facts shape every line here (SPEC §0.2, §11.2):
 //
-//   - works.bookmarks is NULL for 112,890 of 112,935 rows. It is scanned
+//   - works.bookmarks is NULLable, and an uncrawled work leaves it NULL.
+//     (The live mirror measured 0 NULLs in 112,935 rows on 2026-10-05, so this
+//     is a schema fact rather than a property of the current crawl.)
+//     It is scanned
 //     into a *int64 and a has_bookmarks stat is written, so a later sort
 //     cannot mistake NULL for zero and rank the emptiest works highest.
 //   - work_tags.tag_type is 'freeforms' for 3,890,504 of 3,891,300 rows.
@@ -384,8 +387,8 @@ func entityFromWork(w Work) Entity {
 	e.Stats["word_count"] = float64(w.WordCount)
 	e.Stats["complete"] = float64(w.Complete)
 	// has_bookmarks is the explicit NULL/zero distinction. Without it a
-	// sort on bookmarks silently ranks NULL as 0 — measured, 112,890 of
-	// 112,935 rows are NULL.
+	// sort on bookmarks silently ranks NULL as 0 — the column is NULLable, and
+	// the fixture makes one work in seven NULL to keep the path exercised.
 	if w.Bookmarks == nil {
 		e.Stats["has_bookmarks"] = 0
 	} else {

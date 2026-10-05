@@ -127,8 +127,9 @@ Two conventions, both because the mirror's NULL and `""` are different
 facts and a CSV cell cannot show the difference on its own:
 
 - **NULL is written `null`**, an empty string is written as an empty
-  field. `bookmarks` is NULL for 112,890 of the mirror's 112,935 works,
-  so collapsing the two would claim the mirror recorded zero bookmarks.
+  field. The distinction costs nothing and is checked against the corpus:
+  the live mirror currently has **zero** NULLs in every column the CSV
+  emits, so both spellings appear as real data the day one does.
 - **`#` comment lines carry the selection** (`# filter tag=F/F`, `# limit=`)
   because "my filter matched nothing" and "my filter was ignored" are
   different situations and only one of them is visible in the rows.
@@ -228,7 +229,8 @@ produced it. A salt in a published document is linkage, not secrecy.
 
 All measured against the real mirror, not assumed:
 
-- `works.bookmarks` is NULL for 112,890 of 112,935 rows. It is scanned into
+- `works.bookmarks` is NULLable. (It was NULL for 112,890 of 112,935 rows when
+  measured; the mirror was rewritten and now holds none.) It is scanned into
   a `*int64` and a `has_bookmarks` stat is written, so a later sort cannot
   mistake NULL for zero and rank the emptiest works highest. Nullable text
   is emitted as `null`, not `""`.
