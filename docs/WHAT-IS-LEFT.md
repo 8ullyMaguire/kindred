@@ -531,9 +531,67 @@ forward from the ideas list.** Two of the five were wrong about what exists.
 Checking them turned up two defects that had nothing to do with the ideas, both
 in the mode-list tests this item was never about (see item 8).
 
-- [ ] **surprise me** (#22) — one random well-tagged seed. The engine is done;
-      this is a route plus a template. Genuinely small, and it is the one idea
-      whose whole value is that it needs no new logic.
+- [x] ~~**surprise me** (#22)~~ — DONE, and it took four real bugs to get right
+
+Every ranking page starts from a seed the reader chose, and choosing one means
+already knowing what is in the mirror — which is what a first-time reader does
+not have. So the recommender was unreachable from its own front door.
+
+`corpusquery.Surprise` picks one random work with enough tags to seed from, and
+`/surprise` renders it with the seed link. `?go=1` redirects straight into
+`/recommend` for the one-click path.
+
+Measured on the real 1.7 GB mirror, and the measurement is the interesting part:
+
+| query | time |
+|---|---|
+| `ORDER BY RANDOM()` + a tag count per candidate | 0.69 s |
+| `GROUP BY` prefilter, then `ORDER BY RANDOM()` | 3.35 s — **worse** |
+| random offset, walk forward, `GROUP BY` join | 0.34 s |
+| …with the tag count stopping at the threshold | **0.001 s** |
+
+690× faster, and the two details carrying it are non-obvious. The tag count is
+**correlated and stops early** — wrapping it so the inner select has `LIMIT 10`
+means the scan halts at the threshold, because a `GROUP BY` over 3.9M
+`work_tags` rows must finish before it can say anything. And the candidate window
+is bounded, so a sparse mirror cannot turn a "surprise" into a table scan.
+
+**Four bugs, each caught by a different gate:**
+
+1. **The query was deterministic.** A random *offset* into the id space says
+   where the walk starts; it does not say which work in the window answers.
+   Without an ordering, 20 calls on a 200-work fixture returned **one distinct
+   work** — the window held 196 rows and SQLite answered in join order, which is
+   id order. Caught by a test that samples 40 calls.
+2. **And then the fix was wrong.** I added `ORDER BY RANDOM()`, and the mutation
+   removing it **survived**: 40 distinct works without it, 35 with it. The
+   offset was already carrying the variation, so the clause was untestable dead
+   weight that cost a sort. Deleted, with the measurement recorded in the comment.
+   A clause whose stated purpose is already met elsewhere in the same query is
+   not worth keeping just because it looks like it works.
+3. **Every pick claimed exactly 10 tags.** The capped count that makes the query
+   fast can only ever report the threshold — and the note said "10 tags", which is
+   a lie for the thousands of works in this mirror carrying more. The uncapped
+   count now runs once, on the one row `LIMIT 1` already chose.
+4. **The empty state rendered a pick.** `{{if .Row}}` is true for a zero-valued
+   struct, so `/surprise` with nothing to pick from showed `/work/0` and
+   `/recommend?seed=`. Caught by the render test the spec gate *required*, which
+   is the first time that gate has caught something in a page rather than a
+   template registration.
+
+Plus a fallback arm, because walking forward from an offset returns nothing when
+no qualifying work lies ahead. On this mirror that cannot happen — measured
+orphans = 0 — but that is a property of the *data*. The second arm restarts from
+the lowest qualifying work, honouring the same gate: an earlier version had it
+skip the gate "so a corpus whose first works are untagged still answers", which
+answers the wrong question and returns exactly the un-seedable work the gate
+exists to exclude.
+
+The gate is a field on `web.Deps` (`SurpriseMinTags`), 0 meaning the production
+default of 10. The e2e harness sets 3, because `testcorpus` gives every work four
+or five tags — below 10, so the page would be permanently empty there and the
+browser suite could only test the empty state. Five Playwright tests now cover
+the pick, the seed link, the redirect and the empty state.
 - [ ] **CSV export** (#20) — **confirmed absent.** No `?format=` anywhere; grep
       for it turns up only `fmt.Sprintf` and one prose string.
 - [ ] **author page** (#25) — **confirmed absent.** The route table is 17

@@ -293,6 +293,19 @@ type FandomsPage struct {
 	Available []string
 }
 
+// SurprisePage answers "show me something".
+//
+// Row is zero when the corpus has nothing well-tagged enough to seed from, in
+// which case Notes explains why. The template renders both states from one
+// struct rather than having a separate error page, because "nothing to pick
+// from" is an answer about the corpus and not a failure.
+type SurprisePage struct {
+	Base
+	Row   corpusquery.Row
+	Seed  string
+	Notes []string
+}
+
 // UnderratedPage answers "what is good and under-looked-at".
 type UnderratedPage struct {
 	Base
@@ -401,6 +414,7 @@ func init() {
 		"recommend.html", "notfound.html", "error.html",
 		"arena.html", "leaderboard.html", "rank.html", "myranking.html",
 		"block.html", "fandoms.html", "underrated.html", "neighbours.html",
+		"surprise.html",
 		"profiles.html", "profile.html",
 	} {
 		pages[page] = template.Must(template.New(page).

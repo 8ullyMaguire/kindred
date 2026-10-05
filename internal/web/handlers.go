@@ -50,6 +50,21 @@ type Deps struct {
 	// error. Two handles, two jobs, stated here rather than discovered at the
 	// call site that breaks.
 	Profiles ProfileStore
+
+	// SurpriseMinTags lowers /surprise's eligibility gate. 0 means the
+	// production value (corpusquery's own default of 10).
+	//
+	// It exists for the e2e suite, whose fixture corpus gives every work four or
+	// five tags -- below ten, so /surprise would be permanently empty there and
+	// the browser tests could only exercise the empty state. Lowering it lets
+	// them exercise the pick, the seed link and the redirect, which are the parts
+	// that can actually break.
+	//
+	// It is a field on Deps rather than a constant in the handler because the
+	// threshold is a property of the CORPUS, not of the page: the page should not
+	// decide what counts as well-tagged, and a server on the real mirror wants
+	// the real number.
+	SurpriseMinTags int
 }
 
 // CorpusQuerier is the corpus-analysis surface the pages need.
@@ -58,10 +73,25 @@ type Deps struct {
 // interface without a wrapper. Options (not a bespoke Request struct) because
 // that is what the Runner takes, and an adapter layer whose only job is to
 // rename a struct is a layer that can disagree with it.
+// SurpriseMinTags lowers /surprise's eligibility gate. 0 means the production
+// value (corpusquery's own default), which is what a deployed server wants.
+//
+// It exists for the e2e suite, whose fixture corpus gives every work four or five
+// tags -- below the real threshold of ten, so /surprise would be permanently empty
+// there and the browser tests could only exercise the empty state. Lowering the
+// gate lets them exercise the pick, the seed link and the redirect, which are the
+// parts that can actually break.
+//
+// The gate is a field on Deps rather than a constant in the handler because it is
+// a property of the CORPUS, not of the page: the page should not decide what
+// counts as well-tagged, and `kindred` on a 1.7 GB mirror wants the real number.
+type SurpriseMinTags int
+
 type CorpusQuerier interface {
 	FandomRanking(ctx context.Context, seedTagIDs []int32, opts corpusquery.Options) (corpusquery.Result, error)
 	Underrated(ctx context.Context, opts corpusquery.Options) (corpusquery.Result, error)
 	TagNeighbours(ctx context.Context, tag string, opts corpusquery.Options) (corpusquery.Result, error)
+	Surprise(ctx context.Context, opts corpusquery.Options) (corpusquery.Result, error)
 }
 
 // ProfileStore is the read/write profile surface the pages need.
@@ -275,6 +305,8 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 		d.renderUnderrated(w, r)
 	case p == "/neighbours":
 		d.renderNeighbours(w, r)
+	case p == "/surprise":
+		d.renderSurprise(w, r)
 	case p == "/profiles":
 		d.renderProfiles(w, r)
 	case p == "/profile":
@@ -413,6 +445,69 @@ func (d Deps) renderUnderrated(w http.ResponseWriter, r *http.Request) {
 		Truncated: res.Truncated, MinWords: int64(words), Complete: complete,
 	}
 	d.page(w, "underrated.html", page, http.StatusOK)
+}
+
+// renderSurprise answers "show me something" -- one random work that is tagged
+// enough to seed a ranking from.
+//
+// It exists because every other ranking page starts from a seed the reader
+// chose, and choosing one requires knowing what is in the mirror. That is the
+// part a first-time reader does not have, so the recommender was unreachable
+// from its own front door.
+//
+// The pick is a redirect to /recommend with the seed filled in, rather than a
+// result rendered here. Two reasons: the recommendation engine already renders
+// its own explainability, and reusing it means this page cannot drift from what
+// /recommend shows for the same seed.
+func (d Deps) renderSurprise(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if d.CorpusQuery == nil {
+		d.fail(w, r, http.StatusServiceUnavailable,
+			errors.New("corpus queries are not enabled on this server"))
+		return
+	}
+
+	// No limit is taken from the query string. The window is an implementation
+	// detail of the selection, and letting a reader set it would mean a URL
+	// could ask for a walk so long it looks like a hang.
+	opts := corpusquery.Options{}
+	if d.SurpriseMinTags > 0 {
+		opts.MinTags = d.SurpriseMinTags
+	}
+	res, err := d.CorpusQuery.Surprise(ctx, opts)
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+
+	if len(res.Rows) == 0 {
+		// An empty result is an ANSWER here, not a failure: the corpus may
+		// simply have nothing well-tagged in it yet. Render the form with the
+		// query's own explanation rather than a bare error page.
+		d.page(w, "surprise.html", SurprisePage{
+			Base:  d.base("Surprise", "Corpus"),
+			Notes: res.Notes,
+		}, http.StatusOK)
+		return
+	}
+
+	row := res.Rows[0]
+	seed := fmt.Sprintf("%s:%d", corpus.AO3Kind, row.WorkID)
+
+	// Redirect when the reader asked for a redirect (?go=1), which is what the
+	// button on the recommend form links to. Without ?go=1 the page renders
+	// the pick and explains it, so the choice is inspectable before it is used.
+	if r.URL.Query().Get("go") != "" {
+		http.Redirect(w, r, "/recommend?seed="+url.QueryEscape(seed), http.StatusFound)
+		return
+	}
+
+	d.page(w, "surprise.html", SurprisePage{
+		Base:  d.base("Surprise", "Corpus"),
+		Row:   row,
+		Seed:  seed,
+		Notes: res.Notes,
+	}, http.StatusOK)
 }
 
 // renderNeighbours is the tag-co-occurrence view.

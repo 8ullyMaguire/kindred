@@ -36,6 +36,7 @@ const PAGES = [
   { path: '/fandoms', link: '/fandoms', name: 'fandoms', title: /Fandoms/i, heading: true },
   { path: '/underrated', link: '/underrated', name: 'underrated', title: /Underrated/i, heading: true },
   { path: '/neighbours', link: '/neighbours', name: 'neighbours', title: /neighbours/i, heading: true },
+  { path: '/surprise', link: '/surprise', name: 'surprise', title: /kindred/i, heading: true },
   { path: '/profiles', link: '/profiles', name: 'profiles', title: /profiles/i, heading: true },
   // The arena family. These were in the nav and covered by no test, which is
   // the same gap as the six parity pages: a route nothing visits cannot be
@@ -384,3 +385,72 @@ async function readWeights(page) {
   }
   return JSON.stringify(out);
 }
+
+test.describe('surprise me', () => {
+  // The pick must be USABLE, not merely present. A page that renders a title and
+  // no link back into the recommender has answered nothing.
+  test('the pick is a work you can recommend from', async ({ page }) => {
+    await page.goto('/surprise');
+    const pick = page.locator('[data-testid="surprise-pick"]');
+    await expect(pick).toBeVisible();
+
+    // The seed link must carry a real work id, because that is what /recommend
+    // parses.
+    const seed = page.locator('[data-testid="surprise-seed"]');
+    const href = await seed.getAttribute('href');
+    // Case-insensitive, because html/template rewrites the URL in an attribute
+    // context and emits %3a lower-case where the handler wrote %3A. Asserting
+    // the hex case would test the template engine, not the page.
+    expect(href).toMatch(/seed=ao3_work%3a\d+/i);
+    // And the decoded form is the seed the engine parses.
+    expect(decodeURIComponent(href)).toMatch(/seed=ao3_work:\d+$/);
+
+    // And following it must produce a ranking, not a 400. The href is read from
+    // the DOM and already percent-encoded, so it is passed through verbatim --
+    // re-encoding it here would double the %3A and produce a seed the server
+    // cannot parse, which is a broken test rather than a broken page.
+    const res = await page.goto(href);
+    expect(res.status()).toBe(200);
+    // A 200 with an empty ranking would pass the status check alone, so the
+    // page must actually show recommendations. `results` is /recommend's own
+    // test id -- the earlier version of this assertion guessed at a selector
+    // that does not exist, which fails the same way whether or not the page
+    // works.
+    await expect(page.locator('[data-testid="results"]')).toBeVisible();
+  });
+
+  // "Random" that returns the same work every time is a constant with extra
+  // steps, and it looks correct in a screenshot. This is the assertion that
+  // caught the query being deterministic: it sampled a random OFFSET but never
+  // chose among the works inside the window it opened.
+  test('two visits do not pick the same work', async ({ page }) => {
+    const pickOf = async () => {
+      await page.goto('/surprise');
+      return page.locator('[data-testid="surprise-seed"]').getAttribute('href');
+    };
+    const seen = new Set();
+    for (let i = 0; i < 6; i++) seen.add(await pickOf());
+    expect(seen.size, `6 visits produced ${seen.size} distinct picks`).toBeGreaterThan(1);
+  });
+
+  // The page must explain an empty result rather than render a blank list. The
+  // fixture has no work with enough tags, so this is the state it is actually in.
+  test('an empty mirror says why instead of rendering nothing', async ({ page }) => {
+    await page.goto('/surprise');
+    const pick = page.locator('[data-testid="surprise-pick"]');
+    const empty = page.locator('[data-testid="surprise-empty"]');
+    // Exactly one of the two states, never both and never neither.
+    await expect(pick.or(empty)).toBeVisible();
+    if (await empty.isVisible()) {
+      await expect(page.locator('.note').first()).not.toBeEmpty();
+    }
+  });
+
+  // ?go=1 is the one-click path: it must redirect rather than render, or the
+  // button lands the reader on a page they have to act on again.
+  test('?go=1 redirects straight into the ranking', async ({ page }) => {
+    await page.goto('/surprise?go=1');
+    expect(page.url()).toMatch(/\/recommend\?seed=ao3_work%3a\d+/i);
+    expect(page.url()).not.toContain('/surprise');
+  });
+});

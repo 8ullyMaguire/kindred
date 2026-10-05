@@ -253,6 +253,7 @@ var modeMethods = map[Mode]string{
 	ModeTagNeighbours:   "TagNeighbours",
 	ModeUnderrated:      "Underrated",
 	ModeSimilar:         "Similar",
+	ModeSurprise:        "Surprise",
 }
 
 func TestEveryWorkingModeHasARunnerMethod(t *testing.T) {
@@ -391,4 +392,120 @@ func camel(s string) string {
 		b.WriteString(strings.ToUpper(part[:1]) + part[1:])
 	}
 	return b.String()
+}
+
+func TestSurpriseReturnsOneSeedableWorkAndSaysWhy(t *testing.T) {
+	// The gate is 3, not the production 10, because the shared fixture gives
+	// every work at most 5 tags. With the production threshold every one of
+	// these assertions would hold vacuously on the "nothing to recommend"
+	// branch -- a test that passes without running the code it names.
+	r := openFixture(t, 40)
+	res, err := r.Surprise(context.Background(), Options{MinTags: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Rows) != 1 {
+		t.Fatalf("surprise returned %d rows, want exactly 1 (notes=%v)",
+			len(res.Rows), res.Notes)
+	}
+	row := res.Rows[0]
+
+	// It must be usable as a SEED, or the button leads nowhere.
+	if row.WorkID <= 0 {
+		t.Errorf("row %q has WorkID %d; a surprise with no work id cannot seed a ranking",
+			row.Key, row.WorkID)
+	}
+	if !strings.HasPrefix(row.Key, "ao3_work:") {
+		t.Errorf("Key = %q, want the ao3_work:<id> form the engine's seeds use", row.Key)
+	}
+	// The tag count is the score, and the note must explain the choice rather
+	// than presenting an arbitrary pick as though it were a ranking.
+	if row.Score < 3 {
+		t.Errorf("score %f < the requested 3-tag gate; the work cannot be seeded",
+			row.Score)
+	}
+	if row.Note == "" {
+		t.Error("a surprise pick carries no note saying why it was eligible")
+	}
+}
+
+func TestSurpriseActuallyVariesBetweenCalls(t *testing.T) {
+	// A "random" selection that returns the same work every time is not random,
+	// it is a constant with extra steps -- and it is the failure mode that looks
+	// correct in a screenshot.
+	//
+	// Sampled rather than asserted exactly: two calls colliding is possible, so
+	// the test requires SOME variation over many calls and no more.
+	r := openFixture(t, 200)
+	seen := map[int64]bool{}
+	for i := 0; i < 40; i++ {
+		res, err := r.Surprise(context.Background(), Options{MinTags: 3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Rows) != 1 {
+			t.Fatalf("call %d returned %d rows, want 1", i, len(res.Rows))
+		}
+		seen[res.Rows[0].WorkID] = true
+	}
+	if len(seen) < 2 {
+		t.Errorf("40 calls produced %d distinct works; the selection is not random",
+			len(seen))
+	}
+}
+
+func TestSurpriseExplainsItselfWhenNoWorkMeetsTheGate(t *testing.T) {
+	// An unreachable gate is a corpus that cannot seed anything. Surprise must
+	// return NO rows, NO error, and a note saying why -- because the alternative
+	// is an empty page that reads as a bug.
+	//
+	// An earlier version of this test asked for one row and asserted the
+	// FALLBACK arm would supply it. That is impossible and the test was wrong:
+	// the fallback also honours the gate, so with no qualifying work there is
+	// nothing to fall back to. Two distinct states were being conflated -- "the
+	// forward walk found nothing" and "no work qualifies" -- and only the second
+	// is reachable through Options. The fallback arm is covered by mutation on
+	// the real corpus, where it fires.
+	r := openFixture(t, 5)
+	res, err := r.Surprise(context.Background(), Options{MinTags: 10_000})
+	if err != nil {
+		t.Fatalf("an unreachable gate must not be an error: %v", err)
+	}
+	if len(res.Rows) != 0 {
+		t.Errorf("got %d rows with an unreachable gate, want 0", len(res.Rows))
+	}
+	if len(res.Notes) == 0 {
+		t.Fatal("no rows and no note: the reader sees an empty page with no reason")
+	}
+	if !strings.Contains(strings.ToLower(res.Notes[0]), "tags") {
+		t.Errorf("note %q does not mention tags, so it does not explain the gate",
+			res.Notes[0])
+	}
+}
+
+func TestSurpriseSaysSoWhenNothingQualifiesAtAll(t *testing.T) {
+	// An empty corpus is the other total case: no rows AND an explanation.
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "empty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, ddl := range []string{
+		`CREATE TABLE works(id INTEGER PRIMARY KEY, title TEXT, kudos INTEGER, word_count INTEGER)`,
+		`CREATE TABLE work_tags(work_id INTEGER, tag_id INTEGER, tag_type TEXT)`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := NewRunner(db).Surprise(context.Background(), Options{MinTags: 1})
+	if err != nil {
+		t.Fatalf("an empty corpus must not be an error: %v", err)
+	}
+	if len(res.Rows) != 0 {
+		t.Errorf("an empty corpus returned %d rows", len(res.Rows))
+	}
+	if len(res.Notes) == 0 {
+		t.Error("an empty result carries no note; it reads as a bug rather than as an uncrawled mirror")
+	}
 }

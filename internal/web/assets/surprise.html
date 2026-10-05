@@ -1,0 +1,33 @@
+{{define "content"}}
+<p class="hint">
+  Every ranking on this site starts from a seed you choose, and choosing one
+  means knowing what is in the mirror. This picks one instead: a random work
+  with enough tags that there is a neighbourhood to walk from it. Reload for
+  another.
+</p>
+
+{{if .Row.WorkID}}
+  <div class="work-list" data-testid="surprise-pick">
+    <div class="work">
+      <h3>
+        <a href="/work/{{.Row.WorkID}}">{{.Row.Label}}</a>
+      </h3>
+      {{if .Row.Note}}<p class="summary">{{.Row.Note}}</p>{{end}}
+      <p>
+        <a href="/recommend?seed={{.Seed}}" data-testid="surprise-seed">Recommend from this</a>
+      </p>
+    </div>
+  </div>
+  <p class="hint">
+    The seed is <code>{{.Seed}}</code>, so this pick is reproducible &mdash; the
+    link above is a ranking from exactly this work, not a fresh roll of the dice.
+  </p>
+{{else}}
+  <p class="count" data-testid="surprise-empty">
+    Nothing to pick. This is an answer about the mirror rather than a failure,
+    and the note below says which it is.
+  </p>
+{{end}}
+
+{{range .Notes}}<p class="note">{{.}}</p>{{end}}
+{{end}}

@@ -209,6 +209,33 @@ func TestEveryPageTemplateRenders(t *testing.T) {
 			wantContains: []string{"987,654", "6,789", "12,345", "dark &amp; light"},
 		},
 		{
+			tpl:  "surprise.html",
+			name: "surprise.html with a pick",
+			data: SurprisePage{
+				Base: base,
+				Row:  corpusquery.Row{Key: "ao3_work:42", Label: "A Work & Its Title", WorkID: 42, Score: 58},
+				Seed: "ao3_work:42",
+				// The note must survive: a page that says why the work was
+				// eligible is the difference between a pick and an arbitrary row.
+				Notes: []string{"58 tags, so there is a neighbourhood"},
+			},
+			// The seed link is the page's whole point -- without it the reader
+			// has a title and no way to use it.
+			wantContains: []string{"A Work &amp; Its Title", "/work/42",
+				"58 tags", "/recommend?seed=ao3_work%3a42"},
+		},
+		{
+			tpl:  "surprise.html",
+			name: "surprise.html with nothing to pick from",
+			data: SurprisePage{
+				Base:  base,
+				Notes: []string{"no work in this corpus has 10 or more tags"},
+			},
+			// The empty state must explain itself, and must NOT show a pick.
+			wantContains:    []string{"no work in this corpus has 10 or more tags", "Nothing to pick"},
+			wantNotContains: []string{"/recommend?seed="},
+		},
+		{
 			tpl:  "neighbours.html",
 			name: "neighbours.html with no tag",
 			data: NeighboursPage{Base: base},

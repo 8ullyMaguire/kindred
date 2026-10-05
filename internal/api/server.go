@@ -56,6 +56,19 @@ type Server struct {
 	// Server work against the 1.7 GB read-only mirror and against a writable
 	// state DB without the pages having to know which it is.
 	Profiles ProfileStore
+
+	// SurpriseMinTags lowers the /surprise page's eligibility gate. 0 means the
+	// production default (corpusquery's own 10).
+	//
+	// It is set by the e2e harness and nothing else: that harness's fixture
+	// corpus gives every work four or five tags, which is below the real
+	// threshold, so /surprise would be permanently empty there and the browser
+	// suite could only exercise the empty state -- leaving the pick, the seed
+	// link and the redirect untested, which are the parts that actually break.
+	//
+	// It is a field rather than an env var because there is exactly one caller
+	// and a global would let a production process lower the gate by accident.
+	SurpriseMinTags int
 }
 
 // ProfileStore is the profile surface the server needs.
@@ -156,6 +169,12 @@ func (s *Server) Routes() http.Handler {
 	}
 	if s.Profiles != nil {
 		pages.Profiles = s.Profiles
+	}
+	// The gate is lowered only by the e2e harness, whose fixture corpus gives
+	// every work four or five tags. A deployed server leaves it 0 and gets
+	// corpusquery's own default of 10.
+	if s.SurpriseMinTags > 0 {
+		pages.SurpriseMinTags = s.SurpriseMinTags
 	}
 
 	return pages.Pages(api)

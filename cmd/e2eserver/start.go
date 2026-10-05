@@ -119,6 +119,12 @@ func start(ctx context.Context, dir, listen string) (string, error) {
 		Log:       logger,
 		Version:   "e2e",
 		StartedAt: time.Now(),
+		// The fixture corpus gives every work four or five tags, so /surprise's
+		// production gate of ten would leave the page permanently empty and the
+		// browser suite testing nothing but that. Three is below what the fixture
+		// produces and above nothing, so the pick, the seed link and the redirect
+		// are all exercised for real.
+		SurpriseMinTags: 3,
 	}
 
 	// The profile store is a SEPARATE handle on the state db, not a use of the
