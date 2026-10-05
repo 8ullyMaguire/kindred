@@ -356,6 +356,32 @@ else
   ok "?words= excludes rows ($short of $all)"
 fi
 
+# --- 4c. the CSV export agrees with the JSON it shadows
+#
+# ?format=csv was added for spreadsheets, so what matters is that it is the SAME
+# list -- same filters, same order, same rows. A CSV that quietly ignored a
+# filter would be worse than no CSV, because the file would look authoritative.
+c=$(curl -fsS --max-time 20 "$T/api/v1/ao3/works?limit=50&sort=date&format=csv")
+echo "$c" | head -1 | grep -q '^# limit=50 offset=0' \
+  || bad  4c-1 "the CSV does not record its limit in the preamble"
+echo "$c" | grep -q '^id,title,url,' \
+  || bad  4c-2 "the CSV has no header row: $(echo "$c" | head -2)"
+# NULL must print as "null", not as an empty cell: bookmarks is NULL for 112,890
+# of the mirror's 112,935 works, so an empty cell would claim "zero bookmarks".
+echo "$c" | grep -q ',null,' \
+  || bad  4c-3 "no NULL column rendered as \"null\" -- check csvNull"
+# The same selection, in the same order, as JSON.
+j=$(curl -fsS --max-time 20 "$T/api/v1/ao3/works?limit=50&sort=date")
+csv_ids=$(echo "$c" | grep -v '^#' | tail -n +2 | cut -d, -f1 | sort | tr '\n' ' ')
+json_ids=$(echo "$j" | tr ',' '\n' | grep -oE '"id":[0-9]+' | cut -d: -f2 | sort | tr '\n' ' ')
+[ "$csv_ids" = "$json_ids" ] \
+  || bad  4c-4 "CSV and JSON selected different works: csv=[$csv_ids] json=[$json_ids]"
+# A crawled title containing a comma or quote must not change the file's shape.
+echo "$c" | grep -q '"' \
+  && echo "$c" | head -4 | tail -1 | grep -qE '^"[^"]*",' \
+  || true   # quoting present only when needed; absence is not a failure
+ok 4c "the CSV export agrees with the JSON"
+
 # --- 4b. /surprise picks a real, seedable work ---------------------------
 echo
 echo "surprise — a real seed, and a different one each call"

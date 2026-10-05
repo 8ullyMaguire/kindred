@@ -105,6 +105,7 @@ and install it.
 POST|GET /api/v1/recommend     seeds -> ranked entities with evidence
 GET     /api/v1/tags/{id}/similar
 GET     /api/v1/ao3/works            list, ?tag= &sort=kudos|words|date|hits
+                                      &format=csv  same rows as CSV
 GET     /api/v1/ao3/works/{id}
 GET     /api/v1/ao3/works/{id}/recommend
 GET     /api/v1/ao3/tags
@@ -116,6 +117,36 @@ GET     /stats
 
 Seeds are `kind:id`, repeatable or comma-separated. `n` caps at 100,
 `limit` at 100, `pool` bounds the work per request.
+
+### `?format=csv` on the works list
+
+`GET /api/v1/ao3/works?format=csv` returns the same rows, the same
+filters and the same ordering, as CSV — for a spreadsheet or `wc -l`.
+
+Two conventions, both because the mirror's NULL and `""` are different
+facts and a CSV cell cannot show the difference on its own:
+
+- **NULL is written `null`**, an empty string is written as an empty
+  field. `bookmarks` is NULL for 112,890 of the mirror's 112,935 works,
+  so collapsing the two would claim the mirror recorded zero bookmarks.
+- **`#` comment lines carry the selection** (`# filter tag=F/F`, `# limit=`)
+  because "my filter matched nothing" and "my filter was ignored" are
+  different situations and only one of them is visible in the rows.
+
+A parser must therefore be told about the preamble:
+
+```go
+r := csv.NewReader(f)
+r.Comment = '#'
+```
+
+Without that, `# limit=100 offset=0` parses as a one-field record and
+`ReadAll` rejects the file with "wrong number of fields" — which is
+exactly what happened to the test that now pins this.
+
+Quoting is `encoding/csv`, never string concatenation: titles and
+summaries are crawled text, and one containing a comma, a double quote
+or a newline would otherwise change the file's shape.
 
 ## What a response tells you
 

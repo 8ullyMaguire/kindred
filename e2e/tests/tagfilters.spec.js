@@ -307,3 +307,66 @@ test('the tag page still needs no JavaScript', async ({ page, context }) => {
   const scriptCount = await page.$$eval('script', (ss) => ss.length);
   expect(scriptCount).toBe(0);
 });
+
+// --- ?format=csv ------------------------------------------------------------
+//
+// The API tests already pin the quoting and the NULL convention. What only the
+// e2e harness can show is that the CSV and the JSON agree about WHICH rows were
+// selected -- a disagreement there would be invisible to a unit test, which
+// only ever asks each format separately.
+
+test('CSV and JSON select the same works', async ({ request }) => {
+  const query = '/api/v1/ao3/works?limit=100&sort=date';
+
+  const json = await request.get(query);
+  expect(json.status()).toBe(200);
+  const jsonBody = await json.json();
+  const jsonInOrder = jsonBody.works.map((w) => String(w.id));
+  const jsonIds = jsonInOrder.slice().sort();
+
+  const csvRes = await request.get(query + '&format=csv');
+  expect(csvRes.status()).toBe(200);
+  expect(csvRes.headers()['content-type']).toContain('text/csv');
+
+  const body = await csvRes.text();
+  // Drop the '#' preamble and the header row, then read the first field of each
+  // record. The titles in this fixture are single-line, so a line is a record
+  // here -- the hostile multi-line title is pinned by the Go test, which is the
+  // only place a fixture can hold one without breaking every other assertion.
+  const rows = body
+    .split('\n')
+    .filter((l) => l.length && !l.startsWith('#'))
+    .slice(1)
+    .map((l) => l.split(',')[0]);
+
+  // Sort BOTH sides. The first version sorted jsonIds and left `rows` in file
+  // order, so the test reported a 40-vs-40 disagreement that was purely the
+  // order of two equal sets -- which is the "identical counts therefore broken"
+  // mistake in its purest form: the numbers agreed, the sets agreed, and only
+  // the comparison was wrong.
+  expect(rows.slice().sort()).toEqual(jsonIds);
+  expect(rows.length).toBeGreaterThan(0);
+
+  // And separately: the two formats must agree on ORDER too, not only on
+  // membership. A CSV that re-sorted its rows would still pass the check above.
+  expect(rows).toEqual(jsonInOrder);
+});
+
+test('the CSV records the filters it applied', async ({ request }) => {
+  // A reader who exported with a filter must be able to tell an empty result
+  // from an ignored one, which is the reason the preamble exists at all.
+  const res = await request.get('/api/v1/ao3/works?limit=5&complete=true&format=csv');
+  expect(res.status()).toBe(200);
+  const body = await res.text();
+  expect(body).toContain('# filter complete=true');
+  expect(body).toContain('# limit=5');
+});
+
+test('an unknown format falls through to JSON', async ({ request }) => {
+  // Silently serving CSV for format=xml would be a wrong answer, not a lenient
+  // one.
+  const res = await request.get('/api/v1/ao3/works?format=xml');
+  expect(res.headers()['content-type']).toContain('application/json');
+  const body = await res.json();
+  expect(Array.isArray(body.works)).toBe(true);
+});

@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -115,6 +117,34 @@ func newTestServer(t *testing.T) *httptest.Server {
 			}
 		}
 	}
+	// One work whose text fields are hostile to CSV framing: a comma, a double
+	// quote and a newline inside the title, a newline inside the summary, and
+	// NULLs for the columns this fixture otherwise fills in.
+	//
+	// It is seeded HERE, in the one place a corpus row can be written, rather
+	// than by a helper opening the file afterwards -- the corpus is attached
+	// read-only once the server starts, so a post-hoc insert would fail with a
+	// permissions error that says nothing about CSV.
+	if _, err := seed.Exec(
+		`INSERT INTO works(id,url,title,authors,summary,word_count,hits,kudos,
+		 bookmarks,language,complete,update_date,first_seen)
+		 VALUES(9001,'https://example.com/9001',
+			'He said "hi", then' || char(10) || 'left',
+			'A, B',
+			'line one' || char(10) || 'line two',
+			10,5,5,NULL,NULL,1,'2026-06-01','2026-06-01')`); err != nil {
+		t.Fatal(err)
+	}
+	// A control work: the same NULL columns, so "NULL renders as null" and
+	// "hostile text is quoted" are separate claims with separate evidence.
+	if _, err := seed.Exec(
+		`INSERT INTO works(id,url,title,authors,summary,word_count,hits,kudos,
+		 bookmarks,language,complete,update_date,first_seen)
+		 VALUES(9002,'https://example.com/9002','plain title','author',
+			'',10,5,5,NULL,NULL,1,'2026-06-01','2026-06-01')`); err != nil {
+		t.Fatal(err)
+	}
+
 	// Co-occurrence edges so the graph can load.
 	if _, err := seed.Exec(
 		`INSERT INTO cooccurrence_edges(tag_a_id,tag_b_id,cooccur_count) VALUES(1,2,50)`); err != nil {
@@ -452,5 +482,202 @@ func TestNIsClamped(t *testing.T) {
 	items, _ := body["items"].([]any)
 	if len(items) > 100 {
 		t.Fatalf("got %d items, want at most 100", len(items))
+	}
+}
+
+// --- ?format=csv ------------------------------------------------------------
+//
+// Every cell in this output is CRAWLED text, so the interesting question is not
+// "does it produce commas" but "what happens when a work's own fields contain a
+// comma, a quote, or a newline". The test seeds exactly that.
+
+// getRaw fetches a path and returns the status, the body as text, and the
+// Content-Type. CSV is not JSON, so it cannot go through get().
+func getRaw(t *testing.T, ts *httptest.Server, path string) (int, string, string) {
+	t.Helper()
+	resp, err := http.Get(ts.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, string(b), resp.Header.Get("Content-Type")
+}
+
+// responseHeader fetches a path and returns one header's value.
+func responseHeader(t *testing.T, ts *httptest.Server, path, name string) string {
+	t.Helper()
+	resp, err := http.Get(ts.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return resp.Header.Get(name)
+}
+
+// TestAO3WorksCSVQuotesHostileFields is the one that matters: a title containing
+// a comma, a quote and a newline must not add columns or rows.
+func TestAO3WorksCSVQuotesHostileFields(t *testing.T) {
+	ts := newTestServer(t)
+
+	status, body, ct := getRaw(t, ts, "/api/v1/ao3/works?limit=100&sort=date&format=csv")
+	if status != 200 {
+		t.Fatalf("status %d, body %s", status, body)
+	}
+	if !strings.HasPrefix(ct, "text/csv") {
+		t.Errorf("Content-Type = %q, want text/csv", ct)
+	}
+
+	// Parse it back with a real CSV reader. If quoting were wrong, this is where
+	// it shows -- as a wrong column count, not as a diff.
+	//
+	// Comment = '#' because the writer emits `#` preamble lines. This is NOT a
+	// cosmetic setting: without it the reader treats "# limit=100 offset=0" as a
+	// one-field record and rejects the whole file with "wrong number of fields",
+	// which is exactly what happened on the first run of this test. A parser
+	// that does not know about the preamble convention fails on a file that is
+	// entirely well-formed, so docs/CLI.md now says so.
+	r := csv.NewReader(strings.NewReader(body))
+	r.Comment = '#'
+	records, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("the CSV does not parse back: %v\n%s", err, body)
+	}
+	if len(records) < 2 {
+		t.Fatalf("got %d records, want a header and at least one row:\n%s",
+			len(records), body)
+	}
+
+	// Column positions come from the HEADER ROW, never from literals typed twice.
+	// The first version of this test listed {8,10,11} for the NULL columns while
+	// the writer emitted bookmarks=8, language=9, complete=10, update_date=11 --
+	// so it checked `complete` and `update_date` against NULLs that were never
+	// NULL, and reported them as failures. A duplicate of a list is a second
+	// place to be wrong; reading the header is the one place that cannot be.
+	col := map[string]int{}
+	for i, name := range records[0] {
+		col[name] = i
+	}
+	for _, want := range []string{"id", "title", "url", "authors", "summary",
+		"word_count", "kudos", "hits", "bookmarks", "language", "complete", "update_date"} {
+		if _, ok := col[want]; !ok {
+			t.Fatalf("the header has no %q column: %v", want, records[0])
+		}
+	}
+	ncols := len(records[0])
+	for i, rec := range records {
+		if len(rec) != ncols {
+			t.Errorf("record %d has %d columns, want %d: %q", i, len(rec), ncols, rec)
+		}
+	}
+
+	// Find the hostile row and check the fields survived verbatim.
+	var found bool
+	for _, rec := range records[1:] {
+		if rec[col["id"]] != "9001" {
+			continue
+		}
+		found = true
+		if want := "He said \"hi\", then\nleft"; rec[col["title"]] != want {
+			t.Errorf("title = %q, want %q -- quoting did not round-trip", rec[col["title"]], want)
+		}
+		if want := "line one\nline two"; rec[col["summary"]] != want {
+			t.Errorf("summary = %q, want %q", rec[col["summary"]], want)
+		}
+		// The byline contains a comma and is its own column.
+		if rec[col["authors"]] != "" {
+			t.Errorf("authors column = %q, want empty (this query has no authors column)",
+				rec[col["authors"]])
+		}
+		// NULL must be distinguishable from an empty string.
+		for _, name := range []string{"bookmarks", "language"} {
+			if rec[col[name]] != "null" {
+				t.Errorf("%s = %q, want the literal \"null\" for a NULL column",
+					name, rec[col[name]])
+			}
+		}
+		// The columns that ARE populated must not be turned into nulls by the
+		// same helper -- the opposite error, and an easier one to miss because
+		// it makes the output look uniformly pessimistic.
+		for _, name := range []string{"word_count", "hits", "kudos", "complete", "update_date"} {
+			if rec[col[name]] == "null" {
+				t.Errorf("%s = \"null\" but the fixture populated it", name)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the hostile work is not in the output:\n%s", body)
+	}
+
+	// The control work has an EMPTY summary and NULL bookmarks. If empty and
+	// NULL collapsed to the same cell, these two would be indistinguishable --
+	// and the mirror distinguishes them for 112,890 of its 112,935 works.
+	for _, rec := range records[1:] {
+		if rec[col["id"]] != "9002" {
+			continue
+		}
+		if rec[col["summary"]] != "" {
+			t.Errorf("control summary = %q, want an EMPTY field -- an empty string "+
+				"and a NULL must not print the same", rec[col["summary"]])
+		}
+		if rec[col["bookmarks"]] != "null" {
+			t.Errorf("control bookmarks = %q, want \"null\"", rec[col["bookmarks"]])
+		}
+	}
+
+	// The filters must still be reported, or a reader cannot tell "my filter
+	// matched nothing" from "my filter was ignored".
+	if !strings.Contains(body, "# filter ") && !strings.Contains(body, "# limit=") {
+		t.Errorf("no selection metadata above the header:\n%s", body)
+	}
+}
+
+// TestAO3WorksCSVNullIsNotEmpty: the mirror leaves bookmarks NULL for 112,890 of
+// 112,935 works, so a CSV that wrote those as empty cells would claim the mirror
+// recorded zero bookmarks.
+func TestAO3WorksCSVNullIsNotEmpty(t *testing.T) {
+	ts := newTestServer(t)
+	status, body, _ := getRaw(t, ts, "/api/v1/ao3/works?limit=100&format=csv")
+	if status != 200 {
+		t.Fatalf("status %d", status)
+	}
+	if !strings.Contains(body, ",null,") {
+		t.Errorf("no NULL columns rendered as \"null\":\n%s", body)
+	}
+}
+
+// TestAO3WorksCSVKeepsTheStalenessHeaders: SPEC 3.2.2 requires them on EVERY
+// response. A format-specific branch is exactly where one gets dropped.
+func TestAO3WorksCSVKeepsTheStalenessHeaders(t *testing.T) {
+	ts := newTestServer(t)
+	for _, h := range []string{"X-Kindred-Index-Age", "X-Kindred-Index-Version", "Server"} {
+		if got := responseHeader(t, ts, "/api/v1/ao3/works?format=csv", h); got == "" {
+			t.Errorf("CSV response has no %s header", h)
+		}
+	}
+}
+
+// TestAO3WorksJSONIsUnaffected: the branch is placed before the JSON body is
+// built, so the two formats cannot disagree about which rows were selected.
+func TestAO3WorksJSONIsUnaffected(t *testing.T) {
+	ts := newTestServer(t)
+	status, body := get(t, ts, "/api/v1/ao3/works?limit=2")
+	if status != 200 {
+		t.Fatalf("status %d", status)
+	}
+	if _, ok := body["works"]; !ok {
+		t.Errorf("no-format response lost its works key: %v", body)
+	}
+	// And an unrecognised format is not silently treated as csv.
+	_, raw, ct := getRaw(t, ts, "/api/v1/ao3/works?format=xml")
+	if !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("format=xml produced %q; an unknown format must fall through to JSON", ct)
+	}
+	if !strings.HasPrefix(raw, "{") {
+		t.Errorf("format=xml did not return JSON: %.60s", raw)
 	}
 }

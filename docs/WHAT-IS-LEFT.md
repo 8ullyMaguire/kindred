@@ -636,8 +636,48 @@ default of 10. The e2e harness sets 3, because `testcorpus` gives every work fou
 or five tags — below 10, so the page would be permanently empty there and the
 browser suite could only test the empty state. Five Playwright tests now cover
 the pick, the seed link, the redirect and the empty state.
-- [ ] **CSV export** (#20) — **confirmed absent.** No `?format=` anywhere; grep
-      for it turns up only `fmt.Sprintf` and one prose string.
+- [x] ~~**CSV export** (#20)~~ — DONE: `?format=csv` on `GET /api/v1/ao3/works`
+
+Same query, same filters, same ordering; the CSV branch sits **before** the JSON
+body is assembled, so the two formats cannot disagree about which rows were
+selected. An unrecognised `?format=` falls through to JSON rather than being
+treated as CSV.
+
+Two conventions, both forced by a fact CSV cells cannot otherwise carry:
+
+| in the mirror | in the CSV |
+|---|---|
+| NULL | the literal `null` |
+| `""` | an empty field |
+
+`bookmarks` is NULL for **112,890 of 112,935** works, so collapsing the two would
+claim the mirror recorded zero bookmarks. `filters_applied` has no cell, so the
+selection is emitted as `#` comment lines — "my filter matched nothing" and "my
+filter was ignored" are different situations and only one is visible in the rows.
+
+**Three bugs, and one of them was in the test rather than the code.**
+
+1. The `#` preamble made a *correct* file fail to parse. `csv.Reader` without
+   `Comment = '#'` treats `# limit=100` as a one-field record and rejects the
+   whole file with "wrong number of fields". The writer was right and the reader
+   was wrong, which is the good kind of test failure — it is now pinned, and
+   `README.md` documents `r.Comment = '#'` for anyone else's parser.
+2. **The assertion listed its columns twice.** It checked `{8,10,11}` for the
+   NULL columns while the writer emits `bookmarks=8, language=9, complete=10,
+   update_date=11` — so it demanded `"null"` of two columns that were never
+   NULL and reported them as failures. A duplicated list is a second place to be
+   wrong; the test now reads positions out of the **header row**.
+3. I called `s.setFreshnessHeaders(w)`, a helper that does not exist, to solve a
+   problem the middleware had already solved — the staleness headers wrap every
+   route. Caught by the compiler, but it is the same instinct: invent the seam
+   rather than find it.
+
+The dangerous cells are the crawled ones. A work titled `He said "hi", then` +
+newline carries a comma, a double quote and a newline at once, and that row is
+now in the fixture. Verified by mutation, all three killed: a naive
+`strings.Join(rec, ",")` writer **compiles** and fails on
+`bare " in non-quoted-field`; `csvNull` returning `v.String` unconditionally
+loses NULL; dropping the branch loses CSV entirely.
 - [ ] **author page** (#25) — **confirmed absent, and blocked on a decision I
       could not make from the tracker.** Measured on the real mirror:
 

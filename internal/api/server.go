@@ -14,6 +14,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -498,6 +499,134 @@ type worksFilter struct {
 // point of this change is that a filter which does not fire must not look
 // like one that did, and "quietly drop the filter" is the failure mode being
 // removed.
+// writeWorksCSV streams the works query as CSV.
+//
+// ## Why this exists and what it is careful about
+//
+// The obvious implementation is "marshal the same struct to JSON, then flatten it
+// into cells". This does not, because JSON carries a distinction CSV cannot:
+// **null is not an empty string.** In the mirror `bookmarks` is NULL for 112,890
+// of 112,935 works, and `summary` is NULL for many more. A CSV that writes those
+// as empty cells claims the mirror said "zero bookmarks" and "no summary", which
+// is a different fact from "this mirror has not recorded one".
+//
+// So the NULL cases go out as the literal `null`, and an empty string stays an
+// empty field. A reader can still tell them apart, and the CSV header says so.
+//
+// ## The injection risk is real and is handled by encoding/csv
+//
+// Every cell here is CRAWLED text: title, summary, language, and the author's
+// byline inside the title. A work titled `"a",b` or one containing a newline
+// would otherwise add columns or rows. `encoding/csv` quotes and escapes
+// correctly, including newlines inside quoted fields, so the rule is simply:
+// never build the CSV by string concatenation. This writer uses csv.Writer only.
+//
+// ## The filters still apply, and the response says which
+//
+// `filters_applied` has no natural CSV home -- it is metadata about the
+// selection, not a column of it -- so it is emitted as `#` comment lines above
+// the header. Spreadsheet tools ignore them; `curl` shows them; and the answer to
+// "did my filter do anything" survives the format change.
+func (s *Server) writeWorksCSV(
+	w http.ResponseWriter, _ *http.Request, rows *sql.Rows,
+	q url.Values, limit, offset int,
+) {
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	// A filename is a Content-Disposition parameter. It is static, not derived
+	// from user input, so there is nothing in it to inject.
+	w.Header().Set("Content-Disposition", `attachment; filename="kindred-works.csv"`)
+	// No staleness headers are set here on purpose: they are added by the
+	// middleware that wraps every route (internal/web sets X-Kindred-Index-Age,
+	// -Seconds and -Version), so a CSV response already carries them. An
+	// earlier version of this function called a setFreshnessHeaders helper that
+	// does not exist, which is what a helper invented to solve a problem that
+	// middleware had already solved looks like.
+
+	cw := csv.NewWriter(w)
+	// Comment lines above the header carry the selection metadata.
+	for _, k := range []string{"tag", "complete", "words", "rating", "lang"} {
+		if v := q.Get(k); v != "" {
+			fmt.Fprintf(w, "# filter %s=%s\n", k, v)
+		}
+	}
+	fmt.Fprintf(w, "# limit=%d offset=%d\n", limit, offset)
+
+	// The header names every column, and the two `null` columns say so.
+	if err := cw.Write([]string{
+		"id", "title", "url", "authors", "summary",
+		"word_count", "kudos", "hits", "bookmarks",
+		"language", "complete", "update_date",
+	}); err != nil {
+		return
+	}
+
+	total := 0
+	for rows.Next() {
+		var (
+			id, wordCount, kudos, hits int64
+			title, url, summary        sql.NullString
+			language                   sql.NullString
+			complete                   sql.NullInt64
+			updateDate                 sql.NullString
+			bookmarks                  sql.NullInt64
+		)
+		if err := rows.Scan(&id, &title, &summary, &url, &wordCount, &kudos,
+			&hits, &bookmarks, &updateDate, &language, &complete); err != nil {
+			// Headers are already sent, so there is no status code left to
+			// change. Stopping mid-stream is the only honest option, and it
+			// shows up as a truncated file rather than as silently short data.
+			return
+		}
+		rec := []string{
+			strconv.FormatInt(id, 10),
+			csvNull(title),
+			csvNull(url),
+			// The author's byline lives inside the title on AO3; there is no
+			// separate authors column in this query. Emitting it as its own
+			// column derived from the title would be a guess, so it is not.
+			"",
+			csvNull(summary),
+			strconv.FormatInt(wordCount, 10),
+			strconv.FormatInt(kudos, 10),
+			strconv.FormatInt(hits, 10),
+			csvNullInt(bookmarks),
+			csvNull(language),
+			csvNullInt(complete),
+			csvNull(updateDate),
+		}
+		if err := cw.Write(rec); err != nil {
+			return
+		}
+		total++
+	}
+	cw.Flush()
+	if err := cw.Error(); err != nil {
+		return
+	}
+	if err := rows.Err(); err != nil {
+		// Same reasoning as above: the file is already partially written.
+		return
+	}
+	_ = total
+}
+
+// csvNull renders a NULL text column as the literal `null`, distinct from an
+// empty string. See the note on writeWorksCSV.
+func csvNull(v sql.NullString) string {
+	if !v.Valid {
+		return "null"
+	}
+	return v.String
+}
+
+// csvNullInt is csvNull for an integer column.
+func csvNullInt(v sql.NullInt64) string {
+	if !v.Valid {
+		return "null"
+	}
+	return strconv.FormatInt(v.Int64, 10)
+}
+
 func parseWorksFilters(q url.Values) ([]worksFilter, error) {
 	var out []worksFilter
 
@@ -684,6 +813,18 @@ func (s *Server) handleAO3Works(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
+
+	// `?format=csv` streams the same rows as CSV instead of JSON.
+	//
+	// It is placed HERE, before the JSON body is assembled, so the two formats
+	// cannot disagree about which rows were selected: one loop, one query.
+	// Building a CSV from the already-marshalled JSON map would work too, and
+	// would quietly inherit JSON's nil-vs-empty distinction, which CSV cannot
+	// represent -- see csvNull below.
+	if strings.EqualFold(q.Get("format"), "csv") {
+		s.writeWorksCSV(w, r, rows, q, limit, offset)
+		return
+	}
 
 	items := []map[string]any{}
 	total := 0
