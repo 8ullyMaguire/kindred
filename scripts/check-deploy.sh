@@ -357,6 +357,8 @@ else
 fi
 
 # --- 4b. /surprise picks a real, seedable work ---------------------------
+echo
+echo "surprise — a real seed, and a different one each call"
 # A status-only assertion would pass on the empty state, so this checks the
 # seed link AND the tag count, and then that two calls differ. The "random"
 # query was deterministic once already -- a random offset with no ordering
