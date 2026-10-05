@@ -1,0 +1,72 @@
+[Unit]
+Description=kindred (lite) — recommender on a 512 MB Pi
+Documentation=https://github.com/polarisocial/kindred
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Same account as the thinkcentre unit, for the same reason: it owns the state
+# directory and can read the corpus, and nothing else.
+User=kindre
+Group=kindre
+
+# Absolute paths, not %h. See the comment in kindred.service: systemd expands
+# %h to the service user's home, which is not the installer's, and the unit then
+# dies 226/NAMESPACE before the binary starts.
+Environment=STATE=/var/lib/kindred
+Environment=CORPUS=/srv/ao3/ao3_metadata.db
+
+# `--mode lite` is the whole point of this unit.
+#
+# lite drops the embedder and keeps only top-N neighbours per tag. Measured on
+# the 1.7 GB mirror: **26 MiB peak in lite against 168 MiB in full**. On a
+# Pi with 512 MB of RAM, full mode does not fit beside anything else, and lite
+# does. The corpus is the same 1.7 GB either way -- lite changes what is held in
+# memory, not what is read from disk.
+ExecStart=/usr/local/bin/kindred serve \
+  --corpus ${CORPUS} \
+  --db ${STATE}/kindred.db \
+  --listen 127.0.0.1:8010 \
+  --mode lite
+
+# 26 MiB measured, 60 MiB the service's own cap. MemoryMax is the backstop for
+# the case where the service is wrong.
+#
+# 256M is PLAN §7's figure and it is deliberately far above 26 MiB: this is a
+# backstop against a runaway, not a target. A cap set just above the measured
+# figure would kill the service for a 10 MiB regression rather than reporting it.
+MemoryMax=256M
+MemoryHigh=192M
+MemorySwapMax=0
+
+KillSignal=SIGTERM
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=5
+
+# Same hardening as the thinkcentre unit. A Pi has less RAM for a pager to be
+# swapped into, and nothing here needs any of the capabilities removed below.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=%E{CORPUS}
+ReadWritePaths=/var/lib/kindred
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+# MemoryDenyWriteExecute is NOT set: it makes a Go binary fail 203/EXEC. See the
+# longer note in kindred.service -- verified on the build host, not assumed.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

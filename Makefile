@@ -107,6 +107,10 @@ verify:
 	  python3 scripts/check-cli-coverage.py
 	@echo "=== deploy + both gates ==="; ./scripts/deploy.sh
 	@echo "=== memory budget ==="; $(MAKE) --no-print-directory budget
+	@echo "=== arm64 (build yes, measure only on a Pi) ==="; \
+	  bash scripts/budget-pi.sh || rc=$$?; \
+	  if [ "$${rc:-0}" -gt 2 ]; then exit $$rc; fi; \
+	  echo "  exit 2 = no arm64 host here, which is SKIPPED not PASS"
 	@echo
 	@echo "ALL GATES PASS"
 

@@ -456,9 +456,19 @@ Both say `kindred dump verify --in <dir>`. The real command is
 - [x] both documents corrected, with the observed output pasted in
 - [x] PLAN §6.1's eight fictional filenames corrected, and the genuinely
       missing delta/retention called out rather than left implied
-- [ ] **still worth doing:** a CI check that every `kindred …` command quoted
-      in the docs actually parses. Two documents in a row named a command that
-      does not exist, and the failure mode reads as "the feature is broken"
+- [x] ~~**still worth doing:** a CI check that every `kindred …` command quoted
+      in the docs actually parses~~ — DONE, twice over
+
+`scripts/check-doc-commands.sh` exists, runs in `make verify`, and is green over
+47 extracted invocations with three documented exit codes (0 clean / 1 docs
+wrong / 2 stale binary). It also has to reject a **stale** `bin/kindred`, because
+a three-day-old binary reports "flag provided but not defined" for flags the tree
+defines and the gate faithfully reports that as BROKEN.
+
+And asking the *other* direction turned out to matter more than this one — see
+`check-cli-coverage.py` in the same item above: **22 flags defined and documented
+nowhere**, and **7 of 12 commands with no example invocation**, which this gate
+was structurally unable to see.
 
 ### 5. M5 — budgets and parity (partial)
 
@@ -502,11 +512,45 @@ Why this matters more than a wrong number: a memory gate that measures a server
 *without its index* would pass a build that OOMs the moment the index is present,
 which is the build anyone actually runs.
 
-- [ ] `scripts/budget-pi.sh` is named in PLAN §7 and does not exist. `lite` mode's
-      26 MiB is measured and correct, so the Pi question is answerable without a
-      Pi — but the *host* is named, and a number from thinkcentre is not a number
-      from a Pi 3 with 512 MB.
-- [ ] arm64 run under `MemoryMax` on real hardware (SPEC §12)
+- [x] ~~`scripts/budget-pi.sh` is named in PLAN §7 and does not exist~~ — DONE
+- [ ] **arm64 run on real hardware** — genuinely blocked, and the blocker is
+      hardware, not code
+
+`scripts/budget-pi.sh` and `deploy/kindred-pi.service` both exist now, so five of
+PLAN §7's six named files are real (still missing: `docs/measurements.md`,
+`docs/parity/compare.py`, `docs/PARITY.md`).
+
+**The script deliberately measures nothing on x86 and exits 2.** PLAN §7.3 is
+explicit — *"A real arm64 run on real hardware — not a cross-compile, not a
+claim."* Printing the x86 figure under a Pi heading is precisely the claim §7.3
+rules out. It checks the one part that *is* checkable anywhere, and reports that
+as the only thing it did:
+
+    built 14221472 bytes
+    ELF 64-bit LSB executable, ARM aarch64, statically linked
+    OK: static aarch64 binary, CGO_ENABLED=0 so the Pi needs no C toolchain
+
+`file` confirms the architecture rather than trusting `GOARCH=arm64` — a cgo
+default that differs would silently produce a host binary that still builds
+clean, which is the failure this exists for. Verified by mutation: an arm64-only
+compile error makes it exit 1 with `FAIL: the arm64 build does not compile`.
+
+The Pi unit differs from the deployed one in exactly three keys — `Description`,
+`MemoryMax` (512M → 256M) and `MemoryHigh` (400M → 192M) — plus `--mode lite`.
+`systemd-analyze verify` parses it; the only complaint is that
+`/usr/local/bin/kindred` is not installed *here*.
+
+**What is still missing is the run.** Neither host is arm64 — both are `x86_64` —
+so "arm64 under `MemoryMax` on real hardware" cannot be closed from here. What
+the Pi would report, and where to look:
+
+    systemctl show kindred-pi -p MemoryCurrent
+
+which is the kernel's own accounting rather than a sample a script took. For
+scale: lite measures **26 MiB** on x86 against the 60 MiB cap, and the Pi unit's
+`MemoryMax` is 256M — deliberately far above the measurement, because a cap set
+just above the figure would kill the service for a 10 MiB regression instead of
+reporting it.
 
 ### 5b. ~~M5: budgets and parity~~ — partially done; script still missing
 
@@ -594,11 +638,33 @@ browser suite could only test the empty state. Five Playwright tests now cover
 the pick, the seed link, the redirect and the empty state.
 - [ ] **CSV export** (#20) — **confirmed absent.** No `?format=` anywhere; grep
       for it turns up only `fmt.Sprintf` and one prose string.
-- [ ] **author page** (#25) — **confirmed absent.** The route table is 17
-      routes and none is a user route. `users` exists in the corpus and the
-      arena ranks readers, so there is per-reader data to show — but §4.2 drops
-      the user tables from snapshots, which is a different surface and does not
-      license this.
+- [ ] **author page** (#25) — **confirmed absent, and blocked on a decision I
+      could not make from the tracker.** Measured on the real mirror:
+
+| table | rows | usable for this? |
+|---|---|---|
+| `work_authors` | **0** | empty — nothing to query |
+| `work_aliases` | **0** | empty |
+| `users` | 6,261 | these are *readers* the crawl saw, not authors |
+| `works.authors` | 112,935 | a **string**, see below |
+
+There is no normalised author table. Author identity lives in
+`works.authors`, one row per work, as a comma-joined string with AO3's own
+decorations:
+
+    -  Scrap - Paper - (multivers4l_m0r0n)
+    -Roulette- (Roulette_CV)
+
+Measured across all 112,935 works: **109,442** are a single clean name, **one**
+has a comma, and the rest carry a pseudonym in parentheses and/or dashes. So
+"one author page per name" needs a normalisation rule chosen deliberately —
+strip decorations and risk merging distinct accounts; keep them verbatim and every
+URL contains characters needing escaping; and none of it keys back to `users`,
+because `users` holds readers, not authors.
+
+**This is the first item in this file I could not resolve by reading the code**,
+because the answer is a product decision about pseudonym handling, not a fact
+about the corpus. It needs a choice before it is code.
 - [x] ~~**index version in the footer** (#85)~~ — **the claim was wrong: the
       footer already renders the index age**, in three states including "the age
       of this mirror is not recorded", and `X-Kindred-Index-Version` is already on
@@ -607,10 +673,11 @@ the pick, the seed link, the redirect and the empty state.
       `CorpusBuiltAt` but no build id. Age answers "how stale", not "which
       build". Folded into item 8 below rather than done.
 - [ ] **tag autocomplete** (#4) — *not* the "10 minutes, endpoint exists" the
-      ideas list claims. SPEC §1.1 forbids JS and a `<datalist>` needs either
-      static options (useless at 100k+ tags) or JS (forbidden), so this is a
-      design decision before it is code: the honest no-JS answer is a
-      "browse popular tags" page, which may already exist.
+      ideas list claims. SPEC §1.1 forbids JS, and a `<datalist>` needs either
+      static options (useless at 100k+ tags) or JS (forbidden). The honest no-JS
+      answer is a "browse popular tags" page — and **there is no `/tags` route**,
+      though `/tag/{id}` exists and `/neighbours` already answers a tag name.
+      So this is a new page plus a design decision, not a form control.
 
 **Removed from this list:** `SPEC §4.4 row 3` was here twice, once as an open
 item and once as a superseded quote. Both are gone; the work is done and recorded
