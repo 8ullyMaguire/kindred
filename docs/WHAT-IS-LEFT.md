@@ -166,7 +166,62 @@ is described wrongly — the verdict is "does the CLI know this invocation", not
 "does the CLI do what the prose says". Fixing that means either generating the
 command sections from `--help` or accepting the limit.
 
-- [ ] decide: generate the CLI reference from `--help`, or document the limit
+- [x] ~~decide: generate the CLI reference from `--help`, or document the limit~~
+      — DONE, and the answer was neither: write the reference *and* gate it
+
+The question was whether to generate docs from `--help` or document the limit.
+Generating was rejected: `--help` is a flag *list*, and the useful part of
+`--workers` is that the crawl delay, not the worker count, is the binding
+constraint — which no generated text can say. Documenting the limit was rejected
+too, because the limit turned out to be large.
+
+**The real finding was that the existing doc gate only asked one direction.**
+
+| gate | asks | was |
+|---|---|---|
+| `check-doc-commands.sh` | every command quoted in the docs → does the binary know it? | green |
+| `check-cli-coverage.py` | every flag the binary defines → is it named in the docs? | **did not exist** |
+
+That asymmetry is not neutral. The first direction finds a document naming a
+command that does not exist, and the symptom is a confusing error for whoever
+runs it. The second finds a capability that works and is undiscoverable — no
+symptom at all, so nothing in this project would ever have reported it.
+
+Measured before `docs/CLI.md` existed:
+
+- **22** command-specific flags defined and named in no document
+- **2** global flags accepted everywhere and named nowhere (`--top-n`, `--embed-dim`)
+- **7 of 12** commands had no example invocation with any flag, though all seven
+  were named in prose: `recommend`, `crawl`, `profile`, `rate`, `corpus-query`,
+  `stats`, `fetch`
+
+`docs/CLI.md` now documents all of it, and `check-cli-coverage.py` runs in
+`make verify` so it cannot fall behind. The gate carries an explicit `EXEMPT`
+list rather than a count target, because a gate you can satisfy by documenting
+29 flags nobody reads is a gate you will delete.
+
+**The new gate had two of its own bugs, both caught by it disagreeing with a
+manual count:**
+
+1. It regex-matched flags out of the whole help text, and reported a **phantom
+   `-only`** for nine of twelve commands. `-only` is not a flag; it is the
+   English word in a flag's description. It now parses Go's `FlagSet` layout —
+   a flag name is the first token of an indented line — which dropped the count
+   from 26 to 22.
+2. It printed "18 global flags" for **two**, appending per command into a list
+   that was then counted. A set.
+
+**And the existing doc gate had a real bug**, found by the new document: for a
+dispatching command, `-h` is itself taken as a subcommand name.
+
+    $ kindred profile -h
+    kindred profile: profile: unknown subcommand "-h"
+
+so the gate read no subcommand list and reported every profile
+invocation BROKEN — a false positive on correct documentation, in the gate whose
+whole job is judging documentation. It now falls back to the bare invocation,
+which prints the authoritative list. Verified in both directions: `profile lst`
+still fails, `profile list` passes.
       in the script header (it is already stated there)
 
 ## Three bugs worth remembering
@@ -459,8 +514,12 @@ which is the build anyone actually runs.
 accepts `?sort=` and `?words=` only. A reader who learns the filters from the
 API docs cannot use them in the browser.
 
-- [ ] add `complete` / `rating` / `lang` selects to the tag page controls
-- [ ] the rating control must send the AO3 letters (`G`/`T`/`M`/`E`); the
+- [x] ~~add `complete` / `rating` / `lang` selects to the tag page controls~~ —
+      DONE, long ago. Re-verified: `tag.html` has all three, and each carries a
+      comment explaining its form. `lang` is a text input *not* a select, on
+      purpose: "the mirror has many languages and a closed list would be a list of
+      the ones somebody remembered."
+- [x] ~~the rating control must send the AO3 letters (`G`/`T`/`M`/`E`); the
       mirror stores full names and the mapping is `ao3RatingNames`
 
 ### 7. Unbuilt, genuinely worth it

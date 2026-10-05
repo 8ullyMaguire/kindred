@@ -302,11 +302,38 @@ while IFS= read -r cmd; do
   esac
 
   sub=${cmd%% *}
-  subhelp=$("$BIN" $sub -h 2>&1 </dev/null | head -2 | tr '\n' ' ')
   desc=$(printf '%s' "$cmd" | cut -d' ' -f2)
+
+  # Where to LOOK for the subcommand list.
+  #
+  # `-h` is right for a leaf command and WRONG for a dispatching one:
+  #
+  #     $ kindred profile -h
+  #     kindred profile: profile: unknown subcommand "-h"
+  #
+  # `-h` is itself taken as a subcommand name, so it prints no list at all, and
+  # the check below then reported every `kindred profile …` invocation BROKEN
+  # even though `kindred profile` prints the authoritative list on its USAGE
+  # error:
+  #
+  #     $ kindred profile
+  #     kindred profile: profile: expected a subcommand
+  #       list                     every stored profile
+  #       show   NAME              one profile's weights
+  #       ...
+  #
+  # So: use `-h`, and if it does not enumerate the subcommand, fall back to the
+  # bare invocation. Both are the binary's own output; neither is parsed by us.
+  subhelp=$("$BIN" $sub -h 2>&1 </dev/null | head -12 | tr '\n' ' ')
+  case "$subhelp" in
+    *"unknown subcommand"*|*"expected a subcommand"*|*"Usage of $sub"*)
+      subhelp=$("$BIN" $sub 2>&1 </dev/null | head -12 | tr '\n' ' ')
+      ;;
+  esac
+
   if [ -n "$desc" ] && [ "${desc#-}" = "$desc" ]; then
     case "$subhelp" in
-      *"$desc "*|*"$desc,"*|*"$desc:"*)
+      *" $desc "*|*" $desc,"*|*" $desc:"*|*"$desc "*|*"$desc,"*|*"$desc:"*)
         : # the second word is a real subcommand of $sub
         ;;
       *)

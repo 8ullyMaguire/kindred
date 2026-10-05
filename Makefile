@@ -101,8 +101,10 @@ verify:
 	@echo "=== go vet ==="; $(GO) vet ./...
 	@echo "=== go test ==="; $(GO) test ./... -count=1
 	@echo "=== spec (7 clauses) ==="; python3 docs/goal-check.py
-	@echo "=== docs ==="; \
+	@echo "=== docs: does every quoted command exist? ==="; \
 	  $(GO) build -o bin/kindred ./cmd/kindred && ./scripts/check-doc-commands.sh
+	@echo "=== docs: is every flag documented? ==="; \
+	  python3 scripts/check-cli-coverage.py
 	@echo "=== deploy + both gates ==="; ./scripts/deploy.sh
 	@echo "=== memory budget ==="; $(MAKE) --no-print-directory budget
 	@echo
