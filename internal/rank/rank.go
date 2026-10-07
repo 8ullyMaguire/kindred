@@ -106,6 +106,18 @@ type Tune struct {
 	Weights map[string]float64 `json:"weights"`
 }
 
+// TagHit is a tag identifier and name for display in templates.
+type TagHit struct {
+	ID   int64
+	Name string
+}
+
+// TagInfo holds minimal tag information for display.
+type TagInfo struct {
+	ID   int64
+	Name string
+}
+
 // WithOverrides returns a copy of t with the given weights applied.
 //
 // It copies rather than mutating, because DefaultTune() is a function that

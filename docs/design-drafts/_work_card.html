@@ -1,0 +1,113 @@
+{{/* _work_card.html - reusable rendering of one work */}}
+{{define "_work_card"}}
+<article role="article" class="work-card">
+  <header class="work-card__header">
+    <h2 class="work-card__title">
+      <a href="/work/{{.Work.ID}}">{{.Work.Title}}</a>
+    </h2>
+    <p class="work-card__meta">
+      {{if .Work.Author}}
+        <a href="/author/{{.Work.Author.ID}}">{{.Work.Author.Name}}</a> ·
+      {{end}}
+      {{if .Work.WordCount}}
+        {{.Work.WordCount | fmt_int}} words ·
+        {{/* Reading time: word_count / 250 rounded, formatted as Xh Ym or Ym. Omitted for works under 500 words. */}}
+        {{if ge .Work.WordCount 500}}
+          {{$totalMinutes := div .Work.WordCount 250}}
+          {{$hours := div $totalMinutes 60}}
+          {{$minutes := mod $totalMinutes 60}}
+          {{if gt $hours 0}}
+            {{$hours}}h {{$minutes}}m read
+          {{else}}
+            {{$minutes}}m read
+          {{end}}
+        {{end}}
+      {{end}}
+    </p>
+    <p class="work-card__completion">
+      {{/* Completion status: ✓ Complete, ⟳ WIP (updated within 1 year), ✗ Abandoned (not updated in >1 year and not complete). The X is grey, not red. */}}
+      {{if .Work.Complete}}
+        <span class="completion-status completion-complete">✓ Complete</span>
+      {{else if sub (.Now.Unix) (.Work.Updated.Unix) < 31536000}} /* 1 year in seconds */
+        <span class="completion-status completion-wip">⟳ WIP</span>
+      {{else}}
+        <span class="completion-status completion-abandoned">✗ Abandoned</span>
+      {{end}}
+      ·
+      {{.Work.Language}}
+      ·
+      {{if .Work.Rating}}
+        {{.Work.Rating | fmt_rating}}
+      {{end}}
+      ·
+      {{.Work.Updated | fmt_relative}}
+    </p>
+  </header>
+
+  {{/* Tag chips: fandoms first, then relationships, characters, freeform. If more than 8 tags, truncate with "+N more ▾" that expands via <details>. */}}
+  {{/* Build a slice of all tags in order */}}
+  {{ $allTags := slice }}
+  {{ range .Work.Fandoms }}{{ $allTags = append $allTags . }}{{ end }}
+  {{ range .Work.Relationships }}{{ $allTags = append $allTags . }}{{ end }}
+  {{ range .Work.Characters }}{{ $allTags = append $allTags . }}{{ end }}
+  {{ range .Work.Tags }}{{ $allTags = append $allTags . }}{{ end }}
+
+  {{ if gt (len $allTags) 0 }}
+    <p class="work-card__tags">
+      {{ $displayed := 0 }}
+      {{ range $allTags }}
+        {{ if lt $displayed 8 }}
+          <a class="tag tag--{{ .Kind | tag_class }}" href="/tag/{{ .ID }}">{{ .Name }}</a>
+          {{ $displayed = add $displayed 1 }}
+        {{ end }}
+      {{ end }}
+      {{ if gt (len $allTags) 8 }}
+        <details>
+          <summary>+{{ sub (len $allTags) 8 }} more ▾</summary>
+          {{ $displayed = 0 }}
+          {{ range $allTags }}
+            {{ if ge $displayed 8 }}
+              <a class="tag tag--{{ .Kind | tag_class }}" href="/tag/{{ .ID }}">{{ .Name }}</a>
+            {{ end }}
+            {{ $displayed = add $displayed 1 }}
+          {{ end }}
+        </details>
+      {{ end }}
+    </p>
+  {{ end }}
+
+  {{if .Work.Summary}}
+  <p class="work-card__summary">
+    {{.Work.Summary | truncate 500}}
+  </p>
+  {{end}}
+
+  <div class="work-card__stats">
+    ❤ {{.Work.Kudos | fmt_int}}  ★ {{.Work.Bookmarks | fmt_int}}  👁 {{.Work.Hits | fmt_int}}
+  </div>
+
+  <div class="work-card__actions">
+    <a href="https://archiveofourown.org/works/{{.Work.AO3ID}}" rel="noopener noreferrer" class="work-card__action--ao3">Read on AO3 ↗</a>
+    <a href="/recommend?seed=ao3_work:{{.Work.ID}}" class="work-card__action--more">More like this</a>
+    {{if .ActiveProfile}}
+      <form method="post" action="/profile/{{.ActiveProfile.ID}}/mark-read" class="work-card__action--read">
+        <input type="hidden" name="work_id" value="{{.Work.ID}}">
+        <button type="submit">✓ Read it</button>
+      </form>
+    {{else}}
+      <form method="get" action="/profiles" class="work-card__action--read">
+        <button type="submit">Save to profile…</button>
+      </form>
+    {{end}}
+  </div>
+
+  <details class="work-card__evidence">
+    <summary>▾ Why this? (expand for evidence)</summary>
+    {{if .Evidence}}
+      {{template "_evidence" .}}
+    {{else}}
+      <p>No evidence available.</p>
+    {{end}}
+  </details>
+</article>
+{{end}}

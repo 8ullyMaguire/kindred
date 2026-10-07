@@ -1,0 +1,21 @@
+{{/* _evidence.html - rendering of evidence for a work */}}
+{{define "_evidence"}}
+<dl class="evidence">
+  {{range .Evidence}}
+    {{if eq .Signal "collaborative"}}
+      <div class="evidence-item">
+        <dd class="evidence-item__reason">Highly aligned with your reader cohort ({{printf \"%.0f\" (mul .Value 100)}}% taste overlap, {{.Reason}} bookmarks)</dd>
+      </div>
+    {{else}}
+      <div class="evidence-item">
+        <dt class="evidence-item__signal">{{.Signal}}</dt>
+        <dd class="evidence-item__value">{{printf \"%.0f\" (mul .Value 100)}}%</dd>
+        <dd class="evidence-item__bar">
+          <div class="evidence-item__bar-fill" style="width: {{printf \\\"%.0f\\\" (mul .Value 100)}}%"></div>
+        </dd>
+        <dd class="evidence-item__reason">{{.Reason}}</dd>
+      </div>
+    {{end}}
+  {{end}}
+</dl>
+{{end}}

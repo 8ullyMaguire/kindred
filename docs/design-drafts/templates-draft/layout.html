@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="referrer" content="no-referrer">
+  <title>{{.Title}} — Kindred</title>
+  <link rel="canonical" href="{{.Canonical}}">
+  <link rel="stylesheet" href="/static/kindred.css">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="alternate" type="application/atom+xml"
+        title="New works" href="/feed/new">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  {{template "header" .}}
+  <main id="main">{{template "content" .}}</main>
+  {{template "footer" .}}
+  <script src="/static/kindred.js" defer></script>
+</body>
+</html>

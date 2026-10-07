@@ -138,14 +138,47 @@ The in-memory data structures that power the recommender. Built by
 
 ### 2.5 Collaborative filtering (optional)
 
-- **Format**: Item-item co-bookmark matrix built from `user_work_interactions`.
+- **Format**: Item-item co-bookmark matrix built from `user_work_interactions`, storing
+  normalized cosine similarity of reader overlaps.
 - **Contents**: For each work, a list of neighbouring work IDs and the
-  co-bookmark count (weight).
+  similarity score (float32), where similarity is computed as:
+  $$\text{Similarity}(A, B) = \frac{|U_A \cap U_B|}{\sqrt{|U_A| \times |U_B|}}$$
+  ($U_A$ = set of users who bookmarked work A). This penalizes globally
+  ubiquitous works and prioritizes taste-based matching.
 - **Size**: ~23 MB (as measured on the live mirror).
 - **Access**: O(1) to get the neighbour list for a work.
 - **Note**: Built by the `internal/collab` package and wired into the
-  ranking pool at serve startup.
+  ranking pool at serve startup. The similarity values are precomputed
+  and normalized during index building.
 
+### 2.6 Web UI changes
+
+To reflect the personalized taste-based recommendations, the web UI is updated as follows:
+
+* The default sort on `/recommend` and `/profile/{id}` is changed from `Relevance` to `Taste Match`.
+* A new slider is added in the Filter Sidebar: `[ Niche Gems ───•─── Global Hits ]` which controls the popularity dampening exponent.
+* The collaborative evidence in the "Why this?" section is updated to show taste overlap: 
+  "Highly aligned with your reader cohort (94% taste overlap, 12 bookmarks)."
+
+### 2.7 Default Blocked Tags
+
+The following tags are blocked by default in the configuration to avoid certain content:
+- "M/M"
+- Slash
+- Gay
+- Romance
+- "Hurt/Comfort"
+- Fluff
+- Angst
+- "Slow Burn"
+- RPF
+- "Real Person Fiction"
+- Reader
+- Omega
+- "Needs a Hug"
+- Bestiality
+
+These tags can be overridden by the user in the URL or in their profile.
 ---
 
 ## 3. API

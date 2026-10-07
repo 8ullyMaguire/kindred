@@ -1,0 +1,111 @@
+{{/* _filter_sidebar.html - filter form for recommend, search, tag, fandom pages */}}
+{{define "_filter_sidebar"}}
+<details class="filter-sidebar">
+  <summary>Filters</summary>
+  <form class="filter-form" method="get" action="{{.CurrentURL}}" role="search"
+        aria-label="Filters">
+    {{if .HasSeeds}}
+    <fieldset>
+      <legend>Seeds</legend>
+      {{range .Seeds}}
+        <input type="text" name="seed" value="{{.Raw}}"
+               aria-label="Seed {{.Raw}}" size="18">
+      {{end}}
+      {{if lt (len .Seeds) .MaxSeeds}}
+        <input type="text" name="seed" value="" aria-label="Add another seed"
+               size="18" placeholder="ao3_work:20151202">
+      {{end}}
+      <p class="hint">
+        Up to {{.MaxSeeds}}. Past about five, seeds average each other away
+        rather than describing a taste.
+      </p>
+    </fieldset>
+    {{end}}
+
+    <fieldset>
+      <legend>Diversity</legend>
+      <label for="cap">Max results per group</label>
+      <input type="number" id="cap" name="max_per_fandom" min="0" max="100"
+             value="{{.MaxPerFandom}}">
+    </fieldset>
+
+    <fieldset>
+      <legend>Sort by</legend>
+      {{range $value, $label := .SortOptions}}
+        <label>
+          <input type="radio" name="sort" value="{{$value}}"
+                 {{if eq $.Sort $value}}checked{{end}}>
+          {{$label}}
+        </label><br>
+      {{end}}
+    </fieldset>
+
+    <fieldset>
+      <legend>Length</legend>
+      <label>min <input type="number" name="min_words" value="{{.MinWords}}"></label><br>
+      <label>max <input type="number" name="max_words" value="{{.MaxWords}}"></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Status</legend>
+      <label><input type="checkbox" name="complete" value="any"
+                    {{if eq $.Complete "any"}}checked{{end}}> Complete</label><br>
+      <label><input type="checkbox" name="complete" value="wip"
+                    {{if eq $.Complete "wip"}}checked{{end}}> WIP</label><br>
+      <label><input type="checkbox" name="complete" value="only"
+                    {{if eq $.Complete "only"}}checked{{end}}> Complete only</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Rating</legend>
+      {{range $rating := .Ratings}}
+        <label>
+          <input type="checkbox" name="rating" value="{{$rating}}"
+                 {{if contains $.Rating $rating}}checked{{end}}>
+          {{$rating | fmt_rating}}
+        </label><br>
+      {{end}}
+    </fieldset>
+
+    <fieldset>
+      <legend>Language</legend>
+      {{range $i, $lang := .Languages}}
+        {{if $i}} {{end}}
+        <label>
+          <input type="checkbox" name="language" value="{{$lang}}"
+                 {{if contains $.Language $lang}}checked{{end}}>
+          {{$lang}}
+        </label>
+      {{end}}
+      {{if gt (len .Languages) 8}}
+        <br><span class="lang-more">+{{sub (len .Languages) 8}} more ▾</span>
+      {{end}}
+    </fieldset>
+
+    <fieldset>
+      <legend>Blocked tags</legend>
+      {{if .BlockedTags}}
+        {{range .BlockedTags}}
+          <label class="blocked-tag">
+            <input type="hidden" name="blocked_tag" value="{{.ID}}">
+            {{.Name}} <a href="{{.URLWithoutBlockedTag}}">×</a>
+          </label><br>
+        {{end}}
+      {{end}}
+      <label for="tag-input">Add tag…</label><br>
+      <input type="text" id="tag-input" name="tag" data-autocomplete="tags"
+             data-autocomplete-submit="true" placeholder="e.g. hurt/comfort">
+    </fieldset>
+
+    <fieldset>
+      <legend>Popularity</legend>
+      <label for="dampening">[ Niche Gems ───•─── Global Hits ]</label>
+      <input type="range" id="dampening" name="popularity_dampening" min="0" max="1" step="0.01" value="{{.PopularityDampening}}">
+      <output id="dampening-value">{{.PopularityDampening}}</output>
+    </fieldset>
+
+    <button type="submit">Apply filters</button>
+    <a href="{{.URLWithoutFilters}}" class="reset-link">Reset</a>
+  </form>
+</details>
+{{end}}
