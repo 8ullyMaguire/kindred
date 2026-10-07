@@ -1281,6 +1281,18 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	n := clampInt(atoiDefault(r.URL.Query().Get("n"), 20), 1, 100)
 	page := TagPage{Base: d.base(name, name), Tag: TagInfo{ID: id, Name: name}}
 
+	// Whether this reader has already blocked the tag, so the control offers
+	// the reverse action. Best-effort: no store or no session means "not
+	// blocked", because the page still has to render its works, and a missing
+	// block list cannot be reported by a page that is trying to render.
+	if d.Engine != nil && d.Engine.Store != nil {
+		if _, ownerKey, err := d.arenaSession(ctx, w, r); err == nil {
+			if b, berr := d.Engine.Store.BlockedTagIDs(ctx, ownerKey); berr == nil {
+				page.Blocked = b[id]
+			}
+		}
+	}
+
 	// Sort and filter, from the query string.
 	//
 	// The order was hardcoded to kudos, which is defensible and useless:
@@ -1563,18 +1575,87 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Tune selection. The page used to DISPLAY the active weights and never
+	// let a reader choose one, so `?tune=` was unreachable from the browser
+	// and `kindred tune` was the only way to use a stored tune at all — a
+	// capability that exists, works, and cannot be found. An unknown name is
+	// refused by loadTune inside the engine rather than silently ignored,
+	// which matters more here than in the API: a typo'd tune in a form
+	// should say so, not quietly rank by the default.
+	tuneName := strings.TrimSpace(q.Get("tune"))
+
+	// Pool mode: whether co-bookmarked works may enter the pool at all.
+	poolMode, err := engine.ParsePoolMode(q.Get("pool_mode"))
+	if err != nil {
+		d.fail(w, r, http.StatusBadRequest, err)
+		return
+	}
+
+	// Pool size, bounded like the API's ?pool= so a reader cannot ask for an
+	// unbounded ranking from a form field.
+	poolSize := 0
+	if v := q.Get("pool"); v != "" {
+		poolSize, err = parseBoundedInt(v, 0, 5000, 0)
+		if err != nil {
+			d.fail(w, r, http.StatusBadRequest,
+				fmt.Errorf("pool: %w (candidates ranked per request, 0-5000)", err))
+			return
+		}
+	}
+
+	// Filters. Parsed by the SAME function the API uses, so the page and the
+	// JSON API cannot drift on what a filter means — and so a value the
+	// parser does not recognise is a 400 naming it rather than a silently
+	// ignored control.
+	filter, err := engine.ParseFilter(q)
+	if err != nil {
+		d.fail(w, r, http.StatusBadRequest, err)
+		return
+	}
+
+	// The reader's explicitly blocked tags. Resolved from their arena
+	// session, so blocking a tag on /block changes what /recommend returns
+	// — which is the whole point of having a block list. Before this, the
+	// block list was stored, displayed, and reversible, and never consulted
+	// during ranking: a reader could block a tag, see the same
+	// recommendations, and conclude the feature was broken.
+	//
+	// A session is minted on demand rather than requiring one, because
+	// /recommend is reachable without ever visiting /block and forcing a
+	// cookie there would be a side effect of merely ranking. A store failure
+	// is not fatal: the page still ranks, and says so in the degraded list,
+	// because refusing to recommend because a block list could not be read
+	// would be a worse failure than recommending something blocked.
+	var blocked map[int64]bool
+	if d.Engine.Store != nil {
+		_, ownerKey, serr := d.arenaSession(ctx, w, r)
+		if serr != nil {
+			d.log().Warn("could not resolve the reader's block list; ranking without it",
+				"err", serr)
+		} else if b, berr := d.Engine.Store.BlockedTagIDs(ctx, ownerKey); berr != nil {
+			d.log().Warn("could not read blocked tags; ranking without them", "err", berr)
+		} else if len(b) > 0 {
+			blocked = b
+		}
+	}
+
 	req := engine.Request{
 		Seeds:   seeds,
 		Kind:    corpus.AO3Kind,
 		N:       n,
+		Tune:    tuneName,
 		Exclude: true,
 		// The cap and its axis are passed through rather than applied to the
 		// result list here. Post-filtering a top-N list is a different and much
 		// worse algorithm: if the top 20 are all Harry Potter and the cap is 3,
 		// filtering the 20 returns 3 when the corpus had 200 eligible works
 		// outside that fandom. The cap has to shape the query.
-		MaxPerGroup: capN,
-		GroupBy:     groupBy,
+		MaxPerGroup:   capN,
+		GroupBy:       groupBy,
+		Filter:        filter,
+		PoolMode:      poolMode,
+		PoolSize:      poolSize,
+		BlockedTagIDs: blocked,
 	}
 
 	res, err := d.Engine.Recommend(ctx, req)
@@ -1582,7 +1663,11 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 		// A seed kind this mirror does not carry is the reader's mistake, and
 		// gets a 400 naming the kind rather than a 500: "ao3_book:1" is a typo,
 		// not a server fault.
-		if errors.Is(err, engine.ErrUnsupportedKind) {
+		if errors.Is(err, engine.ErrUnsupportedKind) ||
+			errors.Is(err, engine.ErrUnknownTune) {
+			// Both are the reader naming something that does not exist, and
+			// both errors carry the correction. A 500 for a typo'd tune
+			// would report a server fault for a client mistake.
 			d.fail(w, r, http.StatusBadRequest, err)
 			return
 		}
@@ -1606,6 +1691,13 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 		SeedLimitHit:    seedLimitHit,
 		MaxSeeds:        maxSeeds,
 		ShortfallReason: shortfallReason(n, len(res.Items), capN, groupBy),
+		Filter:          filter,
+		PoolMode:        poolMode.String(),
+		PoolSize:        poolSize,
+		TuneName:        tuneName,
+		TuneNames:       d.tuneNames(ctx),
+		Filters:         recommendFilterRows(q, filter),
+		Degraded:        res.Meta.Degraded,
 	}
 	page.Tune = weightRows(res.Tune)
 	d.page(w, "recommend.html", page, http.StatusOK)
@@ -1614,6 +1706,96 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 // maxSeeds is the seed ceiling. Five describes a taste; twenty averages it
 // into mush, which is a worse answer than refusing to answer.
 const maxSeeds = 5
+
+// recommendFilterRows builds the ranking filter controls, echoing the values
+// the reader sent.
+//
+// The values come back out of the RAW QUERY rather than out of the parsed
+// Filter, and that is deliberate: a number box holding "abc" must still show
+// "abc" so the reader can see what they typed. Reconstructing the value from
+// the parsed filter would silently blank it, which reads as the control
+// having rejected the input without saying why.
+func recommendFilterRows(q url.Values, f engine.Filter) []FilterRow {
+	csv := func(vs []string) string { return strings.Join(vs, ", ") }
+	sel := func(cur string, opts ...Option) []Option {
+		for i := range opts {
+			opts[i].Selected = opts[i].Value == cur
+		}
+		return opts
+	}
+	// The raw `complete` value is echoed when it parses, and the first legal
+	// option is selected when it does not.
+	complete := strings.ToLower(strings.TrimSpace(q.Get("complete")))
+	switch {
+	case complete == "":
+	case complete == "any", complete == "all":
+		complete = "any"
+	case complete == "complete", complete == "only", complete == "completed",
+		complete == "true", complete == "1", complete == "yes":
+		complete = "complete"
+	default:
+		complete = "in-progress"
+	}
+
+	return []FilterRow{
+		{
+			Name: "min_words", Label: "At least", Kind: "number",
+			Value: q.Get("min_words"),
+			Hint:  "words; 0 for no floor",
+		},
+		{
+			Name: "max_words", Label: "At most", Kind: "number",
+			Value: q.Get("max_words"),
+			Hint:  "words; 0 for no ceiling",
+		},
+		{
+			Name: "min_kudos", Label: "At least", Kind: "number",
+			Value: q.Get("min_kudos"),
+			Hint:  "kudos",
+		},
+		{
+			Name: "complete", Label: "Completion", Kind: "select",
+			Value: complete,
+			Values: sel(complete,
+				Option{Value: "any", Label: "any"},
+				Option{Value: "complete", Label: "finished only"},
+				Option{Value: "in-progress", Label: "in progress only"}),
+		},
+		{
+			Name: "rating", Label: "Rating", Kind: "csv",
+			Value: csv(f.Ratings),
+			Hint:  "comma separated, e.g. General Audiences, Explicit",
+		},
+		{
+			Name: "lang", Label: "Language", Kind: "csv",
+			Value: csv(f.Languages),
+			Hint:  "comma separated, e.g. English",
+		},
+	}
+}
+
+// tuneNames lists the stored tunes a reader can pick.
+//
+// Best-effort by design: a reader with no store, or a store that cannot be
+// read, gets a select with only the "default" option rather than an error
+// page. The page still ranks. A tune picker that can break the recommend page
+// is a worse trade than a tune picker that occasionally offers nothing.
+func (d Deps) tuneNames(ctx context.Context) []string {
+	out := []string{"default"}
+	if d.Engine == nil || d.Engine.Store == nil {
+		return out
+	}
+	names, err := d.Engine.Store.TuneNames(ctx)
+	if err != nil || len(names) == 0 {
+		return out
+	}
+	for _, n := range names {
+		if n != "" && n != "default" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
 
 // shortfallReason explains a short list, or returns "" when it needs none.
 //

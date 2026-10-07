@@ -106,6 +106,47 @@ type Tune struct {
 	Weights map[string]float64 `json:"weights"`
 }
 
+// WithOverrides returns a copy of t with the given weights applied.
+//
+// It copies rather than mutating, because DefaultTune() is a function that
+// builds a fresh map precisely so two concurrent requests cannot share one
+// tune. A method that mutated the receiver would reintroduce that bug through
+// a route no test would suspect.
+//
+// An override for a signal the tune does not know is DROPPED, and reported by
+// UnknownSignals. Keeping it in the map would make the stored weights a lie —
+// they would name a signal that never contributes to the score, and a reader
+// reading back a tune they saved would see a weight that does nothing.
+func (t Tune) WithOverrides(overrides map[string]float64) Tune {
+	out := Tune{Name: t.Name, Weights: make(map[string]float64, len(t.Weights))}
+	for k, v := range t.Weights {
+		out.Weights[k] = v
+	}
+	for k, v := range overrides {
+		if _, known := out.Weights[k]; known {
+			out.Weights[k] = v
+		}
+	}
+	return out
+}
+
+// UnknownSignals reports which names in an override map match no weight this
+// tune carries.
+//
+// A name that matches nothing is the accepted-and-ignored shape: the request
+// succeeds, the ranking is produced, and nothing says the setting had no
+// effect. Returning the names lets the caller say so.
+func (t Tune) UnknownSignals(overrides map[string]float64) []string {
+	var out []string
+	for name := range overrides {
+		if _, ok := t.Weights[name]; !ok {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Score applies the signals and weights to every candidate.
 //
 // A candidate that every signal skipped is dropped rather than ranked at

@@ -49,8 +49,75 @@
     </p>
   </fieldset>
 
+  <fieldset>
+    <legend>Filters</legend>
+    {{/* These six controls each narrow the POOL, not the finished list. That
+         placement is the whole point and it is invisible from here, so the
+         hint says it: a reader who expects "top 20, then drop the short ones"
+         would be surprised by what a much larger pool does. */}}
+    {{range .Filters}}
+      <label for="f-{{.Name}}">{{.Label}}</label>
+      {{if eq .Kind "select"}}
+        <select id="f-{{.Name}}" name="{{.Name}}">
+          {{range .Values}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}
+        </select>
+      {{else if eq .Kind "number"}}
+        <input type="number" id="f-{{.Name}}" name="{{.Name}}" min="0"
+               value="{{.Value}}" size="7">
+      {{else}}
+        <input type="text" id="f-{{.Name}}" name="{{.Name}}" value="{{.Value}}" size="18">
+      {{end}}
+      {{if .Hint}}<span class="hint">{{.Hint}}</span>{{end}}
+    {{end}}
+    <p class="hint">
+      Filters narrow the candidate pool before anything is scored, so raising
+      &ldquo;at least&rdquo; can bring up works a shorter list never reached.
+      Zero means no bound.
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Ranking</legend>
+    {{/* Pool mode. Collaborative filtering adds works co-bookmarked with a
+         seed — the works that share no tag with it and that tag pooling
+         therefore cannot reach at all. Off by default because on this mirror
+         the co-bookmark evidence is thin and the tail is sometimes weaker
+         than tag overlap. */}}
+    <label for="poolmode">Candidates</label>
+    <select id="poolmode" name="pool_mode">
+      <option value="tags" {{if eq .PoolMode "tags"}}selected{{end}}>sharing a tag with a seed</option>
+      <option value="tags+collab" {{if eq .PoolMode "tags+collab"}}selected{{end}}>also co-bookmarked with a seed</option>
+    </select>
+    <label for="pool">Pool size</label>
+    <input type="number" id="pool" name="pool" min="0" max="5000"
+           value="{{.PoolSize}}" size="6">
+    {{/* `n` was the one ranking parameter with no control, which meant any
+         form submission silently reset the result count to the default: a GET
+         form drops any parameter it has no field for. A reader who had
+         asked for 100, then touched a filter, got 20 back with nothing
+         saying why. */}}
+    <label for="n">Results</label>
+    <input type="number" id="n" name="n" min="1" max="100" value="{{.N}}" size="4">
+    <label for="tune">Weights</label>
+    <select id="tune" name="tune">
+      {{range .TuneNames}}<option value="{{.}}" {{if eq $.TuneName .}}selected{{end}}>{{.}}</option>{{end}}
+    </select>
+    <p class="hint">
+      A larger pool costs time and finds more; it does not change what the
+      signals believe. An unknown weight name is refused rather than ignored.
+    </p>
+  </fieldset>
+
   <input type="submit" value="Rank">
 </form>
+
+{{if .Degraded}}
+  <p class="warn" data-testid="degraded">
+    Ranked without: {{range $i, $d := .Degraded}}{{if $i}}, {{end}}{{$d}}{{end}}.
+    These signals had no data for this request, so the list below is not the
+    ranking you would get with them working.
+  </p>
+{{end}}
 
 {{if .Similar}}
   <div class="recommend" data-testid="results">

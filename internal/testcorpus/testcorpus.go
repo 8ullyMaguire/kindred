@@ -59,6 +59,12 @@ CREATE TABLE work_tags(
 CREATE TABLE cooccurrence_edges(
 	tag_a_id INTEGER NOT NULL, tag_b_id INTEGER NOT NULL, cooccur_count INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY(tag_a_id, tag_b_id));
+CREATE TABLE users(
+	id INTEGER PRIMARY KEY, url TEXT NOT NULL, username TEXT NOT NULL,
+	bookmark_count INTEGER DEFAULT 0, first_seen TEXT, last_updated TEXT);
+CREATE TABLE user_work_interactions(
+	user_id INTEGER NOT NULL, work_id INTEGER NOT NULL,
+	interaction_type TEXT NOT NULL DEFAULT 'bookmarked');
 `
 
 // Work is one row of the corpus.
@@ -112,12 +118,40 @@ type Edge struct {
 	Cooccur int
 }
 
+// User is one row of the users table.
+type User struct {
+	ID       int64
+	Username string
+	// BookmarkCount is the user's own total, which is NOT necessarily the
+	// number of interaction rows this fixture writes. The real mirror's
+	// interaction table carries duplicates (measured: 7 rows for 4 distinct
+	// works), and a fixture that cannot express a duplicate row cannot test
+	// the DISTINCT that every bookmark count in this project depends on.
+	BookmarkCount int
+}
+
+// Interaction is one row of user_work_interactions.
+//
+// InteractionType exists so a fixture can reproduce the trap that makes
+// 'bookmarker' different from 'bookmarked': the first is a row ABOUT a work
+// carrying a user id, and counting it attributes one reader's history from
+// another's action. Empty means 'bookmarked'.
+type Interaction struct {
+	UserID          int64
+	WorkID          int64
+	InteractionType string
+}
+
 // Corpus is a fixture waiting to be written.
 type Corpus struct {
 	Works    []Work
 	Tags     []Tag
 	WorkTags []WorkTag
 	Edges    []Edge
+	Users    []User
+	// Interactions are written verbatim, duplicates and non-'bookmarked'
+	// types included, because that is the shape the real table has.
+	Interactions []Interaction
 }
 
 // The rating, language and completion vocabulary below is the REAL mirror's,
@@ -335,6 +369,30 @@ func (c *Corpus) Write(path string) (string, error) {
 			`INSERT OR REPLACE INTO cooccurrence_edges(tag_a_id,tag_b_id,cooccur_count) VALUES(?,?,?)`,
 			e.A, e.B, e.Cooccur); err != nil {
 			return "", fmt.Errorf("edge %d-%d: %w", e.A, e.B, err)
+		}
+	}
+	for _, u := range c.Users {
+		if _, err := tx.Exec(
+			`INSERT INTO users(id,url,username,bookmark_count,first_seen,last_updated)
+			 VALUES(?,?,?,?,?,?)`,
+			u.ID, fmt.Sprintf("https://example.invalid/users/%d", u.ID),
+			u.Username, u.BookmarkCount, "2026-01-01", "2026-01-01"); err != nil {
+			return "", fmt.Errorf("user %d: %w", u.ID, err)
+		}
+	}
+	for _, in := range c.Interactions {
+		// Plain INSERT, NOT OR IGNORE: there is no primary key on this
+		// table in the real mirror, and the duplicate rows it carries are
+		// the reason every count here must be DISTINCT. A fixture that
+		// silently deduplicated them would make those counts untestable.
+		typ := in.InteractionType
+		if typ == "" {
+			typ = "bookmarked"
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO user_work_interactions(user_id,work_id,interaction_type) VALUES(?,?,?)`,
+			in.UserID, in.WorkID, typ); err != nil {
+			return "", fmt.Errorf("interaction %d/%d: %w", in.UserID, in.WorkID, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

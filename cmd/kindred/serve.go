@@ -12,6 +12,7 @@ import (
 
 	"git.polarisocial.xyz/kindred/kindred/internal/api"
 	"git.polarisocial.xyz/kindred/kindred/internal/budget"
+	"git.polarisocial.xyz/kindred/kindred/internal/collab"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
@@ -100,6 +101,31 @@ func runServe(ctx context.Context, args []string) error {
 			"hint", "run \"kindred ingest --embed\"")
 	}
 
+	// Collaborative filtering: the co-bookmark index over the mirror's
+	// user_work_interactions.
+	//
+	// Built at STARTUP rather than loaded from the index file, because it is
+	// small and derived: measured on the live mirror it is 12,812 pairs over
+	// 9,365 works and 23 MB, against the tag graph's 7.75M edges. Persisting
+	// it would add a second file that has to be invalidated whenever the
+	// mirror's bookmark rows change, which is a new way for the index to be
+	// stale. Rebuilding costs ~21 s once at boot.
+	//
+	// A failure degrades rather than stops the service, the same shape as the
+	// graph above: the collab signal then skips for every candidate and names
+	// itself in meta.degraded[], which is the honest report.
+	var collabIdx *collab.Index
+	cb := &collab.Builder{Corpus: s.Corpus}
+	if cidx, cst, err := cb.Build(ctx); err != nil {
+		logger.Warn("no collaborative-filtering index; the collab signal will skip",
+			"err", err)
+	} else {
+		collabIdx = cidx
+		logger.Info("collab index built",
+			"gate", cb.Gate, "pairs", cst.Pairs, "pairs_before_gate", cst.PairsBeforeGate,
+			"works", cst.Works, "users", cst.Users)
+	}
+
 	poolSize := engine.DefaultPoolSize
 	if !lite {
 		poolSize = engine.FullPoolSize
@@ -108,6 +134,7 @@ func runServe(ctx context.Context, args []string) error {
 		Store:    s,
 		Corpus:   ao3,
 		Graph:    g,
+		Collab:   collabIdx,
 		PoolSize: poolSize,
 		TopN:     c.TopN,
 		Lite:     lite,

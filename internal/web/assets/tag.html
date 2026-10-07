@@ -91,6 +91,21 @@
   <input type="submit" value="Apply">
 </form>
 
+{{/* The block control. It lives on the tag page because blocking IS per-tag,
+     and this is the only page that names a tag. Without it there is no route
+     to blocking from anywhere in the site: POST /block exists and /block
+     lists what is already blocked, but nothing ever offered the button, so
+     the feature could only be reached by hand-crafting a form post. A reader
+     who wants to stop seeing a tag had no way to say so. */}}
+<form method="post" action="/block" class="block-form">
+  <input type="hidden" name="tag_id" value="{{.Tag.ID}}">
+  <input type="hidden" name="action" value="{{if .Blocked}}unblock{{else}}block{{end}}">
+  <button type="submit">{{if .Blocked}}Unblock this tag{{else}}Block this tag{{end}}</button>
+</form>
+{{if .Blocked}}
+  <p class="note">Works carrying this tag are excluded from your rankings.</p>
+{{end}}
+
 {{if .FilterErr}}
   <p class="note" data-testid="filter-error">
     {{.FilterErr}} Showing every work on this tag instead.

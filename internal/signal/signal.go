@@ -202,29 +202,37 @@ func voteKey(tags []int32, limit int) string {
 }
 
 // voteCache is a small LRU over vote maps.
-var voteCache = newLRU(8)
+var voteCache = newLRU[int32](8)
 
-type lru struct {
+// lru is a fixed-capacity memo keyed by a string.
+//
+// Generic over the map's KEY type because the neighbour vote cache and the
+// collab vote cache have different key types (tag id vs work id) and both
+// need memoising. The first version was hard-typed to map[int32]float64, which
+// meant the collab cache could either duplicate the whole structure or be cast
+// into it — and a cast would have been the kind of adaptation layer that can
+// disagree with what it adapts.
+type lru[K comparable] struct {
 	mu      sync.Mutex
 	cap     int
 	entries map[string]*list.Element
 	order   *list.List
 }
 
-type lruEntry struct {
+type lruEntry[K comparable] struct {
 	key   string
-	votes map[int32]float64
+	votes map[K]float64
 }
 
-func newLRU(capacity int) *lru {
-	return &lru{
+func newLRU[K comparable](capacity int) *lru[K] {
+	return &lru[K]{
 		cap:     capacity,
 		entries: make(map[string]*list.Element, capacity),
 		order:   list.New(),
 	}
 }
 
-func (l *lru) get(key string) (map[int32]float64, bool) {
+func (l *lru[K]) get(key string) (map[K]float64, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	el, ok := l.entries[key]
@@ -232,18 +240,18 @@ func (l *lru) get(key string) (map[int32]float64, bool) {
 		return nil, false
 	}
 	l.order.MoveToFront(el)
-	return el.Value.(*lruEntry).votes, true
+	return el.Value.(*lruEntry[K]).votes, true
 }
 
-func (l *lru) put(key string, votes map[int32]float64) {
+func (l *lru[K]) put(key string, votes map[K]float64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if el, ok := l.entries[key]; ok {
-		el.Value.(*lruEntry).votes = votes
+		el.Value.(*lruEntry[K]).votes = votes
 		l.order.MoveToFront(el)
 		return
 	}
-	el := l.order.PushFront(&lruEntry{key: key, votes: votes})
+	el := l.order.PushFront(&lruEntry[K]{key: key, votes: votes})
 	l.entries[key] = el
 	// Evict the least recently used. Without a bound this is the unbounded
 	// cache the previous deployment had.
@@ -253,13 +261,13 @@ func (l *lru) put(key string, votes map[int32]float64) {
 			break
 		}
 		l.order.Remove(oldest)
-		delete(l.entries, oldest.Value.(*lruEntry).key)
+		delete(l.entries, oldest.Value.(*lruEntry[K]).key)
 	}
 }
 
 // resetVoteCache clears the memo. Exported for tests: a shared cache
 // across tests makes one test's memo answer another's query.
-func resetVoteCache() { voteCache = newLRU(8) }
+func resetVoteCache() { voteCache = newLRU[int32](8) }
 
 // Quality scores kudos per 1k words, the "praise per effort" measure.
 //

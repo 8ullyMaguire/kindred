@@ -333,6 +333,23 @@ func (s *Server) parseRecommend(r *http.Request) (*engine.Request, error) {
 		}
 		req.Seeds = append(req.Seeds, parsed)
 	}
+	// Filters and pool mode are parsed for BOTH methods, from the query
+	// string, because the POST body carries the ranking knobs while the
+	// query carries the filters. Two surfaces for one request would be a
+	// worse API than either alone, but the filters were already on
+	// /api/v1/ao3/works in the query string and moving them would break that.
+	filter, err := engine.ParseFilter(r.URL.Query())
+	if err != nil {
+		return nil, err
+	}
+	req.Filter = filter
+	if v := q.Get("pool_mode"); v != "" {
+		mode, err := engine.ParsePoolMode(v)
+		if err != nil {
+			return nil, err
+		}
+		req.PoolMode = mode
+	}
 	return req, nil
 }
 
@@ -347,7 +364,11 @@ func (s *Server) writeEngineErr(w http.ResponseWriter, err error) {
 	// typo'd `book:1` got "internal server error" and no way to tell that the
 	// fault was theirs. Matched on the sentinel below rather than on message
 	// text, so this stays correct when the message is reworded.
-	case errors.Is(err, engine.ErrUnsupportedKind):
+	case errors.Is(err, engine.ErrUnsupportedKind),
+		errors.Is(err, engine.ErrUnknownTune):
+		// An unknown tune is the caller's mistake, exactly as an unsupported
+		// seed kind is: both name something that does not exist, and both
+		// have a fix the caller can make from the error message alone.
 		writeErr(w, http.StatusBadRequest, err)
 	case errors.Is(err, store.ErrNotFound),
 		errors.Is(err, corpus.ErrNotFound),

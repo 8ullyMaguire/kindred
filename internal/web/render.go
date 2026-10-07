@@ -11,6 +11,7 @@ import (
 
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
+	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 )
@@ -151,6 +152,10 @@ type TagPage struct {
 	// SortOptions drives the control. A template cannot loop over a map
 	// with a stable order, so the options are a slice.
 	SortOptions []SortOption
+	// Blocked says whether this reader has blocked the tag, so the control
+	// can offer the reverse action and the page can say what blocking did.
+	Blocked bool
+
 	// Words is the raw word-count filter as the reader typed it, echoed
 	// back into the control so a reload keeps it.
 	Words string
@@ -259,6 +264,55 @@ type RecommendPage struct {
 	// Tune is the active weight vector, so a reader can see WHY a result
 	// ranked where it did rather than having to trust it.
 	Tune []WeightRow
+
+	// The rest of the ranking controls, echoed so the form shows the request
+	// it made. Without these the filters, the pool mode and the tune name
+	// were reachable ONLY by hand-editing the URL: the query parameters
+	// worked, nothing on the page set them, and a capability that cannot be
+	// found is not usable from the frontend.
+	//
+	// Filter and PoolMode are the raw request values rather than parsed
+	// structs, because a select's value has to round-trip exactly as the
+	// reader sent it.
+	Filter engine.Filter
+	// Filters is the control list the form renders. It is built from the raw
+	// query rather than from Filter so a rejected value is echoed back rather
+	// than silently blanked -- see recommendFilterRows.
+	Filters   []FilterRow
+	PoolMode  string
+	PoolSize  int
+	TuneName  string
+	TuneNames []string // stored tunes the reader can pick, best-effort
+
+	// Degraded names the signals that could not run. It is on the recommend
+	// page rather than only on /health because a missing signal changes the
+	// RANKING, and a reader looking at a list cannot see that it was ranked
+	// without collaborative filtering unless the page says so.
+	Degraded []string
+}
+
+// FilterRow is one filter control on the recommend form, in the shape a
+// template needs it.
+//
+// It is a slice of rows rather than a struct with one field per filter so the
+// form renders the same way as the tag page's filters: one loop, one markup,
+// and adding a filter is a row rather than an edit to three places.
+type FilterRow struct {
+	Name    string
+	Label   string
+	Kind    string // "number", "text", "select", "csv"
+	Value   string
+	Hint    string
+	Values  []Option // for Kind == "select"
+	Allow   bool     // whether the filter was accepted; a refused value says so
+	Refused string   // why it was refused, when Allow is false
+}
+
+// Option is one choice in a filter select.
+type Option struct {
+	Value    string
+	Label    string
+	Selected bool
 }
 
 // WeightRow is one signal's weight, heaviest first.

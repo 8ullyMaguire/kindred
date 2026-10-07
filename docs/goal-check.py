@@ -376,6 +376,56 @@ def clause_parity():
         ("tune is implemented",
          "cmd/kindred/tune.go", r"func runTune",
          "tune was a stub returning 'not implemented yet'"),
+
+        # The next four are NOT the same kind of check. Each was a parameter
+        # that was accepted, echoed back, and inert — and a regex over the
+        # source cannot tell the difference, because the inert version also
+        # contains the parameter's name.
+        #
+        # `?tune=` was the clearest case: it reached meta.Tune and nothing
+        # else, while signals() unconditionally built DefaultTune(). The
+        # regexes below match the RESOLUTION, not the parameter's name:
+        # resolveTune loads the stored weights, signals applies them, and the
+        # tests assert on the resulting weight map rather than on the order of
+        # results (order depends on the fixture's scores; the weight map IS
+        # the contract).
+        ("a named tune is resolved, not just echoed",
+         "internal/engine/engine.go",
+         r"func \(e \*Engine\) resolveTune\(",
+         "?tune= was recorded in meta and had no effect on ranking at all"),
+
+        ("a tune's weights reach the scorer",
+         "internal/engine/engine.go",
+         r"tune = tune\.WithOverrides\(overrides\)",
+         "signals() ignored the resolved weights and always used DefaultTune"),
+
+        ("blocks reach the pool query",
+         "internal/engine/engine.go",
+         r"q \+= blockSQL\(req\.BlockedTagIDs, &args\)",
+         "blocking a tag was stored and displayed but never removed anything, "
+         "because the predicate never reached the pool query"),
+
+        ("collaborative filtering is wired into ranking",
+         "internal/engine/engine.go",
+         r"signal\.Collab\{Votes: collabVotes",
+         "the collab index existed and was never registered as a signal, so it "
+         "changed nothing at runtime"),
+
+        # Frontend reachability. Every ranking control above is URL-only
+        # unless a control renders it, and "usable from the frontend" is the
+        # requirement this clause now carries. A capability that cannot be
+        # found in the interface is not usable, however well it works.
+        ("ranking controls are on the recommend form",
+         "internal/web/assets/recommend.html",
+         r'name="pool_mode"|\{\{\.Filters\}\}',
+         "the filters, pool mode and tune existed only as query parameters; no "
+         "control set them, so a reader could not reach them"),
+
+        ("blocking is reachable from a page",
+         "internal/web/assets/tag.html",
+         r'class="block-form"',
+         "POST /block existed and /block listed what was blocked, but no page "
+         "ever rendered the button, so blocking could not be performed at all"),
     ]
 
     missing = []

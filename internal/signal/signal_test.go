@@ -155,7 +155,7 @@ func TestVoteCacheIsBounded(t *testing.T) {
 }
 
 func TestVoteCacheEvictsLeastRecentlyUsed(t *testing.T) {
-	c := newLRU(2)
+	c := newLRU[int32](2)
 	c.put("a", map[int32]float64{1: 1})
 	c.put("b", map[int32]float64{2: 1})
 	if _, ok := c.get("a"); !ok {
