@@ -461,6 +461,30 @@ CREATE TABLE IF NOT EXISTS arena_user_blocked_tags (
 	at        TEXT NOT NULL DEFAULT (datetime('now')),
 	PRIMARY KEY (owner_key, tag_id)
 ) WITHOUT ROWID;
+
+/* Works a reader has already been shown or has marked as read.
+
+   The id is stored as TEXT because the same store serves several kinds
+   (ao3_work, tag, author) and a work id is not comparable with a tag id:
+   the kinds namespace is kept in the string, exactly as seeds are
+   ("ao3_work:1").
+
+   shown_at and read_at are separate because they answer different
+   questions. "Do not show me this again" is about the RECOMMENDER repeating
+   itself, which is a different complaint from "I have read this", which is
+   about the work itself. Collapsing them would mean a reader cannot ask for
+   one without getting the other. */
+CREATE TABLE IF NOT EXISTS seen_works (
+	owner_key TEXT NOT NULL,
+	entity_id TEXT NOT NULL,
+	kind      TEXT NOT NULL DEFAULT '',
+	shown_at  TEXT NOT NULL DEFAULT (datetime('now')),
+	read_at   TEXT,
+	PRIMARY KEY (owner_key, entity_id)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS seen_works_owner_shown
+	ON seen_works (owner_key, shown_at);
 `
 
 // Migrate applies the schema. Idempotent, so it is safe on every start.

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"strings"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
+	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
 
@@ -413,6 +415,83 @@ func (d Deps) postBlock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/block", http.StatusSeeOther)
+}
+
+// postSeen marks a work read or unread.
+//
+// The redirect target is carried in the form rather than hardcoded, so
+// marking a work read from a recommendation list returns the reader to the
+// list they were reading rather than to a page they did not ask for. It is
+// echoed back only if it looks like a local path: an open redirect here would
+// turn "mark read" into a link to anywhere on the internet.
+func (d Deps) postSeen(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if err := r.ParseForm(); err != nil {
+		d.fail(w, r, http.StatusBadRequest, fmt.Errorf("parse form: %w", err))
+		return
+	}
+	raw := r.PostFormValue("work_id")
+	workID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || workID <= 0 {
+		d.fail(w, r, http.StatusBadRequest,
+			fmt.Errorf("work_id must be a positive number, got %q", raw))
+		return
+	}
+	if d.Engine == nil || d.Engine.Store == nil {
+		d.fail(w, r, http.StatusServiceUnavailable,
+			errors.New("this server has no store to record reads in"))
+		return
+	}
+	_, ownerKey, err := d.arenaSession(ctx, w, r)
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+
+	// Explicit, not a toggle, for the same reason blocking is: a double
+	// submit must not un-mark.
+	entity := corpus.AO3Kind + ":" + strconv.FormatInt(workID, 10)
+	var opErr error
+	switch r.PostFormValue("action") {
+	case "read":
+		opErr = d.Engine.Store.MarkRead(ctx, ownerKey, entity)
+	case "unread":
+		opErr = d.Engine.Store.UnmarkRead(ctx, ownerKey, entity)
+	default:
+		d.fail(w, r, http.StatusBadRequest, fmt.Errorf(
+			"action must be read or unread, got %q", r.PostFormValue("action")))
+		return
+	}
+	if opErr != nil {
+		d.fail(w, r, http.StatusInternalServerError, opErr)
+		return
+	}
+	http.Redirect(w, r, safeReturnTo(r.PostFormValue("return_to")), http.StatusSeeOther)
+}
+
+// safeReturnTo accepts only a local absolute path.
+//
+// An open redirect on a form POST is a phishing primitive: the form says
+// "mark as read" and the reader lands somewhere else. The guard rejects
+// anything that is not `/` followed by a character that cannot start a host.
+//
+// Three shapes are rejected beyond the obvious `http://`, and all three are
+// real: browsers normalise a leading `\` to `/`, and both `//host` and
+// `/\host` are protocol-relative URLs that resolve to the attacker's host
+// while looking like a local path to anything reading the string.
+func safeReturnTo(v string) string {
+	if v == "" || v[0] != '/' {
+		return "/recommend"
+	}
+	// "/" alone is the site root and is perfectly safe; only a second
+	// character that starts a host makes this protocol-relative.
+	if len(v) > 1 {
+		switch v[1] {
+		case '/', '\\':
+			return "/recommend"
+		}
+	}
+	return v
 }
 
 // renderArena presents a comparison.

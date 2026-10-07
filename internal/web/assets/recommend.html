@@ -98,6 +98,11 @@
          saying why. */}}
     <label for="n">Results</label>
     <input type="number" id="n" name="n" min="1" max="100" value="{{.N}}" size="4">
+    <label for="hideseen">Repeat</label>
+    <select id="hideseen" name="hide_seen">
+      <option value="0" {{if not .HideSeen}}selected{{end}}>show works I have seen</option>
+      <option value="1" {{if .HideSeen}}selected{{end}}>hide works shown in the last week</option>
+    </select>
     <label for="tune">Weights</label>
     <select id="tune" name="tune">
       {{range .TuneNames}}<option value="{{.}}" {{if eq $.TuneName .}}selected{{end}}>{{.}}</option>{{end}}
@@ -131,6 +136,16 @@
           {{if .URL}}<a href="{{.URL}}" rel="noopener nofollow">on AO3</a> &middot;{{end}}
           <a class="seed-link" href="/recommend?seed=ao3_work:{{.ID}}">rank from this</a>
         </p>
+        {{/* Marking read is the DURABLE exclusion, as opposed to "hide what
+             I have seen", which expires after a week. Without this control a
+             reader could suppress repetition but could never record a read,
+             which is the one they actually care about after a while. */}}
+        <form method="post" action="/seen" class="seen-form">
+          <input type="hidden" name="work_id" value="{{.ID}}">
+          <input type="hidden" name="action" value="read">
+          <input type="hidden" name="return_to" value="{{$.ReturnTo}}">
+          <button type="submit" data-testid="mark-read">I have read this</button>
+        </form>
         {{if .Summary}}<p class="summary">{{shorten .Summary 1}}</p>{{end}}
         {{if .Evidence}}
         <ul class="evidence">

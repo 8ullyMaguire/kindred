@@ -137,6 +137,15 @@ the tag pool is load-bearing rather than belt-and-braces.
 
 ## Still open
 
+- [x] **Seen-work history.** `seen_works` records both what a reader was shown
+      and what they marked read, as SEPARATE facts. Read works are excluded
+      unconditionally; shown works expire after 7 days, and `shown_at` is
+      REFRESHED on every sighting so a work a reader keeps being shown never
+      silently ages out of the window. The exclusion is applied in the POOL
+      query, not after ranking — otherwise asking for 20 with 15 seen returns
+      5, and a reader's list visibly shrinks every time they mark something
+      read. Reachable from the page: `hide_seen` control on `/recommend` plus
+      an "I have read this" button per result (POST `/seen`).
 - [ ] **Entity shortlists (authors, characters, series, collections).** The
       sibling tool derives authors by parsing `works.authors` text, identifies
       fandoms by name shape, and reports series/collections as absent unless

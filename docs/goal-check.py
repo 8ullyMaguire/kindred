@@ -439,6 +439,20 @@ def clause_parity():
          r"handleCorpusQuery",
          "the four working corpus-query modes existed only as pages and a CLI "
          "verb, so a script had to scrape a rendered table"),
+
+        ("already-seen works leave the pool, not the result list",
+         "internal/engine/engine.go",
+         r"seenSQL\(req\.SeenIDs, &args\)",
+         "excluding seen works after ranking returns a SHORTER list rather "
+         "than a ranking over works still worth showing, so a reader's results "
+         "would visibly shrink every time they read something"),
+
+        ("marking a work read is reachable from a page",
+         "internal/web/assets/recommend.html",
+         r'class="seen-form"',
+         "the read-exclusion half of the seen list could only be recorded by "
+         "hand-writing a POST, so the durable half of the feature was "
+         "unreachable while the expiring half worked"),
     ]
 
     missing = []

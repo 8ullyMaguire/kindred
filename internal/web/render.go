@@ -284,6 +284,16 @@ type RecommendPage struct {
 	TuneName  string
 	TuneNames []string // stored tunes the reader can pick, best-effort
 
+	// HideSeen is the reader's seen-suppression toggle, echoed so the control
+	// shows the state they are in rather than resetting on every render.
+	HideSeen bool
+
+	// ReturnTo is the current request path, for the mark-read form to send the
+	// reader back to. It is the page's own path rather than the full query:
+	// re-submitting the query would re-apply hide_seen=1, which is correct,
+	// but carrying seeds is what makes the reader land on the same list.
+	ReturnTo string
+
 	// Degraded names the signals that could not run. It is on the recommend
 	// page rather than only on /health because a missing signal changes the
 	// RANKING, and a reader looking at a list cannot see that it was ranked

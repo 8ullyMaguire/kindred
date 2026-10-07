@@ -144,6 +144,14 @@ type Request struct {
 	// corpus), and a reader identity is not the engine's to resolve.
 	BlockedTagIDs map[int64]bool
 
+	// SeenIDs are entities this reader has already been shown or has read.
+	// They cannot enter the pool.
+	//
+	// Ids are namespaced strings ("ao3_work:123") rather than int64s because
+	// the same field serves every kind, and a tag id 42 and a work id 42 are
+	// different things that must not collide in one exclusion set.
+	SeenIDs map[string]bool
+
 	// Filters narrow the CANDIDATE POOL, inside the query, before anything
 	// is scored. That placement is the whole point.
 	//
@@ -643,7 +651,7 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 		if len(collabVotes) == 0 {
 			return nil, nil, nil
 		}
-		ids := collabCandidates(collabVotes, limit, seedIDs, 0, f, req.BlockedTagIDs, e.Corpus)
+		ids := collabCandidates(collabVotes, limit, seedIDs, 0, f, req.BlockedTagIDs, req.SeenIDs, e.Corpus)
 		return ids, collabVotes, nil
 	}
 
@@ -723,6 +731,7 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 	// willing to see: ask for 20 and get 8, with no way to tell that 60
 	// eligible works sat below the cut-off behind blocked ones.
 	q += blockSQL(req.BlockedTagIDs, &args)
+	q += seenSQL(req.SeenIDs, &args)
 	// ORDER BY shared DESC, work_id ASC. The work_id tiebreak is what makes
 	// two identical requests rank identical candidates.
 	q += ` GROUP BY wt.work_id
@@ -796,9 +805,53 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 	if room <= 0 {
 		return out, collabVotes, nil
 	}
-	extra := collabCandidates(collabVotes, room, seedIDs, 0, f, req.BlockedTagIDs, e.Corpus)
+	extra := collabCandidates(collabVotes, room, seedIDs, 0, f, req.BlockedTagIDs, req.SeenIDs, e.Corpus)
 	out = append(out, extra...)
 	return out, collabVotes, nil
+}
+
+// seenSQL excludes entities the reader has already been shown or has read.
+//
+// Applied in the pool query for the same reason the blocks are: filtering
+// the finished ranking returns a subset of a ranking rather than a ranking
+// over the works still worth showing. The difference is visible to a reader:
+// ask for 20 with 15 already seen and post-filtering returns 5, while the
+// pool query returns 20 NEW ones.
+//
+// The ids are TEXT because they are namespaced ("ao3_work:123"). A work id
+// and a tag id share a namespace here only as strings, so comparing them as
+// integers would exclude a tag-seeded request's works whenever a work with
+// the same numeric id had been seen.
+func seenSQL(seen map[string]bool, args *[]any) string {
+	if len(seen) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(seen))
+	for key := range seen {
+		// Trimmed, and blank ids dropped, to match store.cleanEntityIDs.
+		// They must agree: the store writes trimmed keys, so a predicate that
+		// admitted a padded key would emit a value that can never match
+		// anything — a silently useless exclusion that still costs a scan.
+		if id := strings.TrimSpace(key); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	// Sorted for the same reason blockSQL sorts: identical requests must
+	// compile to identical SQL so SQLite's plan cache hits.
+	sort.Strings(ids)
+	vals := make([]any, len(ids))
+	for i, id := range ids {
+		vals[i] = id
+	}
+	*args = append(*args, vals...)
+	// `kind || ':' || CAST(id AS TEXT)` is how the seed namespacing works
+	// elsewhere, so an exclusion set built from "ao3_work:1" matches a row
+	// the pool selected as work 1.
+	return ` AND ('ao3_work:' || CAST(w.id AS TEXT)) NOT IN (` +
+		corpus.Placeholders(len(ids)) + `)`
 }
 
 // collabReserve is how many of a pool's slots are held back for
@@ -843,7 +896,7 @@ func collabReserve(limit int) int {
 // The SQL is only built when there is something to filter: with no filter the
 // ranked votes are already the answer, and a needless join over 112,935 works
 // to rediscover them would be the kind of work this package avoids.
-func collabCandidates(votes map[int64]float64, limit int, seedIDs []int64, skip int, f Filter, blocked map[int64]bool, ao3 *corpus.AO3) []int64 {
+func collabCandidates(votes map[int64]float64, limit int, seedIDs []int64, skip int, f Filter, blocked map[int64]bool, seen map[string]bool, ao3 *corpus.AO3) []int64 {
 	if limit <= 0 || len(votes) == 0 {
 		return nil
 	}
@@ -881,7 +934,7 @@ func collabCandidates(votes map[int64]float64, limit int, seedIDs []int64, skip 
 	}
 	all = all[skip:]
 
-	if f.isEmpty() && len(blocked) == 0 {
+	if f.isEmpty() && len(blocked) == 0 && len(seen) == 0 {
 		out := make([]int64, 0, limit)
 		for i, c := range all {
 			if i >= limit {
@@ -911,6 +964,7 @@ func collabCandidates(votes map[int64]float64, limit int, seedIDs []int64, skip 
 	q := `SELECT w.id FROM works w WHERE w.id IN (` + corpus.Placeholders(len(chunk)) + `)`
 	q += filterSQL(f, &args)
 	q += blockSQL(blocked, &args)
+	q += seenSQL(seen, &args)
 	rows, err := ao3.DB.QueryContext(context.Background(), q, args...)
 	if err != nil {
 		// A failed filter query returns no candidates rather than

@@ -19,6 +19,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
+	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
 
@@ -255,6 +256,19 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 	// the guard below still rejects a POST to any other page URL.
 	if r.Method == http.MethodPost && r.URL.Path == "/block" {
 		d.postBlock(w, r)
+		return
+	}
+
+	// Marking a work read or unread. Same shape as blocking: a one-button
+	// form the result list renders, so a page POST is completed by the
+	// browser and this does not widen the set of URLs that accept writes.
+	//
+	// Without it, "I have read this" could only be recorded by hand-writing
+	// a POST, and the read-exclusion half of the seen list would be
+	// unreachable in practice while the shown half worked fine — a feature
+	// that exists on the API and not on the page.
+	if r.Method == http.MethodPost && r.URL.Path == "/seen" {
+		d.postSeen(w, r)
 		return
 	}
 
@@ -1639,6 +1653,15 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Works this reader has already been shown or has read.
+	//
+	// Two separate decisions, because they are two separate complaints.
+	// `hide_seen` is about the RECOMMENDER repeating itself and expires: a
+	// work unseen for a month is worth showing again. Marked-read works are
+	// excluded unconditionally, because the reader said they read it and that
+	// does not expire.
+	seen, hideSeen := d.seenExclusions(ctx, w, r, q)
+
 	req := engine.Request{
 		Seeds:   seeds,
 		Kind:    corpus.AO3Kind,
@@ -1656,6 +1679,7 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 		PoolMode:      poolMode,
 		PoolSize:      poolSize,
 		BlockedTagIDs: blocked,
+		SeenIDs:       seen,
 	}
 
 	res, err := d.Engine.Recommend(ctx, req)
@@ -1699,8 +1723,94 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 		Filters:         recommendFilterRows(q, filter),
 		Degraded:        res.Meta.Degraded,
 	}
+	// Record what was shown, AFTER the ranking. Doing it before would mean
+	// the page's own results are on the exclusion list by the time the reader
+	// refreshes, so a refresh returns an empty page — the feature working so
+	// well it hides everything.
+	//
+	// Only recorded when the reader ASKED for seen-exclusion. Otherwise every
+	// visit silently builds a history the reader never opted into, and then
+	// `hide_seen` starts suppressing works they have never actually seen.
+	d.recordShown(ctx, w, r, res.Items, hideSeen)
+
 	page.Tune = weightRows(res.Tune)
+	page.HideSeen = hideSeen
+	// Only the path and query, and only if they came from this site: the mark
+	// read form POSTs this back, and an attacker-supplied absolute URL here
+	// would make "mark read" a redirect off-site. safeReturnTo re-checks it,
+	// but building it from the request rather than from a constant is what
+	// keeps the two in step.
+	page.ReturnTo = safeReturnTo(r.URL.RequestURI())
 	d.page(w, "recommend.html", page, http.StatusOK)
+}
+
+// seenExclusions resolves which works this reader should not be shown again.
+//
+// It returns the exclusion set and whether seen-tracking is on. The boolean is
+// passed back to the caller rather than inferred from the set's size,
+// because "the reader has seen nothing" and "the reader is not tracking" both
+// produce an empty set and must not be confused: the second one must not
+// start recording.
+//
+// Read works are always excluded. Shown-but-not-read works are excluded only
+// while the reader has asked for it, and only inside the window — see
+// store.SeenIDs for why the window exists.
+func (d Deps) seenExclusions(ctx context.Context, w http.ResponseWriter, r *http.Request, q url.Values) (map[string]bool, bool) {
+	if d.Engine == nil || d.Engine.Store == nil {
+		return nil, false
+	}
+	hideSeen := q.Get("hide_seen") == "1" || q.Get("hide_seen") == "true"
+	_, ownerKey, err := d.arenaSession(ctx, w, r)
+	if err != nil {
+		return nil, false
+	}
+	// A zero window excludes only the read set. That is the right default
+	// for someone who has never ticked the box: "do not re-recommend what I
+	// have read" is a reasonable thing to honour, and "do not show me
+	// anything twice" is not.
+	window := time.Duration(0)
+	if hideSeen {
+		window = defaultSeenWindow
+	}
+	seen, err := d.Engine.Store.SeenIDs(ctx, ownerKey, window)
+	if err != nil {
+		d.log().Warn("could not read the reader's seen list; ranking without it",
+			"err", err)
+		return nil, false
+	}
+	return seen, hideSeen
+}
+
+// defaultSeenWindow is how long a merely-shown work stays suppressed.
+//
+// Seven days is a guess, and it is labelled as one. It is long enough that a
+// reader working through a list is not offered the same works the next day,
+// and short enough that a work they skipped on Monday is back by the
+// following week. It is a parameter rather than a constant so a reader
+// wanting a different tolerance can have one.
+const defaultSeenWindow = 7 * 24 * time.Hour
+
+// recordShown notes the works this response listed.
+//
+// It is deliberately best-effort and deliberately silent: a reader cannot
+// act on "I could not save that you saw this", and failing the whole page
+// because a history row failed to write would be a much worse outcome than a
+// slightly incomplete history.
+func (d Deps) recordShown(ctx context.Context, w http.ResponseWriter, r *http.Request, items []rank.Candidate, tracking bool) {
+	if !tracking || d.Engine == nil || d.Engine.Store == nil || len(items) == 0 {
+		return
+	}
+	_, ownerKey, err := d.arenaSession(ctx, w, r)
+	if err != nil {
+		return
+	}
+	ids := make([]string, 0, len(items))
+	for _, c := range items {
+		ids = append(ids, corpus.AO3Kind+":"+strconv.FormatInt(c.ID, 10))
+	}
+	if err := d.Engine.Store.MarkShown(ctx, ownerKey, ids); err != nil {
+		d.log().Warn("could not record shown works", "err", err)
+	}
 }
 
 // maxSeeds is the seed ceiling. Five describes a taste; twenty averages it
