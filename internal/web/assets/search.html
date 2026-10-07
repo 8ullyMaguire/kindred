@@ -8,6 +8,27 @@
        so rather than leaving the reader to wonder whether the other kind
        was searched at all. */}}
 
+  {{/* An AO3 id or work URL in the search box renders here first, above
+       the fuzzy results: the reader pasted an address, and answering it
+       with fifty title matches would be answering a question they did not
+       ask. */}}
+  {{if .Exact}}
+    <h2>Work link</h2>
+    <p class="count" data-testid="exact-label">
+      Matched by AO3 work id or URL:
+    </p>
+    <div class="recommend" data-testid="exact-work">
+      {{template "workrow" .Exact}}
+    </div>
+  {{end}}
+  {{if .ExactMissing}}
+    <p class="note" data-testid="exact-missing">
+      This mirror does not hold work {{.ExactMissing}} &mdash; that is the id
+      in the link or number you searched. Matching titles and authors
+      follow; nothing below is that work.
+    </p>
+  {{end}}
+
   <h2>Works</h2>
   {{if .WorkError}}
     <p class="note" data-testid="work-search-error">
@@ -16,7 +37,11 @@
   {{else if .Works}}
     <p class="count" data-testid="work-count">
       {{.WorkTotal}} work{{if ne .WorkTotal 1}}s{{end}} match &ldquo;{{.Query}}&rdquo; by title or author.
-      {{if .WorkLimited}}That is the most this page shows.{{end}}
+      {{if .WorkLimited}}
+        That is the most this page shows.
+        <a href="/search?q={{urlquery .Query}}&amp;n={{.NextN}}" data-testid="works-raise">
+          Ask for {{.NextN}} instead</a>.
+      {{end}}
     </p>
     <div class="recommend" data-testid="works">
       {{range .Works}}
@@ -28,7 +53,10 @@
     </div>
   {{else}}
     <p class="count" data-testid="no-works">
-      No work&rsquo;s title or author matches &ldquo;{{.Query}}&rdquo;.
+      {{if .Exact}}No other work&rsquo;s title or author matches &ldquo;{{.Query}}&rdquo;.
+      {{else}}No work&rsquo;s title or author matches &ldquo;{{.Query}}&rdquo;.
+      {{if not .ExactMissing}}An AO3 work URL or id searches too.{{end}}
+      {{end}}
     </p>
   {{end}}
 

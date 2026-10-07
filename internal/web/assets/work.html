@@ -54,6 +54,16 @@
         {{if .TagNames}}<p>{{template "taglist" (taghits .)}}</p>{{end}}
       </div>
     {{end}}
+    {{/* Same contract as every other list: when the page filled up, say
+         how to get the next slice instead of leaving the truncation to be
+         discovered by guessing at parameters. */}}
+    {{if eq (len .Similar) .N}}
+    <p class="count" data-testid="raise-n">
+      Showing {{len .Similar}}.
+      <a href="?n={{.NextN}}">Ask for {{.NextN}} instead</a>
+      &mdash; <code>?n=</code> takes any count up to 200.
+    </p>
+    {{end}}
     <p class="count">
       Pick a second seed to rank the intersection &mdash; that is what
       separates a recommender from a similarity lookup.

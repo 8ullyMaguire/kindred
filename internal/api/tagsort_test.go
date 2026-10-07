@@ -228,13 +228,18 @@ func TestTagSortActuallyChangesTheOrder(t *testing.T) {
 		// An unrecognised sort falls back to kudos rather than erroring, and
 		// the page SAYS kudos, so the reader can see what they are getting.
 		{"sort=bogus", "1,2,3,4,5,6,7,8", "Most kudos first"},
-		{"", "1,2,3,4,5,6,7,8", "Most kudos first"},
+		// The default is the taste blend now. The fixture has no works
+		// OUTSIDE the tag carrying no reader-overlap signal worth blending,
+		// so the blend degrades to the exact list (said plainly, in
+		// taste-error) and the order is still kudos -- but the heading
+		// tells the truth about which view this is.
+		{"", "1,2,3,4,5,6,7,8", "Taste match"},
 		// Sort state must survive a round trip through the control's own
 		// value, since that is what a reload sends.
 		{"sort=recent&n=20", "8,7,6,5,4,3,2,1", "Most recently updated"},
 		// The page limit, which a three-row fixture could not check at all:
 		// every list fitted under the default n=20.
-		{"n=3", "1,2,3", "Most kudos first"},
+		{"n=3", "1,2,3", "Taste match"},
 		{"sort=recent&n=3", "8,7,6", "Most recently updated"},
 	}
 	for _, c := range cases {

@@ -41,6 +41,9 @@
      reader believes for ten seconds. */}}
 <form class="controls" method="get" action="/tag/{{.Tag.ID}}" role="search"
       aria-label="Sort and filter works">
+  {{/* The reader's ?n= rides along, or every sort change would snap the
+       list back to 20 while the heading kept claiming 100. */}}
+  <input type="hidden" name="n" value="{{.N}}">
   <label for="sort">Order</label>
   <select id="sort" name="sort">
     {{range .SortOptions}}
@@ -122,12 +125,25 @@
   {{/* The order is named here, from the same value the control shows, so
        the sentence and the listing cannot disagree. */}}
   <p class="count" data-testid="works-heading">
-    {{if eq .Sort "recent"}}Most recently updated{{else if eq .Sort "words"}}Longest first{{else}}Most kudos first{{end}},
+    {{if eq .Sort "taste"}}Taste match: readers of this tag, exact matches boosted
+    {{else if eq .Sort "recent"}}Most recently updated
+    {{else if eq .Sort "words"}}Longest first
+    {{else}}Most kudos first{{end}},
     of {{commas .Tag.WorkCount}}{{if .Words}} matching &ldquo;{{.Words}}&rdquo;{{end}}.
   </p>
+  {{if .TasteNote}}
+    <p class="note" data-testid="taste-note">{{.TasteNote}}</p>
+  {{end}}
+  {{if .TasteErr}}
+    <p class="note" data-testid="taste-error">{{.TasteErr}}</p>
+  {{end}}
   {{range .Works}}{{template "workrow" .}}{{end}}
   {{if .Limited}}
-  <p class="count">Showing the first {{len .Works}}. Raise <code>?n=</code> for more.</p>
+  <p class="count">
+    Showing the first {{len .Works}}.
+    <a href="?n={{.NextN}}" data-testid="raise-n">Ask for {{.NextN}} instead</a>
+    &mdash; <code>?n=</code> takes any count up to 200.
+  </p>
   {{end}}
 {{else if or .Words .Complete .Rating .Lang}}
   {{/* Names every filter that is set. The first version said only "under

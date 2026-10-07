@@ -112,7 +112,7 @@
 <div class="work">
   <h3><a href="/work/{{.ID}}">{{.Title}}</a></h3>
   <p class="byline">
-    {{.Author}} &middot;
+    {{range authorlinks .Author}}<a class="author" href="{{.URL}}">{{.Name}}</a>{{else}}{{.Author}}{{end}} &middot;
     {{commas .Kudos}} kudos &middot;
     {{commas .Hits}} hits{{if .Language}} &middot; {{.Language}}{{end}}
     {{/* Word count is the number a reader actually decides on before
@@ -121,6 +121,11 @@
          because "0 words" is a claim and "no count recorded" is a fact. */}}
     {{if .WordCount}} &middot; {{commas .WordCount}} words{{end}}
     {{if .Complete}}<span class="count">(complete)</span>{{end}}
+    {{/* Shown only by the tag page's taste blend: the number the row was
+         ordered by, and which half of the blend it came from. An ordering
+         a reader cannot check against a number is an ordering taken on
+         faith. */}}
+    {{if .ShowScore}} &middot; <span class="score" data-testid="taste-score">taste {{printf "%.3f" .Score}}{{if .HasTag}} &middot; carries this tag{{else}} &middot; appreciated by this tag's readers{{end}}</span>{{end}}
     {{if .URL}} &middot; <a href="{{.URL}}" rel="noopener nofollow">on AO3</a>{{end}}
     {{/* One click from any work to a ranking seeded by it. This is the
          whole engine's purpose, so it belongs on every card rather than

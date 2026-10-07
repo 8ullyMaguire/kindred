@@ -103,10 +103,32 @@ type SearchPage struct {
 	// TagError and WorkError are set when one half of the search failed.
 	// They are separate so a failing tag search does not hide working work
 	// results, and neither failure is rendered as an empty result: "your
-	// query found nothing" and "the search failed" are different facts and
-	// a reader acting on the first would be wrong about the second.
+	// query found nothing" and "the search failed" are different facts and a
+	// reader acting on the first would be wrong about the second.
 	TagError  string
 	WorkError string
+
+	// N is the work-list limit this request asked for (?n=), and NextN is
+	// N doubled -- the "show more" target. They live here because the
+	// truncation message has to LINK to a bigger list, and a link built
+	// from a hardcoded number would stop being true the moment the reader
+	// changed the limit.
+	N     int
+	NextN int
+
+	// Exact is a work found by AO3 ID or work URL parsed out of the query,
+	// rendered above the fuzzy results. A reader pasting
+	// "archiveofourown.org/works/12345" wants THAT work, not fifty title
+	// matches, and burying it under them is a search that answered a
+	// different question.
+	Exact *WorkHit
+
+	// ExactMissing is the work id a URL-shaped query named that this
+	// mirror does not hold. Zero when the query named no work. Set only
+	// for URL-shaped queries: a bare number that matches nothing is a
+	// search term, not a broken link, and claiming otherwise would be a
+	// confident answer to a question that was never asked.
+	ExactMissing int64
 }
 
 // TagHit is one row of a tag search.
@@ -128,6 +150,11 @@ type WorkPage struct {
 	// silently drops half its content is a lie about what the recommender
 	// can do.
 	RecommendErr string
+
+	// N is the recommendation count this page asked for (?n=, default 10)
+	// and NextN is N doubled, for the "more like this" raise link.
+	N     int
+	NextN int
 }
 
 // TagPage is a tag, the works carrying it, and the tags that tend to
@@ -189,6 +216,29 @@ type TagPage struct {
 	// Separate from WordsErr because it is a different control and a reader
 	// needs to know WHICH one was ignored.
 	FilterErr string
+
+	// NextN is N doubled, the "show more" target for the truncation note.
+	// N rides along so the sort/filter form can carry the reader's chosen
+	// count instead of resetting it to 20 on every submit.
+	N     int
+	NextN int
+
+	// Blend is true when the list is the taste blend (sort=taste): works
+	// carrying the tag, boosted, mixed with works readers of this tag
+	// bookmarked. Rows know it individually via WorkHit.ShowScore, but the
+	// page-level note and heading need it too.
+	Blend bool
+
+	// TasteNote explains what the blend actually did -- how many of each
+	// kind went in. An unexplained mixed list is a list whose ordering
+	// cannot be argued with, which is the one thing this site promises not
+	// to ship.
+	TasteNote string
+
+	// TasteErr records a failed blend attempt. The page still lists the
+	// works carrying the tag, because a recommender that could not
+	// recommend must not take the exact matches with it.
+	TasteErr string
 }
 
 // SortOption is one choice in the sort control.
@@ -224,6 +274,45 @@ type WorkHit struct {
 	WordCount int64
 	Language  string
 	Complete  int64
+
+	// HasTag marks a row that carries the page's tag, on the blended tag
+	// list. Purely presentational: the blend already scored it, and the
+	// card only needs to say which half of the blend it came from.
+	HasTag bool
+	// ShowScore and Score make the blend's ordering inspectable. A list
+	// whose order cannot be checked against a number is a list the reader
+	// has to take on faith, which is what the evidence panel exists to
+	// avoid everywhere else on this site.
+	ShowScore bool
+	Score     float64
+}
+
+// AuthorPage is every work whose authors field matches a name.
+//
+// Matching is a substring search rather than a parsed identity: the mirror
+// stores authors as one free-text cell, and a parser that guessed at its
+// punctuation would confidently link a reader to the wrong person. The page
+// says what it matched ("authors matching X") so the honesty is visible.
+type AuthorPage struct {
+	Base
+	// Query is the name as the reader typed it (or as a byline link
+	// carried it), echoed into the form and the heading.
+	Query string
+	Works []WorkHit
+	// Total is every match, not the number shown.
+	Total int64
+	// Limited is true when Total exceeded N.
+	Limited bool
+	// N and NextN, same contract as every other list page: the limit that
+	// was used, and the doubled target of the "show more" link.
+	N     int
+	NextN int
+}
+
+// AuthorLink is one parsed byline name and where it goes.
+type AuthorLink struct {
+	Name string
+	URL  string
 }
 
 // RecommendPage is the multi-seed ranking, with the controls that decide
@@ -480,6 +569,7 @@ func init() {
 		"block.html", "fandoms.html", "underrated.html", "neighbours.html",
 		"surprise.html",
 		"profiles.html", "profile.html",
+		"author.html",
 	} {
 		pages[page] = template.Must(template.New(page).
 			Funcs(funcMap).
@@ -527,12 +617,13 @@ var funcMap = template.FuncMap{
 		}
 		return m, nil
 	},
-	"stat":      stat,
-	"commas":    commas,
-	"shorten":   shorten,
-	"pct":       percent,
-	"taghits":   func(c rank.Candidate) []TagHit { return CandidateTags(c) },
-	"workstats": func() []statRow { return workStats },
+	"stat":        stat,
+	"commas":      commas,
+	"shorten":     shorten,
+	"pct":         percent,
+	"taghits":     func(c rank.Candidate) []TagHit { return CandidateTags(c) },
+	"workstats":   func() []statRow { return workStats },
+	"authorlinks": authorLinks,
 
 	// add is 1-based indexing for "the # column", because a table that starts
 	// at 0 reads as an off-by-one even when it is not.
@@ -759,6 +850,43 @@ func CandidateTags(c rank.Candidate) []TagHit {
 			h.ID = int64(c.TagIDs[i])
 		}
 		out = append(out, h)
+	}
+	return out
+}
+
+// authorLinks splits a works.authors cell into per-name profile links.
+//
+// The split is deliberately conservative: on "," and on " - " (the two
+// separators the corpus actually contains), and nothing else. A name with a
+// hyphen inside it ("X-Files fan") must survive as one name, and guessing at
+// more punctuation would turn real names into fragments that then match
+// someone else's works. Every fragment becomes a substring search on the
+// author page, so even a mis-split finds its own works and nothing that
+// contains it.
+func authorLinks(s string) []AuthorLink {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	// Normalise the explicit separator first so one pass over commas
+	// catches both shapes.
+	s = strings.ReplaceAll(s, " - ", ", ")
+	var out []AuthorLink
+	for _, part := range strings.Split(s, ",") {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		out = append(out, AuthorLink{
+			Name: name,
+			URL:  "/author?q=" + url.QueryEscape(name),
+		})
+		if len(out) >= 8 {
+			break // a byline longer than this is a wall of names, not links
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

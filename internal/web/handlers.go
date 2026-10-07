@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -307,6 +308,8 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 		d.renderSearch(w, r, "")
 	case p == "/search":
 		d.renderSearch(w, r, r.URL.Query().Get("q"))
+	case p == "/author":
+		d.renderAuthor(w, r)
 	case strings.HasPrefix(p, "/work/"):
 		d.renderWork(w, r, strings.TrimPrefix(p, "/work/"))
 	case strings.HasPrefix(p, "/tag/"):
@@ -1107,18 +1110,134 @@ func (d Deps) renderSearch(w http.ResponseWriter, r *http.Request, q string) {
 	base := d.base("kindred", "")
 	base.Query = q
 	page := SearchPage{Base: base}
+	page.N = clampInt(atoiDefault(r.URL.Query().Get("n"), 50), 1, 200)
+	page.NextN = page.N * 2
 
 	if q != "" {
+		// An AO3 work id or work URL in the box is an ADDRESS, not a
+		// search term: resolve it first and render it above whatever the
+		// fuzzy match finds. A URL-shaped query that names an id this
+		// mirror does not hold also says so -- that is a reader holding a
+		// link, and "nothing matched" would hide a fact they need.
+		if id, fromURL := searchWorkID(q); id > 0 {
+			if hit, err := d.workHitByID(ctx, id); err != nil {
+				page.WorkError = err.Error()
+			} else if hit != nil {
+				page.Exact = hit
+			} else if fromURL {
+				page.ExactMissing = id
+			}
+		}
 		d.searchTags(ctx, q, &page)
 		d.searchWorks(ctx, q, &page)
 	}
 	d.page(w, "search.html", page, http.StatusOK)
 }
 
+// searchWorkID reports the AO3 work id a query names, if any, and whether
+// the query was URL-shaped.
+//
+// URL-shaped (contains "/works/123") matters because it changes what a MISS
+// means: a pasted link naming a work this mirror lacks is worth saying
+// outright, while a bare number that matches nothing is just a search term
+// that happened to be digits ("1984" is not a broken link).
+func searchWorkID(q string) (id int64, fromURL bool) {
+	q = strings.TrimSpace(q)
+	if strings.Contains(q, "/works/") {
+		if m := ao3WorkPathRe.FindStringSubmatch(q); m != nil {
+			if v, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+				return v, true
+			}
+		}
+		return 0, false
+	}
+	if bareDigitsRe.MatchString(q) {
+		if v, err := strconv.ParseInt(q, 10, 64); err == nil {
+			return v, false
+		}
+	}
+	return 0, false
+}
+
+var (
+	// ao3WorkPathRe finds "/works/12345" in any URL or path-like string.
+	// Deliberately host-agnostic: fixtures and mirrors other than
+	// archiveofourown.org carry the same path shape, and rejecting a
+	// correct link over a hostname would be clever in the wrong direction.
+	ao3WorkPathRe = regexp.MustCompile(`/works/(\d{1,12})`)
+	// bareDigitsRe is a query that is nothing but a work id.
+	bareDigitsRe = regexp.MustCompile(`^\d{1,12}$`)
+)
+
+// workHitByID fetches one work by id for the exact-match block.
+// Returns (nil, nil) when the mirror does not hold the id.
+func (d Deps) workHitByID(ctx context.Context, id int64) (*WorkHit, error) {
+	const stmt = `SELECT ` + workHitCols + ` FROM works w WHERE w.id = ?`
+	row := d.Engine.Corpus.DB.QueryRowContext(ctx, stmt, id)
+	h, err := scanWorkHit(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &h, nil
+}
+
+// workHitCols is the ten-column work shape every list on this site reads.
+// One constant, one scanner: a column added in one place and forgotten in
+// another is how two pages disagree about the same work.
+const workHitCols = `w.id, w.title, w.authors, w.url, w.summary,
+	w.kudos, w.hits, w.word_count, w.language, w.complete`
+
+// rowScanner is satisfied by both *sql.Row and *sql.Rows.
+type rowScanner interface{ Scan(dest ...any) error }
+
+// scanWorkHit reads the workHitCols shape. Every column is NULLable in the
+// real corpus, so all of them scan through sql.Null*: discovering the
+// nullable ones one 500 at a time is how the first version of the tag page
+// lost a whole list to one work with no author recorded.
+func scanWorkHit(row rowScanner) (WorkHit, error) {
+	var h WorkHit
+	var author, url, summary, language sql.NullString
+	var kudos, hits, words, complete sql.NullInt64
+	if err := row.Scan(&h.ID, &h.Title, &author, &url, &summary,
+		&kudos, &hits, &words, &language, &complete); err != nil {
+		return h, err
+	}
+	h.Author, h.URL, h.Summary, h.Language =
+		author.String, url.String, summary.String, language.String
+	h.Kudos, h.Hits, h.WordCount, h.Complete =
+		kudos.Int64, hits.Int64, words.Int64, complete.Int64
+	return h, nil
+}
+
+// searchTokens splits a query into the terms the work half ANDs together.
+//
+// "snape harry" finds works whose title-or-author carries BOTH tokens, so a
+// reader can name a fic by its title and its author in one box -- the
+// single most natural way to type it, and one the whole-string LIKE could
+// never match. Capped at eight terms: past that the AND-chain matches
+// nothing anyway, and an unbounded clause list is a query-shaped hang.
+func searchTokens(q string) []string {
+	fields := strings.Fields(q)
+	if len(fields) > 8 {
+		fields = fields[:8]
+	}
+	return fields
+}
+
 // searchTags fills the tag half of the results.
 func (d Deps) searchTags(ctx context.Context, q string, page *SearchPage) {
+	// The tag limit rides along with ?n= when the reader raised it, so one
+	// parameter widens both halves of the page instead of only the one
+	// that happens to be longer.
+	limit := 100
+	if page.N > limit {
+		limit = page.N
+	}
 	const stmt = `SELECT id, name FROM tags WHERE name LIKE ? ESCAPE '\' ORDER BY name LIMIT ?`
-	rows, err := d.Engine.Corpus.DB.QueryContext(ctx, stmt, "%"+likeEscape(q)+"%", 100)
+	rows, err := d.Engine.Corpus.DB.QueryContext(ctx, stmt, "%"+likeEscape(q)+"%", limit)
 	if err != nil {
 		// A tag search that fails must not take the work half down with
 		// it: the work results are still worth showing, and the page says
@@ -1140,7 +1259,7 @@ func (d Deps) searchTags(ctx context.Context, q string, page *SearchPage) {
 		return
 	}
 	page.Total = len(page.Results)
-	page.Limited = len(page.Results) == 100
+	page.Limited = len(page.Results) == limit
 }
 
 // searchWorks fills the work half of the results, matching the title.
@@ -1173,37 +1292,59 @@ func (d Deps) searchTags(ctx context.Context, q string, page *SearchPage) {
 // the corpus is not a promise a reader of this code can make about every
 // mirror.
 func (d Deps) searchWorks(ctx context.Context, q string, page *SearchPage) {
-	needle := "%" + likeEscape(q) + "%"
-	const stmt = `
-		SELECT w.id, w.title, w.authors, w.url, w.summary,
-		       w.kudos, w.hits, w.word_count, w.language, w.complete
+	tokens := searchTokens(q)
+	if len(tokens) == 0 {
+		return
+	}
+
+	// Every token must appear in the title OR the author, so a two-word
+	// "title author" query matches the work whose title carries one word
+	// and byline the other -- the whole-string LIKE could only ever match
+	// one contiguous string, which is why that combination never worked.
+	var args []any
+	var clauses []string
+	for _, t := range tokens {
+		clauses = append(clauses, `(w.title LIKE ? ESCAPE '\' OR w.authors LIKE ? ESCAPE '\')`)
+		like := "%" + likeEscape(t) + "%"
+		args = append(args, like, like)
+	}
+
+	stmt := `SELECT ` + workHitCols + `
 		FROM works w
-		WHERE w.title LIKE ? ESCAPE '\' OR w.authors LIKE ? ESCAPE '\'
-		ORDER BY w.kudos DESC, w.id
+		WHERE ` + strings.Join(clauses, " AND ")
+
+	// The exact match already rendered above must not repeat below it.
+	if page.Exact != nil {
+		stmt += ` AND w.id <> ?`
+		args = append(args, page.Exact.ID)
+	}
+
+	// Ranking: an exact title beats a phrase match beats scattered
+	// tokens, and kudos orders within each band. Without the bands every
+	// result is "as good as any other with the same kudos", which is
+	// what an unordered-looking kudos list reads as no matter how right
+	// it is.
+	stmt += ` ORDER BY (CASE
+			WHEN w.title = ? THEN 0
+			WHEN w.title LIKE ? ESCAPE '\' OR w.authors LIKE ? ESCAPE '\' THEN 1
+			ELSE 2 END),
+		w.kudos DESC, w.id
 		LIMIT ?`
-	rows, err := d.Engine.Corpus.DB.QueryContext(ctx, stmt, needle, needle, 50)
+	phrase := "%" + likeEscape(q) + "%"
+	args = append(args, q, phrase, phrase, page.N)
+
+	rows, err := d.Engine.Corpus.DB.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		page.WorkError = err.Error()
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var h WorkHit
-		// Every one of these is NULLable in the real corpus, and scanning
-		// NULL into a string takes out the whole page. The tag handler
-		// learned this one column at a time; here they are all nullable
-		// up front.
-		var author, url, summary, language sql.NullString
-		var kudos, hits, words, complete sql.NullInt64
-		if err := rows.Scan(&h.ID, &h.Title, &author, &url, &summary,
-			&kudos, &hits, &words, &language, &complete); err != nil {
+		h, err := scanWorkHit(rows)
+		if err != nil {
 			page.WorkError = err.Error()
 			return
 		}
-		h.Author, h.URL, h.Summary, h.Language =
-			author.String, url.String, summary.String, language.String
-		h.Kudos, h.Hits, h.WordCount, h.Complete =
-			kudos.Int64, hits.Int64, words.Int64, complete.Int64
 		page.Works = append(page.Works, h)
 	}
 	if err := rows.Err(); err != nil {
@@ -1211,7 +1352,73 @@ func (d Deps) searchWorks(ctx context.Context, q string, page *SearchPage) {
 		return
 	}
 	page.WorkTotal = len(page.Works)
-	page.WorkLimited = len(page.Works) == 50
+	page.WorkLimited = len(page.Works) == page.N
+}
+
+// renderAuthor lists every work whose byline matches a name.
+//
+// This is the page the byline links point at: an author on this site is a
+// person you can visit, not a string you retype into the search box. The
+// match is a substring on the stored byline cell -- the mirror has no
+// author table, and building an identity out of punctuation heuristics
+// would invent relationships the corpus never asserted. What the page shows
+// is exactly what it did: "authors matching X".
+func (d Deps) renderAuthor(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+
+	title := "Authors"
+	if q != "" {
+		title = "Works by " + q
+	}
+	page := AuthorPage{Base: d.base(title, "Search"), Query: q}
+	// Same contract as every list: ?n= picks the count, 20 by default so
+	// the page is useful before any parameter is known to exist.
+	page.N = clampInt(atoiDefault(r.URL.Query().Get("n"), 20), 1, 500)
+	page.NextN = page.N * 2
+
+	if q != "" {
+		needle := "%" + likeEscape(q) + "%"
+		const countStmt = `SELECT COUNT(*) FROM works WHERE authors LIKE ? ESCAPE '\'`
+		if err := d.Engine.Corpus.DB.QueryRowContext(ctx, countStmt, needle).
+			Scan(&page.Total); err != nil {
+			// One data source, one failure mode: say it and stop. The
+			// search page halves its errors because it has two halves to
+			// save; this page has nothing left to show if the count is
+			// gone.
+			d.fail(w, r, http.StatusServiceUnavailable,
+				fmt.Errorf("counting works matching %q: %w", q, err))
+			return
+		}
+		const stmt = `SELECT ` + workHitCols + `
+			FROM works w
+			WHERE w.authors LIKE ? ESCAPE '\'
+			ORDER BY w.kudos DESC, w.id
+			LIMIT ?`
+		rows, err := d.Engine.Corpus.DB.QueryContext(ctx, stmt, needle, page.N)
+		if err != nil {
+			d.fail(w, r, http.StatusServiceUnavailable,
+				fmt.Errorf("reading works matching %q: %w", q, err))
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			h, err := scanWorkHit(rows)
+			if err != nil {
+				d.fail(w, r, http.StatusServiceUnavailable,
+					fmt.Errorf("reading works matching %q: %w", q, err))
+				return
+			}
+			page.Works = append(page.Works, h)
+		}
+		if err := rows.Err(); err != nil {
+			d.fail(w, r, http.StatusServiceUnavailable,
+				fmt.Errorf("reading works matching %q: %w", q, err))
+			return
+		}
+		page.Limited = page.Total > int64(len(page.Works))
+	}
+	d.page(w, "author.html", page, http.StatusOK)
 }
 
 func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
@@ -1242,6 +1449,13 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 
 	page := WorkPage{Base: d.base(ent.Title, ent.Title), Work: ent}
 
+	// How many "more like this" the reader wants. Default 10 (the page's
+	// historical size), ?n= raises it: the list was hard-capped at 10 with
+	// no way to ask for more, which is exactly the limitation ?n= exists
+	// to lift everywhere else on this site.
+	page.N = clampInt(atoiDefault(r.URL.Query().Get("n"), 10), 1, 200)
+	page.NextN = page.N * 2
+
 	if pairs, err := d.Engine.Corpus.TagPairs(ctx, []int64{id}); err == nil {
 		page.Tags = pairs[id]
 	} else {
@@ -1258,7 +1472,7 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 	res, err := d.Engine.Recommend(ctx, engine.Request{
 		Seeds:   []engine.Seed{{Kind: corpus.AO3Kind, ID: id}},
 		Kind:    corpus.AO3Kind,
-		N:       10,
+		N:       page.N,
 		Exclude: true,
 	})
 	if err != nil {
@@ -1292,16 +1506,28 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 		return
 	}
 
-	n := clampInt(atoiDefault(r.URL.Query().Get("n"), 20), 1, 100)
+	// ?n= chooses how many works. 20 is the floor the spec promises; 200 is
+	// the ceiling, because past that the page is a scroll and the engine's
+	// blended half grows with it.
+	n := clampInt(atoiDefault(r.URL.Query().Get("n"), 20), 1, 200)
 	page := TagPage{Base: d.base(name, name), Tag: TagInfo{ID: id, Name: name}}
+	page.N = n
+	page.NextN = n * 2
 
 	// Whether this reader has already blocked the tag, so the control offers
 	// the reverse action. Best-effort: no store or no session means "not
 	// blocked", because the page still has to render its works, and a missing
 	// block list cannot be reported by a page that is trying to render.
+	//
+	// The full map is kept, not just this tag's bit: the taste blend below
+	// drops works carrying ANY blocked tag from the recommender half, so a
+	// block set on /block holds everywhere on this page instead of only in
+	// the pools the engine happened to read.
+	blockedAll := map[int64]bool{}
 	if d.Engine != nil && d.Engine.Store != nil {
 		if _, ownerKey, err := d.arenaSession(ctx, w, r); err == nil {
 			if b, berr := d.Engine.Store.BlockedTagIDs(ctx, ownerKey); berr == nil {
+				blockedAll = b
 				page.Blocked = b[id]
 			}
 		}
@@ -1316,8 +1542,15 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	// constant rather than interpolated, because the alternative is string
 	// concatenation into ORDER BY, which is SQL injection with a different
 	// costume.
+	//
+	// "taste" is the default and the point: readers of this tag appreciated
+	// these works even where the works do not carry the tag themselves, with
+	// the exact matches boosted among them. The three exact orders stay as
+	// choices because the blend answers a different question than "show me
+	// this tag".
 	page.Sort = tagSort(r.URL.Query().Get("sort"))
 	page.SortOptions = []SortOption{
+		{Value: "taste", Label: "taste match (default)"},
 		{Value: "kudos", Label: "most kudos"},
 		{Value: "recent", Label: "most recently updated"},
 		{Value: "words", Label: "longest"},
@@ -1474,22 +1707,11 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var h WorkHit
-		// Every one of these is NULLable: the real corpus has defaults
-		// for some of them and a hand-built fixture omits all of them.
-		// Discovering that one 500 at a time is how the first version of
-		// this got three columns wrong in a row.
-		var author, url, summary, language sql.NullString
-		var kudos, hits, words, complete sql.NullInt64
-		if err := rows.Scan(&h.ID, &h.Title, &author, &url, &summary,
-			&kudos, &hits, &words, &language, &complete); err != nil {
+		h, err := scanWorkHit(rows)
+		if err != nil {
 			d.fail(w, r, http.StatusInternalServerError, err)
 			return
 		}
-		h.Author, h.URL, h.Summary, h.Language =
-			author.String, url.String, summary.String, language.String
-		h.Kudos, h.Hits, h.WordCount, h.Complete =
-			kudos.Int64, hits.Int64, words.Int64, complete.Int64
 		page.Works = append(page.Works, h)
 	}
 	if err := rows.Err(); err != nil {
@@ -1497,10 +1719,226 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 		return
 	}
 
+	// The taste blend. sort=taste (the default) merges the works carrying
+	// this tag -- boosted -- with works readers of this tag appreciated
+	// even when they carry no such tag. Any explicit sort skips it and
+	// lists the exact matches alone, which is what those choices mean.
+	if page.Sort == tasteSort && d.Engine != nil {
+		d.blendTagTaste(ctx, id, n, extra, extraArgs, wordsClause, blockedAll, &page)
+	}
+
 	if d.Engine.Graph != nil {
 		page.Neighbours = d.neighbours(ctx, id)
 	}
 	d.page(w, "tag.html", page, http.StatusOK)
+}
+
+// tasteSort is the blended default; see tagSort.
+const tasteSort = "taste"
+
+// blendTagTaste merges the tag's exact matches with what readers of the tag
+// appreciated elsewhere, and explains itself in page.TasteNote.
+//
+// The recipe, in full, because an ordering nobody can audit is the one thing
+// this site promises not to ship:
+//
+//  1. Seeds: the tag's five most-kudoed works, filtered the same way as the
+//     visible list, so a work the reader filtered or blocked out never
+//     speaks for the tag.
+//  2. Candidates: the recommender's reader-overlap neighbours of those
+//     seeds, minus anything carrying the tag (those arrive via the exact
+//     half), minus blocked tags, then run through the SAME SQL filters as
+//     the exact half -- the filters are the reader's, they apply to every
+//     half of the list.
+//  3. Scores: an untagged candidate keeps its similarity; a tagged work
+//     gets its similarity PLUS a boost equal to the mean similarity of the
+//     surviving pool. Mean rather than max so a niche exact match floats
+//     above weak suggestions without welding every exact match to the top,
+//     where the list would just be the old exact list with a new heading.
+//  4. Merge, order by score (tagged wins ties, then kudos), cut to n.
+//
+// Failure keeps the exact list: a recommender that could not recommend must
+// not take the works the reader explicitly asked about with it.
+func (d Deps) blendTagTaste(
+	ctx context.Context,
+	id int64,
+	n int,
+	extra string,
+	extraArgs []any,
+	wordsClause string,
+	blockedAll map[int64]bool,
+	page *TagPage,
+) {
+	// 1. Seeds.
+	seedQuery := `SELECT DISTINCT w.id FROM work_tags wt
+		JOIN works w ON w.id = wt.work_id
+		WHERE wt.tag_id = ?` + extra + wordsClause + `
+		ORDER BY w.kudos DESC, w.id LIMIT 5`
+	seedArgs := append([]any{id}, extraArgs...)
+	if wordsClause != "" {
+		seedArgs = append(seedArgs, page.WordsBound)
+	}
+	rows, err := d.Engine.Corpus.DB.QueryContext(ctx, seedQuery, seedArgs...)
+	if err != nil {
+		page.TasteErr = "seed lookup failed (" + err.Error() + "); showing the works carrying this tag"
+		return
+	}
+	var seeds []engine.Seed
+	for rows.Next() {
+		var sid int64
+		if err := rows.Scan(&sid); err != nil {
+			rows.Close()
+			page.TasteErr = "seed lookup failed (" + err.Error() + "); showing the works carrying this tag"
+			return
+		}
+		seeds = append(seeds, engine.Seed{Kind: corpus.AO3Kind, ID: sid})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		page.TasteErr = "seed lookup failed (" + err.Error() + "); showing the works carrying this tag"
+		return
+	}
+	if len(seeds) == 0 {
+		// A tag whose exact list is empty has nothing to blend; the
+		// empty-result message below it already says why.
+		return
+	}
+
+	// 2. Candidates. Over-fetch: the filter pass and the tagged-exclusion
+	// remove some, and a pool that trims to fewer than n on a big tag
+	// would undercut the list it exists to fill.
+	cfN := clampInt(n*3, 30, 150)
+	res, err := d.Engine.Recommend(ctx, engine.Request{
+		Seeds:         seeds,
+		Kind:          corpus.AO3Kind,
+		N:             cfN,
+		Exclude:       true,
+		BlockedTagIDs: blockedAll,
+	})
+	if err != nil {
+		page.TasteErr = "the taste blend failed (" + err.Error() + "); showing the works carrying this tag"
+		return
+	}
+	if len(res.Items) == 0 {
+		page.TasteErr = "no reader-signal for this tag yet; showing the works carrying this tag"
+		return
+	}
+
+	// Score map from the recommender's own ordering.
+	score := make(map[int64]float64, len(res.Items))
+	ids := make([]any, 0, len(res.Items))
+	seen := make(map[int64]bool, len(res.Items))
+	placeholders := make([]string, 0, len(res.Items))
+	for _, it := range res.Items {
+		score[it.ID] = it.Score
+		if seen[it.ID] {
+			continue
+		}
+		seen[it.ID] = true
+		placeholders = append(placeholders, "?")
+		ids = append(ids, it.ID)
+	}
+	if len(ids) == 0 {
+		page.TasteErr = "no reader-signal for this tag yet; showing the works carrying this tag"
+		return
+	}
+
+	// The same filters as the exact half, plus the exclusion of everything
+	// already listed there.
+	cfQuery := `SELECT DISTINCT ` + workHitCols + ` FROM works w
+		WHERE w.id IN (` + strings.Join(placeholders, ",") + `)
+		AND NOT EXISTS (SELECT 1 FROM work_tags wt2
+			WHERE wt2.work_id = w.id AND wt2.tag_id = ?)` +
+		extra + wordsClause
+	cfArgs := append(append([]any{}, ids...), id)
+	cfArgs = append(cfArgs, extraArgs...)
+	if wordsClause != "" {
+		cfArgs = append(cfArgs, page.WordsBound)
+	}
+	cfRows, err := d.Engine.Corpus.DB.QueryContext(ctx, cfQuery, cfArgs...)
+	if err != nil {
+		page.TasteErr = "the taste blend failed (" + err.Error() + "); showing the works carrying this tag"
+		return
+	}
+	var pool []WorkHit
+	for cfRows.Next() {
+		h, err := scanWorkHit(cfRows)
+		if err != nil {
+			cfRows.Close()
+			page.TasteErr = "the taste blend failed (" + err.Error() + "); showing the works carrying this tag"
+			return
+		}
+		pool = append(pool, h)
+	}
+	cfRows.Close()
+	if err := cfRows.Err(); err != nil {
+		page.TasteErr = "the taste blend failed (" + err.Error() + "); showing the works carrying this tag"
+		return
+	}
+	if len(pool) == 0 {
+		page.TasteErr = "no untagged neighbours of this tag survived the filters; showing the works carrying this tag"
+		return
+	}
+
+	// 3. Boost. Mean over the surviving pool only: the boost should describe
+	// the works actually entering the list, not candidates the filters
+	// threw away.
+	var sum float64
+	for _, h := range pool {
+		sum += score[h.ID]
+	}
+	boost := sum / float64(len(pool))
+	if boost == 0 {
+		// Non-zero similarity everywhere or nowhere; with all-zero scores
+		// the merge would degrade to "exact matches first, then noise
+		// ordered by nothing", which is the old page with extra steps.
+		page.TasteErr = "the recommender returned no usable similarity for this tag; showing the works carrying this tag"
+		return
+	}
+
+	for i := range page.Works {
+		page.Works[i].HasTag = true
+		page.Works[i].ShowScore = true
+		page.Works[i].Score = score[page.Works[i].ID] + boost
+	}
+	for _, h := range pool {
+		h.ShowScore = true
+		h.Score = score[h.ID]
+		page.Works = append(page.Works, h)
+	}
+
+	// 4. Merge and order. Stable, so equal scores keep kudos order instead
+	// of shuffling, and the tagged half keeps its position within a tie.
+	sort.SliceStable(page.Works, func(i, j int) bool {
+		a, b := page.Works[i], page.Works[j]
+		if a.Score != b.Score {
+			return a.Score > b.Score
+		}
+		if a.HasTag != b.HasTag {
+			return a.HasTag // an exact match beats an untagged work at equal score
+		}
+		return a.Kudos > b.Kudos
+	})
+	if len(page.Works) > n {
+		page.Works = page.Works[:n]
+	}
+	page.Blend = true
+	taggedShown := taggedCount(page)
+	page.TasteNote = fmt.Sprintf(
+		"Taste match: %d works readers of this tag appreciated (score shown), "+
+			"blended with %d works carrying this tag, each boosted by the mean similarity %.3f.",
+		len(page.Works)-taggedShown, taggedShown, boost)
+}
+
+// taggedCount counts the rows that carry the page's tag, for the taste note.
+func taggedCount(page *TagPage) int {
+	n := 0
+	for _, w := range page.Works {
+		if w.HasTag {
+			n++
+		}
+	}
+	return n
 }
 
 // renderRecommend handles the multi-seed form:
@@ -2252,8 +2690,13 @@ func tagSort(s string) string {
 		return "words"
 	case "kudos", "popular":
 		return "kudos"
+	case "taste":
+		return "taste"
 	case "":
-		return "kudos"
+		// The default is the taste blend: works readers of this tag
+		// appreciated, with the works carrying the tag boosted among
+		// them. A reader who wants the plain exact list picks a sort.
+		return "taste"
 	default:
 		return "kudos"
 	}
@@ -2273,9 +2716,12 @@ func tagOrder(sortKey string) string {
 		// an explicit guard rather than first by accident.
 		return "CASE WHEN w.update_date IS NULL OR w.update_date = '' THEN 1 ELSE 0 END, w.update_date DESC"
 	case "words":
-		return "w.word_count DESC"
+		return "w.word_count DESC, w.id"
 	default:
-		return "w.kudos DESC"
+		// "taste" and everything unrecognised order the TAGGED half by
+		// kudos. The blend's final order is computed in Go from the
+		// similarity scores; this is only the input ordering.
+		return "w.kudos DESC, w.id"
 	}
 }
 

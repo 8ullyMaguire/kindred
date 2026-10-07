@@ -1,0 +1,52 @@
+{{define "content"}}
+{{if not .Query}}
+  {{/* No name yet, so no empty table pretending to be an answer. The page
+       states what the match does -- substring on the stored byline -- and
+       then gets out of the way. */}}
+  <h2>Find an author</h2>
+  <p>
+    Type part of a name. Every work whose byline contains it is listed,
+    most kudos first. Names link here from every work card, so a person
+    on this site is a page, not a string you retype.
+  </p>
+  <form class="controls" method="get" action="/author" role="search"
+        aria-label="Search authors">
+    <label for="aq">Author</label>
+    <input type="text" id="aq" name="q" size="30" placeholder="part of a name">
+    <input type="submit" value="Find">
+  </form>
+{{else}}
+  <h2>Works by authors matching &ldquo;{{.Query}}&rdquo;</h2>
+
+  <form class="controls" method="get" action="/author" role="search"
+        aria-label="Search authors">
+    <label for="aq">Author</label>
+    <input type="text" id="aq" name="q" size="30" value="{{.Query}}">
+    <input type="submit" value="Find">
+  </form>
+
+  {{if .Works}}
+    <p class="count" data-testid="author-count">
+      Showing {{len .Works}} of {{commas .Total}}
+      matching work{{if ne .Total 1}}s{{end}}, most kudos first.
+      {{if .Limited}}
+        <a href="?q={{urlquery .Query}}&amp;n={{.NextN}}" data-testid="raise-n">
+          Ask for {{.NextN}} instead</a>.
+      {{end}}
+    </p>
+    {{range .Works}}{{template "workrow" .}}{{end}}
+    {{if .Limited}}
+    <p class="count">
+      <a href="?q={{urlquery .Query}}&amp;n={{.NextN}}" data-testid="raise-n-bottom">
+        Ask for {{.NextN}} instead</a>
+      &mdash; <code>?n=</code> takes any count up to 500.
+    </p>
+    {{end}}
+  {{else}}
+    <p class="count" data-testid="no-author-works">
+      No work&rsquo;s byline matches &ldquo;{{.Query}}&rdquo; in this mirror.
+      Bylines are matched as substrings, so a shorter name finds more.
+    </p>
+  {{end}}
+{{end}}
+{{end}}
