@@ -18,6 +18,7 @@ import (
 
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
+	"git.polarisocial.xyz/kindred/kindred/internal/crawl"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
@@ -1421,6 +1422,25 @@ func (d Deps) renderAuthor(w http.ResponseWriter, r *http.Request) {
 	d.page(w, "author.html", page, http.StatusOK)
 }
 
+// queueAutoCrawl asks serve's background crawler for one work.
+//
+// Purely advisory: the page being rendered does not wait for it, does not
+// depend on it, and must not fail because of it. The network request belongs
+// to the worker goroutine and the crawl delay; all this does on the hot path
+// is one INSERT. workURL empty means "build it from the id", which is the
+// 404 case -- the mirror has no URL to offer for a work it does not have.
+func (d Deps) queueAutoCrawl(ctx context.Context, workID int64, workURL, source string) {
+	if d.Engine == nil || d.Engine.Store == nil {
+		return
+	}
+	if workURL == "" {
+		workURL = fmt.Sprintf("%s/works/%d", crawl.BaseURL, workID)
+	}
+	if err := d.Engine.Store.EnqueueCrawl(ctx, workURL, source); err != nil {
+		d.log().Debug("auto-crawl enqueue failed", "work", workID, "source", source, "err", err)
+	}
+}
+
 func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 	ctx := r.Context()
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -1440,11 +1460,22 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 		if errors.Is(err, store.ErrNotFound) ||
 			errors.Is(err, corpus.ErrNotFound) ||
 			errors.Is(err, sql.ErrNoRows) {
+			// The reader's request IS the input: this mirror lacks the
+			// work, so queue it for the background crawler. The page still
+			// 404s -- growth happens off this path, at the crawl delay --
+			// but the next reader of this URL finds it here.
+			d.queueAutoCrawl(ctx, id, "", "reader-requested")
 			d.notFound(w, r)
 			return
 		}
 		d.fail(w, r, http.StatusInternalServerError, err)
 		return
+	}
+
+	// A work the mirror holds but never finished storing: viewed metadata
+	// is the other input. Same off-path rule -- enqueue and serve.
+	if strings.TrimSpace(ent.Summary) == "" {
+		d.queueAutoCrawl(ctx, id, ent.URL, "viewed-incomplete")
 	}
 
 	page := WorkPage{Base: d.base(ent.Title, ent.Title), Work: ent}

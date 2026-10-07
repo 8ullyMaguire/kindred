@@ -485,6 +485,29 @@ CREATE TABLE IF NOT EXISTS seen_works (
 
 CREATE INDEX IF NOT EXISTS seen_works_owner_shown
 	ON seen_works (owner_key, shown_at);
+
+/* crawl_queue is serve's auto-crawler checkpoint (SPEC auto-crawl).
+
+   The mirror grows from two inputs: works readers ask for that this mirror
+   does not hold, and works it holds with metadata missing. Each is queued as
+   ONE row -- per-work granularity, which is the checkpoint: done_at marks a
+   work finished, restart continues from exactly the rows not yet done, and
+   the skip rule lives in the worker (existing metadata is never refetched).
+   A batch resume file would redo the finished half and could not express
+   "reader asked for this one work".
+
+   attempts parks a job after repeated failure instead of retrying a dead
+   URL every poll; a fresh request re-arms it (see EnqueueCrawl). */
+CREATE TABLE IF NOT EXISTS crawl_queue (
+	url         TEXT PRIMARY KEY,
+	source      TEXT NOT NULL,
+	enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
+	attempts    INTEGER NOT NULL DEFAULT 0,
+	last_error  TEXT,
+	done_at     TEXT
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS crawl_queue_pending ON crawl_queue (done_at);
 `
 
 // Migrate applies the schema. Idempotent, so it is safe on every start.

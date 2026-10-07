@@ -16,10 +16,14 @@ import (
 
 // runCrawl grows the mirror from AO3.
 //
-// This is the one subcommand that touches the network, and it is separated from
-// `serve` for the reason the binary is split at all: `serve` is offline by
-// construction (SPEC §3.2.1) and a crawler wired into it would put an outbound
-// request in the request path.
+// Bulk growth: the seeds and files you name, worked through in one run with
+// a resume file. Serve grows the mirror too, from a different input -- the
+// queue it builds from reader requests (see cmd/kindred/autocrawl.go and
+// SPEC §5.5) -- and obeys the same client, the same robots.txt delay, and
+// the same rule that started this split: an outbound request never happens
+// in a request path. That rule is why `serve` delegates to a background
+// goroutine instead of fetching inline, and why this subcommand exists for
+// the batch case.
 //
 // ## -offline exists to be honest, not to be fast
 //

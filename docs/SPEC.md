@@ -66,7 +66,8 @@ source of truth for both the builder and the server.
 A read-only mirror of AO3 (works, tags, work_tags, etc.) stored in a SQLite
 database. The mirror is updated by the `crawl` subcommand (which fetches
 work pages from AO3) and the `ingest` subcommand (which parses the fetched
-HTML and updates the database). The `embed` subcommand computes tag
+HTML and updates the database). While `serve` runs, a background
+auto-crawler grows it too: see §5.5. The `embed` subcommand computes tag
 embeddings from the co-occurrence graph.
 
 The corpus is **not** the index; it is the source data. The index is built
@@ -602,14 +603,44 @@ Recommends from seeds, from the shell (useful for testing and scripting).
 
 ### 5.5 crawl
 
-Fetches AO3 work pages into the mirror (the only networked subcommand).
-Used to update the mirror with new works.
+Fetches AO3 work pages into the mirror (the original networked subcommand).
+Used to update the mirror in bulk.
 
 - Flags:
   - `--corpus`: path to the corpus SQLite database (required).
-  - `--work-id`: AO3 work ID to fetch (required, repeatable).
-  - `--delay`: delay between requests in seconds (default: 1.0).
-  - `--timeout`: request timeout in seconds (default: 10.0).
+  - `--urls`: file of work URLs to fetch, one per line (`-` for stdin).
+  - `--seeds`: comma-separated `kind:id` or AO3 work URLs to seed from.
+  - `--state`: resume file; a crawl interrupted mid-run continues from it.
+  - `--workers`: concurrent fetchers (default 1: the crawl delay binds).
+  - `--max-retries`, `--retry-backoff`: transient-failure retries.
+  - `--checkpoint-urls`: persist resume state every N fetches (default 25).
+  - `--crawl-delay`: override the delay; `-1` (default) reads robots.txt,
+    `0` means no wait (fixtures only).
+  - `--offline`: make no network request at all; report every URL as
+    unfetched, with the reason.
+  - `--base-url`, `--parse-only`: fixture override; fetch-and-parse without
+    writing.
+
+#### serve's auto-crawler
+
+`serve` grows the mirror while it is used, by default; `--no-crawl` turns
+it off. The rule that survives from the original design is that the
+**request path never makes an outbound request**: a missing or incomplete
+work is queued with one INSERT into `crawl_queue` (state database), and a
+background goroutine drains the queue.
+
+- Inputs: a work a reader requested that the mirror lacks (the 404 case),
+  a stored work viewed with no summary, and — at startup — up to 500 works
+  whose stored metadata is missing a summary.
+- Checkpoint: one row per work. `done_at` marks a work finished; a restart
+  continues from exactly the rows not yet done. Per-work, not per-batch:
+  a batch resume file would redo the finished half.
+- Skip rule: existing metadata is never refetched — checked against the
+  mirror *before* any request.
+- Politeness: one fetch per the crawl delay robots.txt states (30s; an
+  unreadable robots.txt keeps 30s rather than dropping to zero), retries
+  with backoff, a job parked after five failed attempts (a fresh reader
+  request re-arms it).
 
 ### 5.6 profile
 
@@ -712,8 +743,10 @@ the same process as the `serve` command.
 - The binary is statically linked and does not use CGO, reducing the
   attack surface.
 - The API is read-only; there are no write endpoints.
-- The only networked subcommand is `crawl`, which only fetches from AO3
-  (and only if given a work ID).
+- The API's request path makes no outbound network requests; the only
+  networked code paths are the `crawl` subcommand and `serve`'s background
+  auto-crawler (same client, same robots.txt crawl delay, `--no-crawl` to
+  disable), both of which only fetch from AO3.
 - The `dump`, `verify`, and `fetch` commands handle anonymised, signed
   snapshots and do not expose private data.
 - The API does not set cookies or use localStorage, so there is no

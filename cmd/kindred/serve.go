@@ -29,6 +29,9 @@ import (
 // rather than pretending the corpus is empty.
 func runServe(ctx context.Context, args []string) error {
 	fs := newFlagSet("serve")
+	noCrawl := fs.Bool("no-crawl", false,
+		"disable the background auto-crawler (it fetches works readers request but the mirror lacks, "+
+			"and completes stored works missing metadata, at robots.txt's crawl delay)")
 	c := bindConfig(fs)
 	c2, err := finishConfig(c, fs, args)
 	if err != nil {
@@ -206,7 +209,18 @@ func runServe(ctx context.Context, args []string) error {
 	logger.Info("listening",
 		"addr", c.Listen, "mode", c.Mode, "lite", lite,
 		"corpus", c.CorpusDB, "index", g != nil,
-		"embeddings", embCount, "rss_cap_kib", capKiB)
+		"embeddings", embCount, "rss_cap_kib", capKiB,
+		"auto_crawl", !*noCrawl)
+
+	// The auto-crawler: the mirror grows while it is used. Its whole
+	// existence is off this path -- one goroutine, a queue in state.db,
+	// one fetch per robots.txt's crawl delay -- and `--no-crawl` restores
+	// the literal "serve never touches the network" guarantee.
+	if *noCrawl {
+		logger.Info("auto-crawl disabled by --no-crawl")
+	} else {
+		go runAutoCrawl(ctx, s, c, logger)
+	}
 
 	// The budget gate is a periodic check, not a one-off: the memory this
 	// project exists to control is not a constant, and a service that
