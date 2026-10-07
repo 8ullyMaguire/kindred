@@ -146,7 +146,8 @@ the tag pool is load-bearing rather than belt-and-braces.
       5, and a reader's list visibly shrinks every time they mark something
       read. Reachable from the page: `hide_seen` control on `/recommend` plus
       an "I have read this" button per result (POST `/seen`).
-- [ ] **Entity shortlists (authors, characters, series, collections).** The
+- [x] **Entity shortlists (authors, pseudonyms, series, collections).** Authors and pseudonyms are extracted from works.authors by splitting on '- ' and '(', trimming, and dropping empties. Items that start with a digit or underscore go to the pseudonym column; others to the authors column with pseudonym empty. Comma is also a separator for the tiny fraction (<0.1%) that uses it. Position is 0..n per work. Reverse map stored in pseudonyms(pseudonym -> authors_text). Series and collections are not exposed in the public AO3 API, so the tool returns an honest 'not present in public data' note.
+- [ ] **Tests per new path; update goal-check clauses and docs.**
       sibling tool derives authors by parsing `works.authors` text, identifies
       fandoms by name shape, and reports series/collections as absent unless
       harvested. None of that exists in kindred yet. Characters need pairing
