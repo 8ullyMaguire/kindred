@@ -236,6 +236,24 @@ func TestEveryPageTemplateRenders(t *testing.T) {
 			wantNotContains: []string{"/recommend?seed="},
 		},
 		{
+			tpl:  "author.html",
+			name: "author.html with a raised limit",
+			data: AuthorPage{
+				Base:  base,
+				Query: "Deydralinne",
+				Works: []WorkHit{{ID: 7, Title: "A Work & A Title"}},
+				// Total above N is the only state where the raise-n
+				// link renders; without it a capped author page reads
+				// as "this author wrote one fic".
+				Total:   501,
+				Limited: true,
+				N:       500,
+				NextN:   1000,
+			},
+			wantContains: []string{"Deydralinne", "501", "/work/7",
+				"Ask for 1000 instead"},
+		},
+		{
 			tpl:  "neighbours.html",
 			name: "neighbours.html with no tag",
 			data: NeighboursPage{Base: base},
