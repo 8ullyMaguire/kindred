@@ -160,6 +160,80 @@ the tag pool is load-bearing rather than belt-and-braces.
       this is duplication unless a distinct contract is defined.
 - [ ] **`fandom-landscape`.** Same status: declared, 501, unimplemented.
 
+## Session 2026-10-07 (later): search, authors, taste default, auto-crawl
+
+Done and verified this session, with the evidence:
+
+- [x] **Search by AO3 URL/ID and title+author.** `/search?q=` resolves a
+      work URL or bare `/works/<id>` to an exact match first (rendered in a
+      distinct `exact-work` block, excluded from the fuzzy list below so a
+      bare ID cannot appear twice), then falls back to tokenised title +
+      author search. A URL for a work this mirror lacks says the id out
+      loud (`exact-missing`). Pinned by `internal/api` tests and
+      `e2e/tests/tasteauthorsearch.spec.js`.
+- [x] **Author pages.** Every byline renders `href="/author?q=..."`;
+      `renderAuthor` lists that author's works (substring match, `?n=`
+      up to 500) and an unknown name is an honest empty, not a blank page.
+- [x] **`?n=` everywhere.** Work, tag, search and author pages accept it,
+      capped per page (tag 200, author 500), with a "raise N" link when a
+      list is truncated; the sort form carries `n` so changing order does
+      not reset the count.
+- [x] **Taste-blended tag default.** `/tag/<t>` opens on `sort=taste`:
+      exact tag hits unioned with the reader-loved neighbours, with a note
+      carrying both counts (`taste-note`), or a named reason when the blend
+      cannot run (`taste-error`); silence is the failure state. An explicit
+      `?sort=` opts back into the plain exact list.
+- [x] **Auto-crawl while serving.** `serve` (default; `--no-crawl` opts
+      out) drains a `crawl_queue` table: reader 404s enqueue the work,
+      viewed works missing summaries enqueue themselves, startup queues up
+      to 500 stored works missing summaries. Per-work `done_at` checkpoint,
+      existing metadata skipped before any request, jobs parked after 5
+      failures and re-armed by a fresh reader request. The request path
+      never touches the network — only a background goroutine does, under
+      the same robots-delay client as `kindred crawl`.
+- [x] **Deploy gate covers the new surface.** `scripts/check-deploy.sh`
+      gained a section asserting the taste heading + note-or-error, the
+      order choice, the raise link, a byline href taken from the page and
+      then visited, exact-match search on a real mirror id, and the
+      URL-miss note. Measured `46 checks pass` against the live instance.
+
+Suite: `gofmt`/`vet`/`build` clean, `go test ./...` green (all packages),
+**115 Playwright tests** (`make e2e`, was 96). Deployed to thinkcentre:
+behaviour gate `BEHAVIOUR IN SYNC: all 46 checks pass`,
+`check-provenance.sh` `IN SYNC` (built from HEAD `86e5e89`),
+`/healthz` `budget_ok: true` after restart.
+
+### Open — found by this session's verification
+
+- [ ] **Auto-crawl cannot fetch AO3 in production.** The systemd unit
+      (`deploy/kindred.service`) sets `IPAddressDeny=any /
+      IPAddressAllow=localhost` — correct for the read-only mirror it was
+      written for, but the background crawler dials out and gets
+      `i/o timeout`, so every queued job burns its 5 attempts and parks.
+      Outside the sandbox (standalone instance) the fetch reaches AO3 but
+      the first probe got `no works:title meta tag; not a work page`, so
+      the fetch itself needs a re-check against real AO3 HTML before the
+      unit is relaxed. Two options, decide explicitly: allow
+      archiveofourown.org through the unit (the comment there says the
+      service "should not be reaching the network"), or drop auto-crawl
+      from `serve` and run it as a separate sandboxed timer invoking
+      `kindred crawl`. Until then the queue is honest but inert in
+      production; it works under test (stub client) and outside the
+      sandbox.
+- [ ] **Live `/healthz` flips to `over_budget` under sustained tag
+      traffic.** `VmHWM` is monotonic: a fresh restart sits at ~150 MB,
+      but a burst of `n=100` blended tag pages pushed the peak past the
+      220 MiB cap (measured 251-257 MB; the blend itself contributes
+      ~10-15 MB per burst on an isolated instance — most of the headroom
+      loss predates it and tracks serving the real 112,935-work mirror).
+      The gate then reports `over_budget` and `check-deploy.sh` fails at
+      `/healthz` until the service restarts. Either bound the blend's
+      transient allocations (pool size for the tag page), raise the cap
+      deliberately (SPEC's number, not by default), or accept the flapping
+      and have the gate tolerate a documented peak. Verified by A/B:
+      `--no-crawl` vs `crawl` instances on a state-db copy both idle at
+      38-45 MB RSS; the jump is request-driven, not startup-driven.
+
 ## Standing caveat
 
 `complete=true` means COMPLETE ONLY, not "no filter". It reads like a vacuous

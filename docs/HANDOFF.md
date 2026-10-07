@@ -42,7 +42,7 @@ Notes for the next implementer.
 - The web UI does not yet have a "Surprise me" button (it is planned but not done).
 - The web UI does not yet have tune presets (it is planned but not done).
 - The web UI does not yet have a crossover finder (it is planned but not done).
-- The web UI does not yet have an author page (it is planned but not done).
+- The web UI does not yet have similar-authors links from an author page (the author page itself exists: `/author?q=`, 2026-10-07).
 - The web UI does not yet have similar authors (it is planned but not done).
 - The web UI does not yet have a "What's trending" endpoint (it is planned but not done).
 - The web UI does not yet have bookmark import (it is planned but not done).
