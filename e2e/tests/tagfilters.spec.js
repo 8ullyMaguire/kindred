@@ -247,7 +247,12 @@ test('an empty result says which filters excluded everything', async ({ page }) 
   // held a duplicated row from work_tags being keyed on
   // (work_id, tag_id, tag_type). Both numbers were once true of the same page,
   // which is the shape of the bug that fix removed.
-  await page.goto(`${TAG}?n=100`);
+  //
+  // sort=kudos is REQUIRED to measure it: the default view is now the taste
+  // blend, whose list mixes in works that do NOT carry the tag -- counting
+  // that list would measure the blend, not the tag, and then call the
+  // message's correct size wrong.
+  await page.goto(`${TAG}?n=100&sort=kudos`);
   const all = await listedWorkIds(page);
   const realSize = all.length;
   expect(realSize).toBeGreaterThan(0);
