@@ -475,6 +475,43 @@ echo "SPEC 1.1 — no JavaScript"
 scripts=$(curl -fsS --max-time 20 "$TARGET/" 2>/dev/null | grep -c '<script' || true)
 if [ "$scripts" -eq 0 ]; then ok "no <script> on the root page"; else bad "the root page loads $scripts script(s); SPEC 1.1 forbids client-side JS"; fi
 
+# --- 7. taste blend, author pages, search by address --------------------
+echo
+echo "taste blend, author pages, search by AO3 URL/id"
+# The default view is the blend, it says which view it is, and silence
+# (neither note) is the failure the Go test also pins down.
+check "tag default names the taste blend" "$TARGET/tag/$TAG" 'Taste match'
+check "blend explains itself (note or error)" "$TARGET/tag/$TAG" 'data-testid="taste-(note|error)"'
+check "taste is one of the order choices"  "$TARGET/tag/$TAG" 'value="taste"'
+if [ "${TAG_WORKS:-0}" -gt 2 ]; then
+  check "truncated list links the raise"   "$TARGET/tag/$TAG?n=2" 'data-testid="raise-n"'
+fi
+
+# Author pages: a byline on a real card links to a page that lists that
+# author's works. The href is taken FROM the page, so this cannot pass on
+# a hand-constructed URL the server would answer differently.
+author_href=$(curl -fsS --max-time 20 "$TARGET/tag/$TAG?sort=kudos&n=3" 2>/dev/null \
+  | grep -oE '/author\?q=[^"]+' | head -1)
+if [ -n "$author_href" ]; then
+  ok "byline links to an author page ($author_href)"
+  check "author page lists that author's works" "$TARGET$author_href" 'data-testid="author-count"'
+else
+  bad "no /author?q= link in any byline on tag/$TAG — bylines are plain text, authors are not pages"
+fi
+
+# Search by address. The id is one the mirror actually holds, taken from
+# the same card row; the missing-id case must be said out loud.
+wid=$(curl -fsS --max-time 20 "$TARGET/tag/$TAG?sort=kudos&n=1" 2>/dev/null \
+  | grep -oE '/work/[0-9]+' | head -1 | grep -oE '[0-9]+')
+if [ -n "$wid" ]; then
+  check "search by AO3 work URL is an exact match" \
+    "$TARGET/search?q=https%3A%2F%2Farchiveofourown.org%2Fworks%2F$wid" \
+    'data-testid="exact-work"'
+fi
+check "search by a URL for a missing work says so" \
+  "$TARGET/search?q=https%3A%2F%2Farchiveofourown.org%2Fworks%2F999999999" \
+  'data-testid="exact-missing"'
+
 # --- verdict ------------------------------------------------------------
 echo
 echo "-----------------------------------------------------------"
