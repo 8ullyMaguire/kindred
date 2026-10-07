@@ -104,6 +104,15 @@ and install it.
 ```
 POST|GET /api/v1/recommend     seeds -> ranked entities with evidence
 GET     /api/v1/tags/{id}/similar
+GET     /api/v1/corpus-query/{mode}   corpus analysis as JSON:
+                                      fandom-ranking &seed_tags=1,2 &profile=
+                                      underrated &min_co_works=  (negative disables
+                                                                 the gate)
+                                      tag-neighbours &tag=angst   (required)
+                                      surprise      &min_tags=
+                                      A mode that is declared but not implemented
+                                      answers 501 and names the working ones, so
+                                      "no such analysis" is never an empty table.
 GET     /api/v1/ao3/works            list, ?tag= &sort=kudos|words|date|hits
                                       &format=csv  same rows as CSV
 GET     /api/v1/ao3/works/{id}
@@ -117,6 +126,13 @@ GET     /stats
 
 Seeds are `kind:id`, repeatable or comma-separated. `n` caps at 100,
 `limit` at 100, `pool` bounds the work per request.
+
+`/recommend` also takes the ranking controls the page renders:
+`min_words`, `max_words`, `min_kudos`, `complete` (`any`|`complete`|
+`in-progress`), `rating`, `lang`, `pool_mode` (`tags`|`tags+collab`),
+`pool`, `tune`, `max_per_fandom`, `group_by`. Every one of them refuses an
+unusable value by name rather than ignoring it, because a control that is
+accepted and does nothing is indistinguishable from one that works.
 
 ### `?format=csv` on the works list
 

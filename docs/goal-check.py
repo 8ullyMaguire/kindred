@@ -426,6 +426,19 @@ def clause_parity():
          r'class="block-form"',
          "POST /block existed and /block listed what was blocked, but no page "
          "ever rendered the button, so blocking could not be performed at all"),
+
+        ("the pool budget is split, not fully consumed by tags",
+         "internal/engine/engine.go",
+         r"tagBudget = limit - collabReserve\(limit\)",
+         "the tag pool was capped at the FULL budget, so the collab union's "
+         "`room := limit - len(out)` was always 0 and pool_mode=tags+collab "
+         "returned byte-identical results to tags on the live mirror"),
+
+        ("corpus-query modes are reachable as JSON",
+         "internal/api/server.go",
+         r"handleCorpusQuery",
+         "the four working corpus-query modes existed only as pages and a CLI "
+         "verb, so a script had to scrape a rendered table"),
     ]
 
     missing = []

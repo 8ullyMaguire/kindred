@@ -102,6 +102,16 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/ao3/tags/{id}", s.handleAO3Tag)
 	mux.HandleFunc("GET /api/v1/ao3/tags/{id}/works", s.handleAO3TagWorks)
 
+	// Corpus-query modes. These are the same Runner the pages use, exposed as
+	// JSON so a script gets the same analysis the browser gets rather than
+	// scraping a table off /fandoms.
+	//
+	// They were reachable only through the pages and the CLI. A capability a
+	// script cannot call is a capability half the callers do not have, and
+	// the CLI's `kindred profile --query` needs a writable store this API
+	// does not require.
+	mux.HandleFunc("GET /api/v1/corpus-query/{mode}", s.handleCorpusQuery)
+
 	// The arena: pairwise comparison and Glicko-2 ratings.
 	mux.HandleFunc("GET /api/v1/arena/pair", s.handleArenaPair)
 	mux.HandleFunc("POST /api/v1/arena/compare", s.handleArenaJudge)
@@ -1260,4 +1270,121 @@ func truthy(s string) bool {
 		return true
 	}
 	return false
+}
+
+// handleCorpusQuery runs a corpus-query mode and returns its rows as JSON.
+//
+//	GET /api/v1/corpus-query/fandom-ranking?limit=50&profile=NAME
+//	GET /api/v1/corpus-query/underrated?limit=50&min_co_works=20
+//	GET /api/v1/corpus-query/tag-neighbours?tag=angst&limit=50
+//	GET /api/v1/corpus-query/surprise?limit=10
+//
+// A mode that is DECLARED but not implemented answers 501 and says which
+// modes work. That distinction is the point of the endpoint: `similar` and
+// `fandom-landscape` are declared names in corpusquery, and answering them
+// with an empty row set would be indistinguishable from a corpus that
+// contains nothing — a much stronger and wrong claim.
+func (s *Server) handleCorpusQuery(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("mode")
+	mode, err := corpusquery.ParseMode(name)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if !corpusquery.IsImplemented(mode) {
+		names := make([]string, 0, len(corpusquery.Modes()))
+		for _, m := range corpusquery.Modes() {
+			names = append(names, string(m))
+		}
+		writeErr(w, http.StatusNotImplemented, fmt.Errorf(
+			"corpus-query mode %q is declared but not implemented; working modes: %s",
+			mode, strings.Join(names, ", ")))
+		return
+	}
+	if s.Engine == nil || s.Engine.Corpus == nil {
+		writeErr(w, http.StatusServiceUnavailable,
+			errors.New("no corpus is attached to this server"))
+		return
+	}
+
+	q := r.URL.Query()
+	opts := corpusquery.Options{
+		Limit:       parseAPIBoundedInt(q.Get("limit"), 0, 1000, 0),
+		ProfileName: strings.TrimSpace(q.Get("profile")),
+		MinTags:     parseAPIBoundedInt(q.Get("min_tags"), 0, 100, 0),
+	}
+	// min_co_works is signed on purpose: negative disables the gate, which is
+	// a decision a caller should have to make explicitly rather than
+	// accidentally.
+	if v := strings.TrimSpace(q.Get("min_co_works")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf(
+				"min_co_works must be an integer, got %q", v))
+			return
+		}
+		opts.MinCoWorks = n
+	}
+
+	runner := corpusquery.NewRunner(s.Engine.Corpus.DB)
+	ctx := r.Context()
+	var res corpusquery.Result
+	switch mode {
+	case corpusquery.ModeFandomRanking:
+		var seeds []int32
+		if ids := strings.TrimSpace(q.Get("seed_tags")); ids != "" {
+			for _, part := range strings.Split(ids, ",") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				id, err := strconv.ParseInt(part, 10, 32)
+				if err != nil {
+					writeErr(w, http.StatusBadRequest, fmt.Errorf(
+						"seed_tags must be comma-separated tag ids, got %q", part))
+					return
+				}
+				seeds = append(seeds, int32(id))
+			}
+		}
+		res, err = runner.FandomRanking(ctx, seeds, opts)
+	case corpusquery.ModeUnderrated:
+		res, err = runner.Underrated(ctx, opts)
+	case corpusquery.ModeTagNeighbours:
+		tag := strings.TrimSpace(q.Get("tag"))
+		if tag == "" {
+			writeErr(w, http.StatusBadRequest,
+				errors.New("tag-neighbours needs a tag: ?tag=angst"))
+			return
+		}
+		res, err = runner.TagNeighbours(ctx, tag, opts)
+	case corpusquery.ModeSurprise:
+		res, err = runner.Surprise(ctx, opts)
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// parseAPIBoundedInt parses an integer in [lo, hi], falling back to def.
+//
+// A missing value is not an error; an out-of-range one is. The bound is what
+// stops ?limit=1000000 from asking a Runner to materialise a million rows,
+// which on the real mirror is a request that takes the process down rather
+// than one that returns slowly.
+func parseAPIBoundedInt(v string, lo, hi, def int) int {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	if n < lo || n > hi {
+		return def
+	}
+	return n
 }

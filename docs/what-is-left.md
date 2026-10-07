@@ -20,6 +20,17 @@ established it.
       meta.degraded[]" on failure.
 - [x] **PoolMode over HTTP.** `?pool_mode=tags|tags+collab` on both surfaces. An
       unknown value is a 400 that NAMES the parameter.
+- [x] **JSON routes for corpus-query modes.** `GET /api/v1/corpus-query/{mode}`
+      covers all four working modes with `limit`, `profile`, `min_co_works`
+      (signed), `min_tags` and `seed_tags`. A mode that is *declared but not
+      implemented* answers **501** and names the working ones — an empty row
+      set there would claim the corpus contains nothing.
+- [x] **Pool budget is split so collab actually gets slots.** Found by running
+      the live mirror, not by tests: `pool_mode=tags` and `tags+collab`
+      returned **byte-identical** lists. The tag pool was capped at the FULL
+      budget, so it filled every slot and the union's
+      `room := limit - len(out)` was always 0. `collabReserve` now holds back
+      an eighth of the pool for the collab half.
 - [x] **Filters over HTTP.** `min_words`, `max_words`, `min_kudos`,
       `complete`, `rating`, `lang` on both surfaces, parsed by one shared
       `engine.ParseFilter` so the two layers cannot drift. Every unparseable
@@ -67,6 +78,43 @@ replacement" was argued at length in a comment and nothing tested it.
 | an unknown tune is an error | fall back to defaults | 2 Go tests |
 | `blockSQL` is deterministic | shuffle the map | `TestBlockSQLIsStable` |
 | `blockSQL` no-ops on an empty set | always emit SQL | `TestBlockingNothingAddsNoSQL` |
+| the pool budget is split | tag half capped at `limit` | `TestThePoolIsSplitByBudgetNotByLuck` |
+| corpus-query dispatch is per-mode | return a fixed mode | 2 API tests |
+| unimplemented modes answer 501 | answer 200 | `TestADeclaredButUnimplementedModeAnswers501` |
+
+## Three bugs found only by running the real thing
+
+1. **The pool union was a no-op.** `pool_mode=tags` and `tags+collab`
+   returned byte-identical results on the live mirror. Every unit test passed,
+   because the fixture had fewer tag-reachable works than the pool under test,
+   so the reserve could not matter. Fixed by `collabReserve`; the test now
+   asserts the cap rather than the resulting ids, and it fails on the old
+   code with a message naming the defect.
+2. **The block control did not exist anywhere.** `POST /block` worked and
+   `/block` listed blocked tags, but no page rendered the button. Found by
+   writing a browser test that drove the flow a reader would.
+3. **`?tune=` was inert.** Accepted, echoed into `meta.Tune`, and never
+   applied — `signals()` always built `DefaultTune()`.
+
+## Live verification (thinkcentre, real 112,935-work mirror)
+
+Deployed to `/usr/local/bin/kindred` on :8010 and restarted the unit;
+previous binary kept at `kindred.prev-20261007`.
+
+```
+index loaded     nodes=634232 edges=7750334
+collab index     gate=2 pairs=12812 works=9365 users=6261
+healthz          200
+min_words=60000  -> 217753, 144151, 124220 words only
+complete=in-progress -> complete:0 only
+pool_mode tags    [11623035, 11648067, 53007217, 83275826, 21109976, 35705380]
+pool_mode collab  [11623035, 11648067,           83275826, 21109976, 35705380, 67165009]
+```
+
+The collab works are reachable but do not win: `collab` carries 0.18 of the
+tune against `neighbourhood` 0.33 and `tag_overlap` 0.24, and this seed's
+measured neighbourhood is 1-4 works. That is the tune behaving as designed on
+thin evidence, not a defect — raising `collab` is what `?tune=` is for.
 
 ## Corrected measurements (2026-10-07, live mirror)
 
@@ -96,13 +144,11 @@ the tag pool is load-bearing rather than belt-and-braces.
       attestation — three candidate filters are known to fail.
 - [ ] **Seen-work history.** No seen/exclusion store. `/recommend` cannot
       suppress a work the reader has already read.
-- [ ] **JSON routes for corpus-query modes.** Page and CLI can run them; the
-      JSON API cannot.
-- [ ] **Playwright e2e.** The browser suite covers the 16 existing routes.
-      It does not yet cover the filters, pool mode, tune selection or blocks,
-      all of which are new form controls.
-- [ ] **`docs/goal-check.py` clauses** for the four above, plus the parity
-      count, currently frozen at 9.
+- [ ] **`similar` corpus-query mode.** Declared in `corpusquery` with an
+      honest "NOT IMPLEMENTED" comment and a 501 from the API. It is the
+      recommender's core question, but `/recommend` already answers it, so
+      this is duplication unless a distinct contract is defined.
+- [ ] **`fandom-landscape`.** Same status: declared, 501, unimplemented.
 
 ## Standing caveat
 

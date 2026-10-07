@@ -685,6 +685,34 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 	// for a well-typed query — it is a silently wrong result, which is why
 	// this ordering is written as a single explicit sequence rather than
 	// interleaved with the SQL string.
+	// The tag half of the pool is capped at the budget MINUS the room
+	// reserved for collaborative filtering.
+	//
+	// This is the bug that made PoolTagsOrCollab a no-op, and it is worth
+	// naming precisely because the code LOOKED correct. The SQL took
+	// `LIMIT limit`, so the tag pool always filled every slot, and the union
+	// below computed `room := limit - len(out)` — which is then always zero,
+	// so collab contributed nothing and returned. Measured on the live
+	// mirror: `pool_mode=tags` and `pool_mode=tags+collab` produced
+	// BYTE-IDENTICAL 8-item lists, and none of the seed's four known
+	// co-bookmarked neighbours appeared in either.
+	//
+	// Reserving a fixed share is a deliberate trade, not a compromise to
+	// paper over that. Tag pooling is the stronger half on this mirror —
+	// measured neighbourhoods are 1-4 works per seed against thousands of
+	// tag matches — so reserving a large share would hand most of the budget
+	// to a much thinner signal. The share is therefore small and explicit,
+	// and the collab half goes first when the budget is tight, because those
+	// works are unreachable any other way.
+	tagBudget := limit
+	if req.PoolMode == PoolTagsOrCollab {
+		tagBudget = limit - collabReserve(limit)
+		if tagBudget < 1 {
+			// A pool of 1 cannot be split. Tags win the slot, because on this
+			// corpus they are the half that can actually rank.
+			tagBudget = 1
+		}
+	}
 	q := `SELECT wt.work_id, COUNT(*) AS shared FROM work_tags wt
 	      JOIN works w ON w.id = wt.work_id
 	      WHERE ` + where
@@ -700,7 +728,7 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 	q += ` GROUP BY wt.work_id
 	       ORDER BY shared DESC, wt.work_id ASC
 	       LIMIT ?`
-	args = append(args, limit)
+	args = append(args, tagBudget)
 
 	rows, err := e.Corpus.DB.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -757,10 +785,13 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 	// Replacing the tag pool with collab neighbours would make the ranking
 	// depend entirely on whether the mirror happened to sample bookmark rows
 	// for this seed's neighbourhood — the recommender would silently stop
-	// being content-based. Sharing one budget equally would starve whichever
-	// half is larger. So the tag pool keeps `limit` slots and collab
-	// contributes what remains, which is the additive behaviour that makes
+	// being content-based. So the tag pool keeps most of `limit` and collab
+	// gets a reserved share, which is the additive behaviour that makes
 	// PoolMode safe to expose as a request parameter.
+	//
+	// `limit - len(out)` is correct now BECAUSE the tag half was capped below
+	// `limit` above. Before that split it was always zero, which is how the
+	// whole union stayed unreachable while reading as a working union.
 	room := limit - len(out)
 	if room <= 0 {
 		return out, collabVotes, nil
@@ -768,6 +799,36 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 	extra := collabCandidates(collabVotes, room, seedIDs, 0, f, req.BlockedTagIDs, e.Corpus)
 	out = append(out, extra...)
 	return out, collabVotes, nil
+}
+
+// collabReserve is how many of a pool's slots are held back for
+// collaborative filtering when PoolMode is PoolTagsOrCollab.
+//
+// Small and explicit, and the ratio is the measurement rather than a taste:
+// on the live mirror a seed's co-bookmark neighbourhood is 1-4 works
+// (6,261 bookmarkers spread over 112,935 works), while tag pooling offers
+// thousands. Reserving a quarter of a 200-pool would hand 50 slots to a
+// signal that can fill at most a handful.
+//
+// It is a MINIMUM share, not a cap: the tag half is reduced by this much, so
+// collab can use it plus any slots the tag half left unfilled. A tag pool
+// thinner than the budget therefore hands the remainder to collab, which is
+// the right direction — an underfull pool is a pool with room to fill.
+//
+// Never exceeds limit-1, so the tag half always keeps at least one slot.
+func collabReserve(limit int) int {
+	if limit <= 2 {
+		// Too small to divide. Tags take everything; at a pool of 2 the
+		// collab half would be a coin flip rather than a ranking.
+		return 0
+	}
+	// An eighth, rounded up, so a small pool still gets a collab slot: at a
+	// pool of 8 that is one, which is enough to change a list.
+	r := (limit + 7) / 8
+	if r > limit-1 {
+		return limit - 1
+	}
+	return r
 }
 
 // collabCandidates picks the top-scoring collab neighbours that are not
