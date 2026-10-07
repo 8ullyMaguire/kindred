@@ -152,18 +152,37 @@ The in-memory data structures that power the recommender. Built by
   ranking pool at serve startup. The similarity values are precomputed
   and normalized during index building.
 
-### 2.6 Web UI changes
+### 2.6 Taste-based ranking in the web UI
 
-To reflect the personalized taste-based recommendations, the web UI is updated as follows:
+The personalised, taste-based ranking surface of the site:
 
-* The default sort on `/recommend` and `/profile/{id}` is changed from `Relevance` to `Taste Match`.
-* A new slider is added in the Filter Sidebar: `[ Niche Gems ───•─── Global Hits ]` which controls the popularity dampening exponent.
-* The collaborative evidence in the "Why this?" section is updated to show taste overlap: 
-  "Highly aligned with your reader cohort (94% taste overlap, 12 bookmarks)."
+* **`Taste Match` is the default order** (value `taste`) on `/tag/{id}`
+  and offered first in every sort control. On a tag page it blends the
+  exact tag hits with the tag's reader-loved works (the collab half), and
+  the page must always say which view it is showing: a `taste-note`
+  carrying both counts ("28 with this tag + 14 loved by its readers"), or
+  a `taste-error` naming the reason when the blend cannot run. Silence —
+  neither note — is a bug. An explicit `?sort=` opts back into a plain
+  exact list. **[live]**
+* **Popularity dampening slider** in the Filter Sidebar:
+  `[ Niche Gems ───•─── Global Hits ]`, controlling the dampening
+  exponent applied to globally popular works so niche works can surface.
+  URL-backed like every other control, no JavaScript required.
+  **[planned]**
+* **Evidence must state taste overlap and bookmarks.** Every "Why this?"
+  reason that rests on collaborative data reads as
+  `"Highly aligned with your reader cohort (94% taste overlap, 12 bookmarks)"` —
+  a percentage a reader can parse and a bookmark count they can verify,
+  not a raw vote number. **[partially live: the collab signal emits
+  `co-bookmarked by readers of the seeds (vote X of max Y)`; the
+  taste-overlap phrasing is the target]**
+* **Degraded signals are shown**, so a reader can see when ranking ran
+  without one. **[live]**
 
 ### 2.7 Default Blocked Tags
 
-The following tags are blocked by default in the configuration to avoid certain content:
+The following tags are blocked by default for every reader who has not
+set their own list, to avoid certain content:
 - "M/M"
 - Slash
 - Gay
@@ -179,16 +198,28 @@ The following tags are blocked by default in the configuration to avoid certain 
 - "Needs a Hug"
 - Bestiality
 
-These tags can be overridden by the user in the URL or in their profile.
+A reader's own blocks (via `POST /block`, reachable from the tag page)
+**replace** the defaults for that reader; `?exclude_tag=` / `blocked_tag`
+in the URL add one-off exclusions to any list. Blocking applies inside
+the pool query **and** inside the collab half — a blocked tag must change
+what is ranked, not just what is displayed.
+
+**Status: [planned].** The per-reader block list, the URL exclusions and
+the both-halves application are live (`blockSQL`, `POST /block`,
+`/block` page); the *default* list is not yet seeded anywhere in the
+code — today a reader starts with an empty list. Seeding it is a config
+default, not a redesign.
 ---
 
 ## 3. API
 
-A read-only HTTP API that serves recommendations and corpus data. All
-endpoints are under `/api/v1/` or at the root (`/`). The API is designed
-to be run on a device with limited resources (e.g., a Raspberry Pi) and
-to be safe to expose to the internet (no write endpoints, no dynamic
-memory allocation during request handling).
+An HTTP API that serves recommendations and corpus data. All endpoints
+are under `/api/v1/` or at the root (`/`). The API is designed to be run
+on a device with limited resources (e.g., a Raspberry Pi) and to be safe
+to expose to the internet: **the corpus and index are never written
+through the API**, and every write is session-scoped reader state
+(judgements, seen marks, block list) that cannot alter what the mirror
+serves other readers.
 
 ### 3.1 Common patterns
 
@@ -200,9 +231,11 @@ memory allocation during request handling).
 - The `X-Kindred-Index-Age` header is present on every response and
   indicates how long ago the index was last built.
 - The `Server` header is set to `kindred` on every response.
-- The API is read-only: there are no `POST`, `PUT`, `PATCH`, or `DELETE`
-  endpoints (except for the unofficial AO3 read surface, which is still
-  read-only from the user's perspective).
+- Reads are `GET`; writes are `POST` and only touch reader-session state
+  (`POST /api/v1/recommend` is read-shaped, the arena compare/batch, and
+  the web forms `/seen`, `/block`, `/profiles`, `/profile`,
+  `/arena/judge`). There are no `PUT`/`PATCH`/`DELETE`, and no endpoint
+  modifies the corpus, the index, or another reader's view.
 
 ### 3.2 Endpoints
 
@@ -393,8 +426,11 @@ These endpoints serve the anonymous peer-ranking arena (see
 #### 3.2.6 Utility endpoints
 
 - `GET /healthz`
-  - Returns a simple JSON object indicating the server is alive.
-  - Response: `{"status":"ok"}`.
+  - Returns the server's liveness and budget state.
+  - Response: `{"status":"ok"|"over_budget","budget_ok":bool,
+    "corpus_works":N,"heap_mib":F,"peak_rss_kib":N,"rss_cap_kib":N,
+    "lite":bool,"uptime_s":N,"version":"..."}`. `status` reflects
+    `budget_ok`; the deploy gate fails on any non-200.
 
 - `GET /stats`
   - Returns a JSON object with corpus and index statistics.
@@ -449,25 +485,49 @@ browse the mirror and get recommendations. The UI is built with Go's
 
 ### 4.2 Pages
 
-- `/`: the home page, with a search bar and a list of recommended works
-  (based on a default seed or the most recent works).
-- `/search`: a page to search for works by title, summary, or tag.
-- `/work/{id}`: a page to view a single work.
-- `/tag/{id}`: a page to view a single tag.
-- `/recommend`: a page to get recommendations from one or more seed works.
+Every list page accepts `?n=` (bounded per page: tag 200, author 500,
+search 100), every sort/filter state lives in the URL, and a truncated
+list shows a "show more" link carrying the raised `n`. None of it needs
+JavaScript.
+
+- `/`: the home page — the search page itself, with a search bar.
+- `/search?q=`: search by AO3 work URL or `/works/{id}` (exact match
+  first, rendered as an `exact-work` block and excluded from the list
+  below so it cannot appear twice), or by title + author tokens; a URL
+  for a work this mirror lacks says so with the id (`exact-missing`).
+  Also matches tag names.
+- `/author?q=`: works by an author (substring match); every byline links
+  here; an unknown name is an honest empty list.
+- `/work/{id}`: a page to view a single work, with evidence, an "I have
+  read this" button, and suggested neighbours.
+- `/tag/{id}`: a page to view a single tag. Default order `sort=taste`
+  (see §2.6); explicit `?sort=` selects the plain list; filters
+  (completion, rating, language, length) combine with any sort; a block
+  control blocks the tag from every recommendation.
+- `/recommend`: a page to get recommendations from one or more seed
+  works, with every ranking control on the page (filters, pool mode,
+  pool size, tune, count), degraded signals shown, and read/seen works
+  excluded.
 - `/fandoms`: a page to browse fandoms (by tag type `fandoms`).
 - `/underrated`: a page to browse underrated works.
 - `/neighbours`: a page to browse works that are neighbours of a given
   tag (by co-occurrence).
-- `/surprise`: a page to get a surprise recommendation.
+- `/surprise`: a page to get a surprise recommendation (a real seed,
+  different each call).
 - `/profiles`: a page to list taste profiles.
-- `/profile/{id}`: a page to view a single taste profile.
+- `/profile`: a page to view a single taste profile (`?name=`).
 - `/arena`: a page to browse the arena leaderboard.
 - `/leaderboard`: same as `/arena`.
 - `/my-ranking`: a page to view the user's arena ranking.
-- `/block`: a page to block a tag (add it to the blocked list).
+- `/block`: a page to view and change the blocked-tag list.
 - `/rank/{id}`: a page to view the ranking of a single work (in the arena).
+- `/seen`: `POST` only — marks a work read/unread (or shown) and
+  redirects back.
 - `/static/*`: static assets (CSS, images, etc.).
+
+Planned pages (spec'd, not yet built): a recommendation-explanation
+page per result, series grouping on work cards, a tag relationship
+explorer, an RSS feed of recommendations, and an OpenSearch descriptor.
 
 ### 4.3 Components
 
@@ -483,11 +543,14 @@ browse the mirror and get recommendations. The UI is built with Go's
 
 ### 4.4 JavaScript
 
-The UI uses minimal JavaScript, only for:
-- Enhancing the search bar with autocomplete (via `/api/v1/ao3/tags?q=`).
-- Enabling keyboard navigation (j/k to move through results, Enter to open).
-- Making the "More like this" button work (a one-click link to
-  `/api/v1/recommend?seed=ao3_work:{id}`).
+The site's requirement: **every page works with JavaScript disabled** —
+all state is in the URL, all controls are links and plain forms, and the
+browser suite asserts the no-JS path. The templates currently ship **no
+JavaScript at all**.
+
+Planned enhancements (must stay optional, never load-bearing):
+- Search-bar autocomplete via `/api/v1/ao3/tags?q=`.
+- Keyboard navigation (j/k to move through results, Enter to open).
 - Toggling the visibility of blocked tags in the UI.
 
 No JavaScript is required for the core functionality; the UI works
@@ -495,11 +558,11 @@ without it.
 
 ### 4.5 Templates
 
-All HTML templates are in `internal/web/templates/` and are parsed at
-startup. The templates are:
+All HTML templates are in `internal/web/assets/` and are embedded via
+`go:embed`. The templates are:
 - `layout.html`: the base layout (header, footer, container).
-- `home.html`: the home page.
-- `search.html`: the search page.
+- `search.html`: the search page (also served for `/`).
+- `author.html`: the author page.
 - `work.html`: the work page.
 - `tag.html`: the tag page.
 - `recommend.html`: the recommend page.
@@ -509,12 +572,18 @@ startup. The templates are:
 - `surprise.html`: the surprise page.
 - `profiles.html`: the profiles page.
 - `profile.html`: the profile page.
-- `arena.html`: the arena leaderboard page.
-- `my-ranking.html`: the my-ranking page.
+- `arena.html`: the arena page (pair judgment).
+- `leaderboard.html`: the leaderboard page.
+- `myranking.html`: the my-ranking page.
 - `block.html`: the block page.
 - `rank.html`: the rank page.
 - `error.html`: the error page.
 - `notfound.html`: the 404 page.
+
+There is no `home.html`: `/` renders `search.html` with an empty query.
+Every page must render an `<h1>` (the layout only emits one when
+Heading is set), and `render_pages_test.go` renders all of them with
+every field populated.
 
 ### 4.6 Assets
 
@@ -558,6 +627,9 @@ Runs the HTTP API and web UI.
   - `--tune`: name of the tune to use (default: `default`).
   - `--pool-size`: size of the recommendation pool (default: 200 for
     `lite`, 1000 for `full`).
+  - `--no-crawl`: disable the background auto-crawler (§5.5). With the
+    flag absent, serve grows the mirror from reader requests; the
+    request path itself never makes an outbound request.
 
 ### 5.2 ingest
 
@@ -729,8 +801,14 @@ The design goal is to fit within the memory budget of a Raspberry Pi with
 512 MB of RAM (leaving 512 MB for the OS and other services) and a
 workstation with twenty other services resident.
 
-The memory usage is dominated by the index (see §2). The measured peak
-RSS for the `serve` command is 35 MB in full mode and 23 MB in lite mode.
+The memory usage is dominated by the index (see §2). Measured with
+`scripts/budget.sh` against the real 112,935-work mirror (full mode,
+graph loaded, `VmHWM`): **184 MiB of the 220 MiB cap, PASS** — the
+per-stage trace tops out after the wide-pool recommend and the arena
+pages. `lite` mode targets a 60 MiB cap. Note `/healthz` reports
+`VmHWM`, a monotonic high-water mark: a burst of `n=100` blended tag
+pages can push it past the cap and it stays `over_budget` until the
+process restarts, even though steady-state RSS is far lower.
 
 The `ingest` and `embed` commands are separate because their peak RSS
 (181.6 MB and 203.2 MB, respectively) would exceed the budget if run in
@@ -747,10 +825,15 @@ the same process as the `serve` command.
   networked code paths are the `crawl` subcommand and `serve`'s background
   auto-crawler (same client, same robots.txt crawl delay, `--no-crawl` to
   disable), both of which only fetch from AO3.
+- The only cookie is `kindred_arena`: a random session key (HttpOnly,
+  SameSite=Lax) that scopes arena judgements, seen marks and the block
+  list to one reader. It carries no identity, is never sent to a third
+  party, and there is no localStorage or client-side tracking. The
+  systemd unit additionally denies outbound addresses
+  (`IPAddressDeny=any`, localhost only), so the deployed service cannot
+  dial out at all until the crawler's network policy is decided.
 - The `dump`, `verify`, and `fetch` commands handle anonymised, signed
   snapshots and do not expose private data.
-- The API does not set cookies or use localStorage, so there is no
-  client-side state to steal.
 - The API does not log query parameters or request bodies, so there is
   no risk of leaking sensitive data in logs.
 
