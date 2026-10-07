@@ -48,7 +48,7 @@ This document outlines the current state of the Arena ranking functionality in t
 
 3. **Test coverage gaps**: no test runs against the real 1.7 GB mirror — which
    is where every defect of the *data* kind was found. There is now a browser
-   suite (`e2e/`, 46 tests, `make e2e`) and it is hermetic: `cmd/e2eserver`
+   suite (`e2e/`, 115 tests, `make e2e`) and it is hermetic: `cmd/e2eserver`
    builds an index over the 40-work `internal/testcorpus` fixture and serves the
    real router, handlers, templates and store. Only the corpus size is fake.
    Page rendering is additionally covered by `internal/web/render_pages_test.go`,
