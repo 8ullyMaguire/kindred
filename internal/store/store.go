@@ -372,7 +372,64 @@ CREATE INDEX IF NOT EXISTS idx_arena_pairs
 CREATE INDEX IF NOT EXISTS idx_arena_pending
 	ON arena_comparisons(session_key) WHERE judged_at IS NULL;
 
+-- Current Glicko-2 rating per entity of any kind. One row per (kind, entity_id),
+-- updated in batch. kind='ao3_work' maps to the legacy arena_ratings rows
+-- for backward compatibility.
+CREATE TABLE IF NOT EXISTS arena_entities (
+    kind       TEXT    NOT NULL,
+    entity_id  INTEGER NOT NULL,
+    mu         REAL    NOT NULL DEFAULT 1500.0,
+    phi        REAL    NOT NULL DEFAULT 350.0,
+    sigma      REAL    NOT NULL DEFAULT 0.06,
+    comparisons INTEGER NOT NULL DEFAULT 0,
+    wins       INTEGER NOT NULL DEFAULT 0,
+    losses     INTEGER NOT NULL DEFAULT 0,
+    draws      INTEGER NOT NULL DEFAULT 0,
+    period     INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (kind, entity_id)
+);
+
+-- One comparison row per (kind, winner, loser, owner_key, period). Used
+-- by the agreement-weighted learning path; agreement is stored at vote time
+-- so later formula changes cannot rewrite the past.
+CREATE TABLE IF NOT EXISTS arena_entity_comparisons (
+    kind          TEXT    NOT NULL,
+    winner_id     INTEGER NOT NULL,
+    loser_id      INTEGER NOT NULL,
+    owner_key     TEXT    NOT NULL,
+    agreement     REAL    NOT NULL DEFAULT 1.0,
+    period        INTEGER NOT NULL,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (kind, winner_id, loser_id, owner_key, period)
+);
+
+-- Append-only history per entity, so a rating change can be explained.
+-- one row per (kind, entity_id, period).
+CREATE TABLE IF NOT EXISTS arena_entity_history (
+    kind         TEXT    NOT NULL,
+    entity_id    INTEGER NOT NULL,
+    period       INTEGER NOT NULL,
+    mu           REAL,
+    phi          REAL,
+    sigma        REAL,
+    PRIMARY KEY (kind, entity_id, period)
+);
+
 -- Current Glicko-2 rating per work. One row per work, updated in batch.
+-- Kept as a view/compat layer; all new code should use arena_entities.
+CREATE TABLE IF NOT EXISTS arena_ratings (
+    work_id     INTEGER PRIMARY KEY,
+    mu          REAL NOT NULL DEFAULT 1500.0,
+    phi         REAL NOT NULL DEFAULT 350.0,
+    sigma       REAL NOT NULL DEFAULT 0.06,
+    comparisons INTEGER NOT NULL DEFAULT 0,
+    wins        INTEGER NOT NULL DEFAULT 0,
+    losses      INTEGER NOT NULL DEFAULT 0,
+    draws       INTEGER NOT NULL DEFAULT 0,
+    period      INTEGER NOT NULL DEFAULT 0,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 -- phi (the rating deviation) is the confidence and is what stops a single
 -- comparison from creating a celebrity.
 CREATE TABLE IF NOT EXISTS arena_ratings (
