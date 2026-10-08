@@ -121,6 +121,10 @@ func Load() *Config {
 				case "wip", "in-progress", "false", "0":
 					f.Complete = engine.CompleteWIP
 				}
+			case "lang", "language":
+				if v := strings.TrimSpace(val); v != "" {
+					f.Languages = append(f.Languages, v)
+				}
 			}
 		}
 		c.Standing = f
