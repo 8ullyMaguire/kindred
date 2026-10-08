@@ -366,7 +366,33 @@ func (s *Server) parseRecommend(r *http.Request) (*engine.Request, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The site's block list sits UNDER the request's: a caller can add
+	// blocks, never remove the site's. Union, not override.
+	if len(s.DefaultBlockedTagIDs) > 0 {
+		if blocked == nil {
+			blocked = make(map[int64]bool, len(s.DefaultBlockedTagIDs))
+		}
+		for id := range s.DefaultBlockedTagIDs {
+			blocked[id] = true
+		}
+	}
 	req.BlockedTagIDs = blocked
+	// Standing filters fill only the keys the request left unset.
+	if f := s.Standing; f.MinWords > 0 || f.NotUpdatedWithinDays > 0 ||
+		f.Complete != engine.CompleteAny || len(f.Languages) > 0 {
+		if req.Filter.MinWords == 0 {
+			req.Filter.MinWords = f.MinWords
+		}
+		if req.Filter.NotUpdatedWithinDays == 0 {
+			req.Filter.NotUpdatedWithinDays = f.NotUpdatedWithinDays
+		}
+		if req.Filter.Complete == engine.CompleteAny {
+			req.Filter.Complete = f.Complete
+		}
+		if len(req.Filter.Languages) == 0 {
+			req.Filter.Languages = f.Languages
+		}
+	}
 	if v := q.Get("pool_mode"); v != "" {
 		mode, err := engine.ParsePoolMode(v)
 		if err != nil {
