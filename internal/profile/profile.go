@@ -37,6 +37,35 @@ type Profile struct {
 	Source string            `json:"source,omitempty"`
 	Tags   map[int32]float64 `json:"tags"`
 	Works  int               `json:"works"`
+
+	// BaseTags is the weight the ratings said, kept separate from Tags so
+	// online learning can move Tags without rewriting history.
+	//
+	// They are identical for a profile built from a work list. They part
+	// company the moment a reader gives feedback: Tags moves toward what the
+	// feedback says, BaseTags stays at what the library said. Storing only one
+	// map means the decay toward base has nothing to decay TOWARD, and a
+	// profile that cannot forget is a profile that cannot be corrected.
+	BaseTags map[int32]float64 `json:"base_tags,omitempty"`
+
+	// Evidence is the confidence behind each tag: how much rating signal
+	// stands behind it. A weight with no evidence count behind it cannot be
+	// trusted the way a weight with fifty works behind it can, and the
+	// introspection page shows both together for exactly that reason.
+	Evidence map[int32]float64 `json:"evidence,omitempty"`
+
+	// Feedback counts per tag, for the confidence-damped online update. Zero
+	// for a ratings-built profile: the ratings ARE the base, not feedback
+	// events, and counting them here would make the first like on a tag move
+	// it a twentieth as far as intended.
+	Feedback map[int32]int `json:"feedback,omitempty"`
+
+	// weightSum and evidSum are the running accumulators for a build in
+	// progress. They are unexported and cleared by finish, because a saved
+	// profile must not carry them: they are build scratch, and a snapshot
+	// with them in it would be larger than the weights it produces.
+	weightSum map[int32]float64
+	evidSum   map[int32]float64
 }
 
 // String renders the profile for the CLI, heaviest tag first.
@@ -93,11 +122,87 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 			tag_id INTEGER NOT NULL,
 			weight REAL NOT NULL,
 			PRIMARY KEY(name, tag_id)
+		);
+		-- base_weight, evidence and feedback live on profile_tags rather than
+		-- in three more tables.
+		--
+		-- base_weight is what the ratings said, and it is IMMUTABLE: online
+		-- learning writes weight and never touches this column. It is the
+		-- target the decay pulls toward and the value "reset this tag"
+		-- restores, so a profile whose base was being rewritten along with
+		-- its live weights could never forget anything a reader asked it to
+		-- forget. Measured reason it cannot be derived instead: after a month
+		-- of feedback the live weights differ from the ratings by up to 0.4,
+		-- and "restore the rating-derived value" is then not a thing the code
+		-- can compute without re-running the whole build over 257 works.
+		CREATE TABLE IF NOT EXISTS profile_tags_v2(
+			name TEXT NOT NULL,
+			tag_id INTEGER NOT NULL,
+			weight REAL NOT NULL,
+			base_weight REAL,
+			evidence REAL NOT NULL DEFAULT 0,
+			feedback INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY(name, tag_id)
 		)`)
 	if err != nil {
 		return fmt.Errorf("profile schema: %w", err)
 	}
+	return s.migrateProfileTags(ctx)
+}
+
+// migrateProfileTags brings an existing profile_tags table up to the v2 shape.
+//
+// A new table plus a copy, rather than ALTER: the live state DB has profiles in
+// it already, and `CREATE TABLE IF NOT EXISTS` does nothing for a table that
+// exists, so a shape change applied only to fresh databases would read
+// NULL from every base_weight forever. The copy is one table's worth of rows
+// (thousands at most) at startup, once.
+//
+// base_weight is copied from weight, because for every profile that existed
+// before this change the two WERE the same value: nothing had yet moved a live
+// weight away from its base. Copying rather than leaving NULL means the decay
+// has a target from the first run instead of no-oping for a month.
+func (s *Store) migrateProfileTags(ctx context.Context) error {
+	has, err := s.tableExists(ctx, "profile_tags_v2")
+	if err != nil {
+		return err
+	}
+	if !has {
+		return nil
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM profile_tags_v2`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	var old int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM profile_tags`).Scan(&old); err != nil {
+		return err
+	}
+	if old == 0 {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO profile_tags_v2(name, tag_id, weight, base_weight, evidence, feedback)
+		SELECT name, tag_id, weight, weight, 0, 0 FROM profile_tags`); err != nil {
+		return fmt.Errorf("profile: seed base weights: %w", err)
+	}
 	return nil
+}
+
+// tableExists reports whether a table is present.
+func (s *Store) tableExists(ctx context.Context, table string) (bool, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?`,
+		table).Scan(&n); err != nil {
+		return false, fmt.Errorf("profile: inspect %s: %w", table, err)
+	}
+	return n > 0, nil
 }
 
 // Save writes a profile, replacing any previous version of that name.
@@ -122,11 +227,44 @@ func (s *Store) Save(ctx context.Context, p *Profile) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM profile_tags WHERE name = ?`, p.Name); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM profile_tags_v2 WHERE name = ?`, p.Name); err != nil {
+		return err
+	}
 	for tagID, w := range p.Tags {
+		// The v2 row carries the base weight, the evidence behind it and the
+		// feedback count. All three default to the live weight so a profile
+		// built by the [0,1] path still round-trips correctly: its base IS its
+		// weight, because nothing has ever moved it.
+		base := w
+		if p.BaseTags != nil {
+			if b, ok := p.BaseTags[tagID]; ok {
+				base = b
+			}
+		}
+		var evid float64
+		if p.Evidence != nil {
+			evid = p.Evidence[tagID]
+		}
+		var fb int
+		if p.Feedback != nil {
+			fb = p.Feedback[tagID]
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO profile_tags_v2
+			   (name, tag_id, weight, base_weight, evidence, feedback)
+			 VALUES(?,?,?,?,?,?)`,
+			p.Name, tagID, w, base, evid, fb); err != nil {
+			return fmt.Errorf("profile %q tag %d: %w", p.Name, tagID, err)
+		}
+		// The legacy row carries the live weight alone. It is dual-written
+		// rather than dropped because BuildFromWorks' [0,1] path and every
+		// reader written before the signed-weight change read this table, and
+		// a migration that silently empties them would break the profile page
+		// for every existing profile.
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO profile_tags(name, tag_id, weight) VALUES(?,?,?)`,
 			p.Name, tagID, w); err != nil {
-			return fmt.Errorf("profile %q tag %d: %w", p.Name, tagID, err)
+			return fmt.Errorf("profile %q legacy tag %d: %w", p.Name, tagID, err)
 		}
 	}
 	return tx.Commit()
@@ -134,7 +272,17 @@ func (s *Store) Save(ctx context.Context, p *Profile) error {
 
 // Load reads a profile.
 func (s *Store) Load(ctx context.Context, name string) (*Profile, error) {
-	p := &Profile{Name: name, Tags: map[int32]float64{}}
+	// Every map is initialised, not just Tags. A nil map reads fine and panics
+	// on write, and Save writes BaseTags/Evidence/Feedback for every profile --
+	// so a caller that loaded a profile and saved it back would fault on the
+	// first tag, which is the save-the-rating path in the web handler.
+	p := &Profile{
+		Name:     name,
+		Tags:     map[int32]float64{},
+		BaseTags: map[int32]float64{},
+		Evidence: map[int32]float64{},
+		Feedback: map[int32]int{},
+	}
 	err := s.db.QueryRowContext(ctx,
 		`SELECT source, works FROM profiles WHERE name = ?`, name).
 		Scan(&p.Source, &p.Works)
@@ -144,21 +292,62 @@ func (s *Store) Load(ctx context.Context, name string) (*Profile, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// The v2 table first, then the legacy one.
+	//
+	// The order is the whole point: v2 is authoritative when present, and the
+	// legacy read is a FALLBACK for a database where the migration has not
+	// run. Reading the legacy table first would silently discard the base
+	// weights, the evidence and the feedback counts -- the three things the
+	// decay and the introspection page depend on -- and the profile would
+	// still render, still look plausible, and have no memory.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT tag_id, weight FROM profile_tags WHERE name = ?`, name)
+		`SELECT tag_id, weight, base_weight, evidence, feedback
+		   FROM profile_tags_v2 WHERE name = ?`, name)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	found := 0
 	for rows.Next() {
 		var id int32
-		var w float64
-		if err := rows.Scan(&id, &w); err != nil {
+		var w, base, evid float64
+		var fb int
+		if err := rows.Scan(&id, &w, &base, &evid, &fb); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		p.Tags[id] = w
+		p.BaseTags[id] = base
+		p.Evidence[id] = evid
+		p.Feedback[id] = fb
+		found++
 	}
-	return p, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if found == 0 {
+		legacy, err := s.db.QueryContext(ctx,
+			`SELECT tag_id, weight FROM profile_tags WHERE name = ?`, name)
+		if err != nil {
+			return nil, err
+		}
+		defer legacy.Close()
+		for legacy.Next() {
+			var id int32
+			var w float64
+			if err := legacy.Scan(&id, &w); err != nil {
+				return nil, err
+			}
+			p.Tags[id] = w
+			// The base equals the live weight: nothing has moved it, because
+			// this row predates anything that could.
+			p.BaseTags[id] = w
+		}
+		return p, legacy.Err()
+	}
+	return p, nil
 }
 
 // List returns every profile name.

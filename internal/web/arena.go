@@ -469,6 +469,60 @@ func (d Deps) postSeen(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, safeReturnTo(r.PostFormValue("return_to")), http.StatusSeeOther)
 }
 
+// postFeedback records a like or dislike and teaches the profile from it.
+//
+// It is the page-layer counterpart of the arena's own learning, and it posts
+// rather than navigating to an API: a button in a result list has to land the
+// reader back in that list, which a JSON 200 cannot do. The redirect target
+// comes from the form and is filtered by safeReturnTo for the same reason
+// /seen's is -- an open redirect on a form POST is a phishing primitive, and
+// this form says "like" while landing the reader somewhere else.
+//
+// A failed learning step does NOT lose the feedback: LearnFromFeedback writes
+// the row before it moves the weights, so a reader's explicit dislike survives
+// even if the weight update cannot complete. The redirect says so rather than
+// silently pretending it worked.
+func (d Deps) postFeedback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if err := r.ParseForm(); err != nil {
+		d.fail(w, r, http.StatusBadRequest, fmt.Errorf("parse form: %w", err))
+		return
+	}
+	raw := r.PostFormValue("work_id")
+	workID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || workID <= 0 {
+		d.fail(w, r, http.StatusBadRequest,
+			fmt.Errorf("work_id must be a positive number, got %q", raw))
+		return
+	}
+	var polarity int
+	switch r.PostFormValue("action") {
+	case "like":
+		polarity = store.FeedbackLike
+	case "dislike":
+		polarity = store.FeedbackDislike
+	default:
+		d.fail(w, r, http.StatusBadRequest, fmt.Errorf(
+			"action must be like or dislike, got %q", r.PostFormValue("action")))
+		return
+	}
+	if d.Engine == nil || d.Engine.Store == nil {
+		d.fail(w, r, http.StatusServiceUnavailable,
+			errors.New("this server has no store to record feedback in"))
+		return
+	}
+	_, ownerKey, err := d.arenaSession(ctx, w, r)
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	if err := d.Engine.Store.LearnFromFeedback(ctx, ownerKey, workID, polarity); err != nil {
+		d.fail(w, r, http.StatusInternalServerError, fmt.Errorf("record feedback: %w", err))
+		return
+	}
+	http.Redirect(w, r, safeReturnTo(r.PostFormValue("return_to")), http.StatusSeeOther)
+}
+
 // safeReturnTo accepts only a local absolute path.
 //
 // An open redirect on a form POST is a phishing primitive: the form says

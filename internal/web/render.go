@@ -383,6 +383,19 @@ type RecommendPage struct {
 	// but carrying seeds is what makes the reader land on the same list.
 	ReturnTo string
 
+	// Feedback maps work id to this reader's current stance: 1 liked, -1
+	// disliked, absent meaning no opinion. It is a PAGE-level map keyed by
+	// work id rather than a field on rank.Candidate, because a candidate is a
+	// scoring result and its stance is per-reader state -- putting it there
+	// would put one reader's opinion into the API's recommendation payload,
+	// where it would be wrong for every other reader who consumed it.
+	//
+	// The map is keyed rather than a per-row bool because a template cannot
+	// index a struct by a dynamic key, and the alternative -- a per-result
+	// copy of the candidate with the field filled in -- allocates a slice of
+	// copies on every page render for one integer each.
+	Feedback map[int64]int
+
 	// Degraded names the signals that could not run. It is on the recommend
 	// page rather than only on /health because a missing signal changes the
 	// RANKING, and a reader looking at a list cannot see that it was ranked
@@ -640,6 +653,23 @@ var funcMap = template.FuncMap{
 	// int64 converts a template-visible int to int64 for commas(), which takes
 	// int64. Without it the call site needs a cast in every row.
 	"int64": func(v int) int64 { return int64(v) },
+
+	// stance reads a per-reader feedback map by work id.
+	//
+	// It exists because a Go template cannot index a map with a field from
+	// the surrounding range: `{{index $.Feedback .ID}}` needs the map and the
+	// key, and `.` is the candidate mid-range, so the map has to be named
+	// explicitly. Wrapping it here also keeps the ABSENT case honest -- a
+	// missing key returns 0, which renders as "neither pressed" rather than as
+	// an error that blanks the page. A nil map is the same as an empty one,
+	// which is what makes the page render correctly on a server with no
+	// feedback recorded yet.
+	"stance": func(stances map[int64]int, workID int64) int {
+		if stances == nil {
+			return 0
+		}
+		return stances[workID]
+	},
 }
 
 // stat reads one number out of a work's Stats map.

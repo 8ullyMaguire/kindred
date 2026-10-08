@@ -146,6 +146,34 @@
           <input type="hidden" name="return_to" value="{{$.ReturnTo}}">
           <button type="submit" data-testid="mark-read">I have read this</button>
         </form>
+        {{/* Like and dislike are a DIFFERENT act from marking read, and the
+             distinction is the whole feature. "I have read this" hides it
+             permanently; "I liked this" teaches the profile that the tags on
+             this fic are the ones to look for. Marking a beloved fic read and
+             getting nothing back is the failure that made this necessary.
+
+             Both buttons submit rather than being links, and they post to a
+             page endpoint that redirects back here, so the reader keeps their
+             place in the list. The pressed state is rendered from what is
+             stored, so a reload confirms what was recorded instead of showing
+             the buttons as if nothing happened. */}}
+        {{/* The pressed state comes from what is stored, not from the POST, so
+             a reload confirms the gesture rather than showing the buttons as if
+             nothing happened. `stance` returns 0 for an absent key, which is
+             exactly "no opinion yet". */}}
+        {{$stance := stance $.Feedback .ID}}
+        <form method="post" action="/feedback" class="feedback-form">
+          <input type="hidden" name="work_id" value="{{.ID}}">
+          <input type="hidden" name="return_to" value="{{$.ReturnTo}}">
+          <button type="submit" name="action" value="like"
+                  data-testid="like"
+                  class="feedback-like{{if eq $stance 1}} pressed{{end}}"
+                  aria-pressed="{{if eq $stance 1}}true{{else}}false{{end}}">like</button>
+          <button type="submit" name="action" value="dislike"
+                  data-testid="dislike"
+                  class="feedback-dislike{{if eq $stance -1}} pressed{{end}}"
+                  aria-pressed="{{if eq $stance -1}}true{{else}}false{{end}}">dislike</button>
+        </form>
         {{if .Summary}}<p class="summary">{{shorten .Summary 1}}</p>{{end}}
         {{if .Evidence}}
         <ul class="evidence">

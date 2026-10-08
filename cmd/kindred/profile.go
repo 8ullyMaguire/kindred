@@ -93,6 +93,10 @@ func runProfile(ctx context.Context, corpusPath string, args []string) error {
 		return profileBuild(ctx, rest)
 	case "rate":
 		return profileRate(ctx, rest)
+	case "import":
+		return profileImport(ctx, rest)
+	case "validate":
+		return profileValidate(ctx, rest)
 
 	default:
 		return fmt.Errorf("profile: unknown subcommand %q", sub)
@@ -396,20 +400,25 @@ func openProfileStore(c *config.Config) (*profile.Store, *sql.DB, func(), error)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("open state db %s: %w", statePath, err)
 	}
-	if _, err := state.ExecContext(context.Background(), `
-		CREATE TABLE IF NOT EXISTS profiles(
-			name TEXT PRIMARY KEY,
-			source TEXT NOT NULL DEFAULT '',
-			works INTEGER NOT NULL DEFAULT 0,
-			updated_at TEXT NOT NULL DEFAULT ''
-		);
-		CREATE TABLE IF NOT EXISTS profile_tags(
-			name TEXT NOT NULL,
-			tag_id INTEGER NOT NULL,
-			weight REAL NOT NULL,
-			PRIMARY KEY(name, tag_id))`); err != nil {
+	ctx := context.Background()
+	// The schema comes from profile.Store.EnsureSchema, not from a copy of
+	// the CREATE TABLEs pasted here.
+	//
+	// This used to inline the two original tables, which meant the CLI created
+	// a database SHAPE that disagreed with the store the same process then used:
+	// Save wrote to profile_tags_v2, this had never created it, and
+	// `kindred profile build` failed with "no such table: profile_tags_v2" on a
+	// state database the CLI itself had just opened. The failure appeared only
+	// once the signed-weight columns existed, which is exactly the class of bug
+	// a duplicated schema definition produces and the one thing EnsureSchema
+	// existing is supposed to make impossible.
+	//
+	// EnsureSchema is idempotent (CREATE TABLE IF NOT EXISTS plus a guarded
+	// one-time seed), so calling it on an already-migrated database is free.
+	ps := profile.NewStore(state)
+	if err := ps.EnsureSchema(ctx); err != nil {
 		state.Close()
-		return nil, nil, nil, fmt.Errorf("profile schema: %w", err)
+		return nil, nil, nil, err
 	}
 
 	corpus, closeCorpus, err := openCorpusForSubcommand(c.CorpusDB, nil)
@@ -417,7 +426,7 @@ func openProfileStore(c *config.Config) (*profile.Store, *sql.DB, func(), error)
 		state.Close()
 		return nil, nil, nil, err
 	}
-	return profile.NewStore(state), corpus,
+	return ps, corpus,
 		func() { state.Close(); closeCorpus() }, nil
 }
 

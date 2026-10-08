@@ -486,6 +486,55 @@ CREATE TABLE IF NOT EXISTS seen_works (
 CREATE INDEX IF NOT EXISTS seen_works_owner_shown
 	ON seen_works (owner_key, shown_at);
 
+/* work_feedback is a reader's like or dislike on a work.
+
+   Separate from seen_works because the two answer different questions and
+   neither implies the other: seen_works records "I was shown this / I read
+   this", work_feedback records "I think this is good or bad". A reader who
+   read a fic and disliked it wants the DISLIKE remembered as a negative
+   signal, which a read flag cannot express -- and marking it unread later
+   must not silently erase the dislike.
+
+   polarity is CHECKed to ±1 rather than left as a free integer: a value of 2
+   or 0 would flow into the tag learning as a gradient step of the wrong size
+   or the wrong sign, and the CHECK turns that at the write boundary instead
+   of at the point where the weights are already wrong.
+
+   The PRIMARY KEY (owner_key, work_id) is what makes a double-submitted form
+   harmless: re-posting a like updates the row rather than applying the
+   learning twice. The separate history table keeps every CHANGE so a reader
+   who flips a dislike to a like can have the original taught back.
+
+   Learned tag weights are NOT stored here. They go to arena_user_tag_weights
+   through the same damped averaging the arena already uses, so a reader's taste
+   is one set of numbers rather than two that were each adjusted separately. */
+CREATE TABLE IF NOT EXISTS work_feedback (
+	owner_key TEXT NOT NULL,
+	work_id INTEGER NOT NULL,
+	polarity INTEGER NOT NULL CHECK (polarity IN (-1, 1)),
+	source TEXT NOT NULL DEFAULT 'web',
+	created_at TEXT NOT NULL DEFAULT (datetime('now')),
+	PRIMARY KEY (owner_key, work_id)
+) WITHOUT ROWID;
+
+/* work_feedback_history is the append-only log of stance changes.
+
+   Kept because a like that becomes a dislike is not a correction of a typo --
+   it is new evidence, and the tag weights have to be taught BOTH directions or
+   the first press leaves damage behind. Reading the previous stance from here
+   is how LearnFromFeedback knows to reverse before it re-applies. */
+CREATE TABLE IF NOT EXISTS work_feedback_history (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	owner_key TEXT NOT NULL,
+	work_id INTEGER NOT NULL,
+	polarity INTEGER NOT NULL CHECK (polarity IN (-1, 1)),
+	source TEXT NOT NULL DEFAULT '',
+	changed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS work_feedback_history_owner
+	ON work_feedback_history (owner_key, work_id, changed_at DESC);
+
 /* crawl_queue is serve's auto-crawler checkpoint (SPEC auto-crawl).
 
    The mirror grows from two inputs: works readers ask for that this mirror

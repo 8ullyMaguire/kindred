@@ -274,6 +274,15 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A like or a dislike. Same shape as /seen -- a two-button form the result
+	// list renders -- and the reason it is a page POST rather than an API call
+	// is the redirect: pressing "like" has to put the reader back in the list
+	// they were reading, with the button now showing as pressed.
+	if r.Method == http.MethodPost && r.URL.Path == "/feedback" {
+		d.postFeedback(w, r)
+		return
+	}
+
 	// Only GET and HEAD otherwise render a page. A POST to a page URL is
 	// not a page, and answering it with HTML answers a different question
 	// than the one asked. Writes go to /arena/judge or the API under
@@ -2204,6 +2213,20 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 
 	page.Tune = weightRows(res.Tune)
 	page.HideSeen = hideSeen
+	// Which results this reader has already liked or disliked, so the buttons
+	// render in their pressed state rather than resetting on every view. The
+	// read is one query for the whole list, NOT one per result: the work page
+	// already learned this lesson in the other direction, where a per-work tag
+	// query turned a 40 ms request into seconds.
+	//
+	// A failure here is not fatal. A result list with un-pressed buttons is
+	// still a correct list -- the reader loses the confirmation, not the
+	// recommendation -- so it is logged and the page renders without it.
+	if stances, err := d.feedbackStances(ctx, w, r, res.Items); err != nil {
+		d.log().Warn("feedback stances unavailable", "err", err)
+	} else {
+		page.Feedback = stances
+	}
 	// Only the path and query, and only if they came from this site: the mark
 	// read form POSTs this back, and an attacker-supplied absolute URL here
 	// would make "mark read" a redirect off-site. safeReturnTo re-checks it,
@@ -2211,6 +2234,29 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 	// keeps the two in step.
 	page.ReturnTo = safeReturnTo(r.URL.RequestURI())
 	d.page(w, "recommend.html", page, http.StatusOK)
+}
+
+// feedbackStances reads this reader's current stance on each result.
+//
+// Best-effort by contract: it returns an empty map rather than an error when
+// there is no session or no store, because "we do not know" and "you have
+// expressed no opinion" render identically and neither should break the page.
+func (d Deps) feedbackStances(ctx context.Context, w http.ResponseWriter, r *http.Request, items []rank.Candidate) (map[int64]int, error) {
+	if d.Engine == nil || d.Engine.Store == nil || len(items) == 0 {
+		return map[int64]int{}, nil
+	}
+	_, ownerKey, err := d.arenaSession(ctx, w, r)
+	if err != nil {
+		// A session that cannot be established is not a failure worth
+		// reporting: the buttons still work, the press simply creates the
+		// session when it is POSTed.
+		return map[int64]int{}, nil
+	}
+	ids := make([]int64, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.ID)
+	}
+	return d.Engine.Store.FeedbackForWorks(ctx, ownerKey, ids)
 }
 
 // seenExclusions resolves which works this reader should not be shown again.
