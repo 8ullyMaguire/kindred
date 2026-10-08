@@ -49,6 +49,12 @@ type Server struct {
 	// change this struct's shape for every caller and every test.
 	arenaSvc *ArenaService
 
+	// Standing filters and the site-wide blocked tags, resolved from the
+	// deployment's env (KINDRED_STANDING_FILTERS / KINDRED_DEFAULT_BLOCKED_TAGS)
+	// by the caller that builds the Server. Zero/empty keeps today's behaviour.
+	Standing             engine.Filter
+	DefaultBlockedTagIDs map[int64]bool
+
 	// Profiles is the taste-profile store, served to the web layer so a reader
 	// can build and rate a profile from the browser.
 	//
@@ -174,6 +180,9 @@ func (s *Server) Routes() http.Handler {
 		Version: s.Version,
 		Lite:    s.Lite,
 		Log:     s.Log,
+
+		Standing:             s.Standing,
+		DefaultBlockedTagIDs: s.DefaultBlockedTagIDs,
 	}
 	if s.Engine != nil && s.Engine.Corpus != nil {
 		pages.CorpusQuery = corpusquery.NewRunner(s.Engine.Corpus.DB)
@@ -353,6 +362,11 @@ func (s *Server) parseRecommend(r *http.Request) (*engine.Request, error) {
 		return nil, err
 	}
 	req.Filter = filter
+	blocked, err := s.resolveBlockedTags(r.Context(), r.URL.Query())
+	if err != nil {
+		return nil, err
+	}
+	req.BlockedTagIDs = blocked
 	if v := q.Get("pool_mode"); v != "" {
 		mode, err := engine.ParsePoolMode(v)
 		if err != nil {
@@ -361,6 +375,47 @@ func (s *Server) parseRecommend(r *http.Request) (*engine.Request, error) {
 		req.PoolMode = mode
 	}
 	return req, nil
+}
+
+// resolveBlockedTags turns ?blocked_tag= / ?exclude_tag= into tag ids.
+//
+// Both spellings are accepted because the web layer already stored the
+// concept under two names and the API used to accept-and-ignore both — the
+// worst shape a control can have, and one this repo's gates exist to catch.
+// Values are tag names (lowercased to match the mirror's vocabulary) or bare
+// numeric ids; an unknown name is a 400 naming it, because a silently
+// ignored block is a reader who cannot tell a working filter from a broken
+// one.
+func (s *Server) resolveBlockedTags(ctx context.Context, q url.Values) (map[int64]bool, error) {
+	var raw []string
+	for _, name := range []string{"blocked_tag", "exclude_tag"} {
+		for _, v := range q[name] {
+			for _, part := range strings.Split(v, ",") {
+				if part = strings.TrimSpace(part); part != "" {
+					raw = append(raw, part)
+				}
+			}
+		}
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make(map[int64]bool, len(raw))
+	for _, name := range raw {
+		if id, perr := strconv.ParseInt(name, 10, 64); perr == nil {
+			if id <= 0 {
+				return nil, fmt.Errorf("blocked_tag: id must be positive, got %d", id)
+			}
+			out[id] = true
+			continue
+		}
+		id, err := s.Engine.Corpus.TagIDByName(ctx, strings.ToLower(name))
+		if err != nil {
+			return nil, fmt.Errorf("blocked_tag: unknown tag %q", name)
+		}
+		out[id] = true
+	}
+	return out, nil
 }
 
 // writeEngineErr maps a domain error to a status. A missing seed is a 404

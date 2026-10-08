@@ -68,6 +68,17 @@ type Deps struct {
 	// decide what counts as well-tagged, and a server on the real mirror wants
 	// the real number.
 	SurpriseMinTags int
+
+	// Standing carries the deployment's default ranking filters
+	// (KINDRED_STANDING_FILTERS). A request that sets its own value for a
+	// key overrides that key only; the zero value is today's behaviour.
+	Standing engine.Filter
+
+	// DefaultBlockedTags is the deployment's site-wide block list, resolved
+	// to tag ids at startup (KINDRED_DEFAULT_BLOCKED_TAGS). Applied under
+	// the reader's own blocks: a reader can ADD blocks, never remove the
+	// site's, which is what "site-wide default" has to mean to be honest.
+	DefaultBlockedTagIDs map[int64]bool
 }
 
 // CorpusQuerier is the corpus-analysis surface the pages need.
@@ -2128,6 +2139,34 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 			d.log().Warn("could not read blocked tags; ranking without them", "err", berr)
 		} else if len(b) > 0 {
 			blocked = b
+		}
+	}
+	// The site's block list sits UNDER the reader's: a reader can add
+	// blocks, never remove the site's. Union, not override.
+	if len(d.DefaultBlockedTagIDs) > 0 {
+		if blocked == nil {
+			blocked = make(map[int64]bool, len(d.DefaultBlockedTagIDs))
+		}
+		for id := range d.DefaultBlockedTagIDs {
+			blocked[id] = true
+		}
+	}
+	// Standing filters are the deployment's defaults: each key applies only
+	// when the request did not set its own. ParseFilter produced the
+	// request's zero values for unset keys, so per-key merge on those zeros.
+	if f := d.Standing; f.MinWords > 0 || f.NotUpdatedWithinDays > 0 ||
+		f.Complete != engine.CompleteAny || len(f.Languages) > 0 {
+		if filter.MinWords == 0 {
+			filter.MinWords = f.MinWords
+		}
+		if filter.NotUpdatedWithinDays == 0 {
+			filter.NotUpdatedWithinDays = f.NotUpdatedWithinDays
+		}
+		if filter.Complete == engine.CompleteAny {
+			filter.Complete = f.Complete
+		}
+		if len(filter.Languages) == 0 {
+			filter.Languages = f.Languages
 		}
 	}
 

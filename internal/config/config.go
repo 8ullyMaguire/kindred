@@ -10,7 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
+
+	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 )
 
 type Config struct {
@@ -30,6 +33,18 @@ type Config struct {
 
 	// PublicAPI is the kill switch for the unofficial surface.
 	PublicAPI atomic.Bool
+
+	// DefaultBlockedTags is the site-wide block list, comma-separated tag
+	// names, applied to every recommendation unless the request names its
+	// own blocks. Env-only (KINDRED_DEFAULT_BLOCKED_TAGS): it is a policy
+	// of the deployment, not a per-invocation knob.
+	DefaultBlockedTags []string
+
+	// StandingFilters carries the deployment's default ranking filters as
+	// parsed engine.Filter (env KINDRED_STANDING_FILTERS, comma-separated
+	// key=value: min_words, lang, not_updated_within_days, complete).
+	// A request that sets its own value for a key overrides that key only.
+	Standing *engine.Filter
 }
 
 func env(key, def string) string {
@@ -75,6 +90,41 @@ func Load() *Config {
 		StableSalt: os.Getenv("KINDRED_STABLE_SALT") == "1",
 	}
 	c.PublicAPI.Store(env("KINDRED_PUBLIC_API", "1") == "1")
+	if v := env("KINDRED_DEFAULT_BLOCKED_TAGS", ""); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				c.DefaultBlockedTags = append(c.DefaultBlockedTags, strings.ToLower(part))
+			}
+		}
+	}
+	if v := env("KINDRED_STANDING_FILTERS", ""); v != "" {
+		f := &engine.Filter{}
+		for _, kv := range strings.Split(v, ",") {
+			k, val, found := strings.Cut(strings.TrimSpace(kv), "=")
+			if !found {
+				continue
+			}
+			n, nerr := strconv.ParseInt(strings.TrimSpace(val), 10, 64)
+			switch strings.TrimSpace(k) {
+			case "min_words":
+				if nerr == nil {
+					f.MinWords = n
+				}
+			case "not_updated_within_days":
+				if nerr == nil {
+					f.NotUpdatedWithinDays = n
+				}
+			case "complete":
+				switch strings.ToLower(strings.TrimSpace(val)) {
+				case "complete", "true", "1", "only":
+					f.Complete = engine.CompleteOnly
+				case "wip", "in-progress", "false", "0":
+					f.Complete = engine.CompleteWIP
+				}
+			}
+		}
+		c.Standing = f
+	}
 	return c
 }
 

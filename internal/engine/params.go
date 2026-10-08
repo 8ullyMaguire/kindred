@@ -46,6 +46,9 @@ func ParseFilter(q url.Values) (Filter, error) {
 	if f.MinWords, err = num("min_words"); err != nil {
 		return f, err
 	}
+	if f.NotUpdatedWithinDays, err = num("not_updated_within_days"); err != nil {
+		return f, err
+	}
 	if f.MaxWords, err = num("max_words"); err != nil {
 		return f, err
 	}

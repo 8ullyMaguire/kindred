@@ -13,6 +13,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/api"
 	"git.polarisocial.xyz/kindred/kindred/internal/budget"
 	"git.polarisocial.xyz/kindred/kindred/internal/collab"
+	"git.polarisocial.xyz/kindred/kindred/internal/config"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
@@ -162,13 +163,39 @@ func runServe(ctx context.Context, args []string) error {
 		logger.Info("arena ratings loaded", "works", len(ratings), "median", median)
 	}
 
+	// The deployment's standing defaults: a site-wide block list resolved to
+	// ids ONCE here (startup, not per request), and the standing filters as
+	// parsed by config. Both apply under whatever a request says.
+	var defaultBlocked map[int64]bool
+	if len(c.DefaultBlockedTags) > 0 {
+		defaultBlocked = make(map[int64]bool, len(c.DefaultBlockedTags))
+		for _, name := range c.DefaultBlockedTags {
+			id, err := ao3.TagIDByName(ctx, name)
+			if err != nil {
+				// A misspelled tag in the env must not silently shrink the
+				// block list: name it and refuse to start.
+				logger.Error("default blocked tag not found in corpus", "tag", name)
+				return fmt.Errorf("default blocked tag %q: %w", name, err)
+			}
+			defaultBlocked[id] = true
+		}
+		logger.Info("site-wide blocked tags loaded", "count", len(defaultBlocked))
+	}
+	if c.Standing != nil {
+		logger.Info("standing filters loaded", "min_words", c.Standing.MinWords,
+			"not_updated_within_days", c.Standing.NotUpdatedWithinDays,
+			"complete", c.Standing.Complete, "languages", c.Standing.Languages)
+	}
+
 	srv := &api.Server{
-		Engine:    eng,
-		Store:     s,
-		Log:       logger,
-		Version:   c.Version,
-		StartedAt: time.Now(),
-		Lite:      lite,
+		Engine:               eng,
+		Store:                s,
+		Log:                  logger,
+		Version:              c.Version,
+		StartedAt:            time.Now(),
+		Lite:                 lite,
+		Standing:             standingOrDefault(c),
+		DefaultBlockedTagIDs: defaultBlocked,
 	}
 
 	// The profile store is attached here, from the STATE db rather than from
@@ -417,4 +444,13 @@ func lenFromMeta(ctx context.Context, s *store.Store, key string) int {
 		return 0
 	}
 	return v
+}
+
+// standingOrDefault unwraps the optional standing-filter pointer. A nil
+// pointer is the common case: no KINDRED_STANDING_FILTERS, no defaults.
+func standingOrDefault(c *config.Config) engine.Filter {
+	if c == nil || c.Standing == nil {
+		return engine.Filter{}
+	}
+	return *c.Standing
 }

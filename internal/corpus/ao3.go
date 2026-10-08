@@ -3,6 +3,7 @@ package corpus
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -182,6 +183,20 @@ type TagPair struct {
 // map. That map was measured at 50 MB of RSS and deleted once. work_tags
 // joins tags in one row, so both halves arrive together: no extra query,
 // no extra map, and no way for the two lists to disagree.
+// TagIDByName resolves one tag's id by exact name (case-sensitive: the
+// mirror stores every tag lowercase, and callers lowercase before calling).
+// sql.ErrNoRows is returned unwrapped so a caller can distinguish "no such
+// tag" from a real fault with errors.Is.
+func (a *AO3) TagIDByName(ctx context.Context, name string) (int64, error) {
+	var id int64
+	err := a.DB.QueryRowContext(ctx,
+		`SELECT id FROM tags WHERE name = ?`, name).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("%w: no tag named %q", ErrNotFound, name)
+	}
+	return id, err
+}
+
 func (a *AO3) TagPairs(ctx context.Context, ids []int64) (map[int64][]TagPair, error) {
 	if len(ids) == 0 {
 		return map[int64][]TagPair{}, nil

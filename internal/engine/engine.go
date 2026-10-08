@@ -305,6 +305,19 @@ type Filter struct {
 
 	// Complete is the tri-state completion filter.
 	Complete TriBool
+
+	// NotUpdatedWithinDays keeps only works whose last revision is OLDER
+	// than the window: a "settled reading" filter. The owner's use is
+	// "updated more than 4 months ago" — 122 days — which excludes both
+	// works still receiving updates and works revised so recently that
+	// their shape may still change. Zero disables it.
+	//
+	// It is NotUpdated rather than Updated because the common ask is the
+	// stale side: "recently revised" is one comparison away
+	// (NotUpdatedWithinDays = 0 keeps the filter inert) and would need a
+	// second field to express the floor. The predicate lives in filterSQL
+	// beside the other pool filters, never after ranking.
+	NotUpdatedWithinDays int64
 }
 
 // TriBool is a three-valued boolean: the zero value is the "unset" case.
@@ -1056,7 +1069,8 @@ func blockSQL(blocked map[int64]bool, args *[]any) string {
 // collabCandidates can skip the SQL entirely in the common unfiltered case.
 func (f Filter) isEmpty() bool {
 	return f.MinWords == 0 && f.MaxWords == 0 && f.MinKudos == 0 &&
-		f.Complete == CompleteAny && len(f.Ratings) == 0 && len(f.Languages) == 0
+		f.Complete == CompleteAny && len(f.Ratings) == 0 && len(f.Languages) == 0 &&
+		f.NotUpdatedWithinDays == 0
 }
 
 // filterSQL appends the filter predicates and binds their arguments.
@@ -1106,6 +1120,13 @@ func filterSQL(f Filter, args *[]any) string {
 		for _, l := range f.Languages {
 			*args = append(*args, strings.ToLower(l))
 		}
+	}
+	// last_updated is ISO-8601 text, so string comparison IS chronological
+	// comparison here — no julianday() conversion, no per-row function call.
+	// The window is resolved by SQLite's own clock so the prepared statement
+	// does not go stale as the corpus ages.
+	if f.NotUpdatedWithinDays > 0 {
+		add(`w.last_updated <= date('now', '-' || ? || ' days')`, f.NotUpdatedWithinDays)
 	}
 	return s
 }
