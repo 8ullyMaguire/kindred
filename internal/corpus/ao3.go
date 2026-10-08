@@ -284,7 +284,7 @@ func (a *AO3) CandidateRowsSlim(ctx context.Context, ids []int64) ([]Entity, err
 			e.Stats["bookmarks"] = float64(bookmarks.Int64)
 		}
 		if language.Valid {
-			e.Stats["language_is_english"] = boolToFloat(language.String == "en")
+			e.Stats["language_is_english"] = boolToFloat(strings.EqualFold(language.String, "en") || strings.EqualFold(language.String, "english"))
 		}
 		if complete.Valid {
 			e.Stats["complete"] = float64(complete.Int64)
