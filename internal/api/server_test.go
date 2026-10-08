@@ -480,8 +480,8 @@ func TestNIsClamped(t *testing.T) {
 	ts := newTestServer(t)
 	_, body := get(t, ts, "/api/v1/recommend?seed=ao3_work:1&n=100000")
 	items, _ := body["items"].([]any)
-	if len(items) > 100 {
-		t.Fatalf("got %d items, want at most 100", len(items))
+	if len(items) > 200 {
+		t.Fatalf("got %d items, want at most 200", len(items))
 	}
 }
 

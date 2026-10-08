@@ -431,8 +431,10 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 	if n <= 0 {
 		n = 10
 	}
-	if n > 100 {
-		n = 100
+	// 200: the CLI/web ask for up to 200 recommendations (the API test
+	// clamps hard here; n=100000 must not materialise a million rows).
+	if n > 200 {
+		n = 200
 	}
 	pool := req.PoolSize
 	if pool <= 0 {

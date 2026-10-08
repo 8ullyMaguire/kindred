@@ -17,3 +17,6 @@ bin/
 *.backup[0-9]*
 *.orig
 *.rej
+
+# Recommendation file exports (generated, not source)
+/exports/
