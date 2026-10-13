@@ -65,6 +65,8 @@ func main() {
 		err = runRecommend(ctx, args)
 	case "crawl":
 		err = runCrawl(ctx, args)
+	case "discover":
+		err = runDiscover(ctx, args)
 	case "profile":
 		err = runProfile(ctx, config.Load().CorpusDB, args)
 	case "rate":
