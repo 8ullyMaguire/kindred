@@ -1196,8 +1196,24 @@ func tagName(d Deps, ctx context.Context, id int64) string {
 }
 
 // isNoPairErr reports whether err is store.ErrNoPair.
+//
+// errors.Is, not a comparison of Error() strings. The string form was wrong in
+// both directions, and both were measured:
+//
+//   - it MISSED a wrapped sentinel — fmt.Errorf("pick a pair: %w", ErrNoPair)
+//     reads "pick a pair: no pair available", which is not equal to the
+//     sentinel's message, so the arena's ordinary "nothing worth comparing
+//     right now" answer would have become a 500 the first time anything wrapped
+//     it;
+//   - it ACCEPTED an unrelated error whose message happened to be "no pair
+//     available", so a genuine fault could have been reported to the reader as
+//     an empty pool.
+//
+// internal/api/arena_handlers.go already answers this question with errors.Is
+// for exactly this reason; the two packages should not disagree about what the
+// sentinel means.
 func isNoPairErr(err error) bool {
-	return err != nil && err.Error() == store.ErrNoPair.Error()
+	return errors.Is(err, store.ErrNoPair)
 }
 
 // arenaSession returns the request's arena session, minting one if absent.
