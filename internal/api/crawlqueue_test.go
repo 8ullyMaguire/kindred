@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -192,5 +193,27 @@ func TestCrawlQueueEndpointWithoutAStoreIs503NotZero(t *testing.T) {
 	}
 	if body["error"] == nil {
 		t.Error("503 gave no reason")
+	}
+}
+
+// TestTheCrawlPageIsWiredThroughRoutes covers the seam the unit tests on either
+// side cannot: that Server.Routes builds web.Deps with the Store attached. A
+// page that renders correctly in isolation and is never wired up is a page
+// nobody can reach, and the failure looks like "the feature does not exist".
+func TestTheCrawlPageIsWiredThroughRoutes(t *testing.T) {
+	ts := newTestServer(t)
+
+	code, body, _ := getRaw(t, ts, "/crawl")
+	if code != http.StatusOK {
+		t.Fatalf("GET /crawl = %d; want 200", code)
+	}
+	for _, want := range []string{"Crawl queue", "mirror is not growing", "kindred discover"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/crawl does not contain %q -- the page is rendered but has no queue", want)
+		}
+	}
+	// And it must NOT be the no-queue variant: newTestServer has a Store.
+	if strings.Contains(body, "no crawl queue") {
+		t.Error("/crawl reported no queue on a server that has one; Deps.Queue was not wired")
 	}
 }
