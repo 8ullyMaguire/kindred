@@ -122,6 +122,31 @@ type ProfileStore interface {
 	List(ctx context.Context) ([]string, error)
 }
 
+// errNoCorpus is what a page that needs the corpus says when the server has
+// none. A 503 rather than an empty page: a search that cannot search must not
+// render as "nothing matched", and a work page that cannot load the work must
+// not render as "no such work".
+var errNoCorpus = errors.New("the corpus is not available on this server")
+
+// hasCorpus reports whether this Deps can reach the corpus at all.
+//
+// renderFandoms, renderUnderrated and renderSurprise already answer 503 when
+// their corpus dependency is missing (see the `d.CorpusQuery == nil` branch in
+// each). /search and /work/{id} dereferenced d.Engine unconditionally and
+// PANICKED instead -- measured, not inferred: a zero Deps answered 503 on the
+// three corpus pages and took the process down on those two.
+//
+// Engine is always non-nil from cmd/kindred's serve path, so this is not a live
+// production fault. But internal/api/server.go guards
+// `s.Engine != nil && s.Engine.Corpus != nil` when it builds CorpusQuery, so the
+// package does not agree with itself about whether a missing corpus is a state
+// to degrade from or one to crash on. It is a state to degrade from, and the
+// disagreement is worse than either answer alone: it makes which pages survive a
+// misconfigured server an accident of which handler was written first.
+func (d Deps) hasCorpus() bool {
+	return d.Engine != nil && d.Engine.Corpus != nil
+}
+
 // Pages returns the handler for every HTML page.
 //
 // It is mounted in front of the API, so it must never swallow an unmatched
@@ -1135,6 +1160,13 @@ func (d Deps) renderSearch(w http.ResponseWriter, r *http.Request, q string) {
 	page.NextN = page.N * 2
 
 	if q != "" {
+		// The home page (q == "") needs no corpus, so this sits inside the
+		// branch rather than at the top: guarding earlier would turn a working
+		// front page into a 503 on a corpus-less server.
+		if !d.hasCorpus() {
+			d.fail(w, r, http.StatusServiceUnavailable, errNoCorpus)
+			return
+		}
 		// An AO3 work id or work URL in the box is an ADDRESS, not a
 		// search term: resolve it first and render it above whatever the
 		// fuzzy match finds. A URL-shaped query that names an id this
@@ -1466,6 +1498,14 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		d.notFound(w, r)
+		return
+	}
+
+	if !d.hasCorpus() {
+		// A work page that cannot load the work must not answer 404: that
+		// claims the work does not exist, which is a different and much more
+		// confident statement than "this server has no corpus".
+		d.fail(w, r, http.StatusServiceUnavailable, errNoCorpus)
 		return
 	}
 
