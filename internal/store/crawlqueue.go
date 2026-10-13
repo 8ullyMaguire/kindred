@@ -149,3 +149,91 @@ func (s *Store) FinishCrawlJob(ctx context.Context, url, errMsg string) error {
 	}
 	return nil
 }
+
+// CrawlRow is one queued work URL, for a status page.
+type CrawlRow struct {
+	URL        string
+	Source     string
+	Attempts   int
+	LastError  string
+	EnqueuedAt string
+	Done       bool
+}
+
+// CrawlQueueStats is the auto-crawler's backlog: what the mirror is waiting to
+// fetch and what it has given up on.
+//
+// Three counts rather than one, because they mean different things to whoever
+// is looking. Pending is work in progress, done is the checkpoint, and parked
+// is jobs that failed crawlMaxAttempts times and will NOT be retried until
+// something asks for them again (EnqueueCrawl re-arms exactly those). A page
+// showing one number could not tell "the crawler is behind" from "the crawler
+// is fine and these are dead links" -- and those call for opposite responses.
+type CrawlQueueStats struct {
+	Pending  int
+	Done     int
+	Parked   int
+	BySource map[string]int // pending rows, by who asked for them
+	Recent   []CrawlRow     // most recently enqueued first
+}
+
+// CrawlQueueStats reports the backlog. recent caps the row list; 0 omits it.
+func (s *Store) CrawlQueueStats(ctx context.Context, recent int) (CrawlQueueStats, error) {
+	out := CrawlQueueStats{BySource: map[string]int{}}
+
+	// COALESCE because SUM over an empty table is NULL, not 0: a fresh mirror
+	// is the common case here and it must read as "0 pending", not as an error.
+	const totals = `SELECT
+		COALESCE(SUM(CASE WHEN done_at IS NULL AND attempts < ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN done_at IS NOT NULL THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN done_at IS NULL AND attempts >= ? THEN 1 ELSE 0 END), 0)
+		FROM crawl_queue`
+	if err := s.DB.QueryRowContext(ctx, totals, crawlMaxAttempts, crawlMaxAttempts).
+		Scan(&out.Pending, &out.Done, &out.Parked); err != nil {
+		return out, fmt.Errorf("crawl queue totals: %w", err)
+	}
+
+	srcRows, err := s.DB.QueryContext(ctx, `SELECT source, COUNT(*) FROM crawl_queue
+		WHERE done_at IS NULL AND attempts < ?
+		GROUP BY source ORDER BY COUNT(*) DESC, source ASC`, crawlMaxAttempts)
+	if err != nil {
+		return out, fmt.Errorf("crawl queue sources: %w", err)
+	}
+	defer srcRows.Close()
+	for srcRows.Next() {
+		var src string
+		var n int
+		if err := srcRows.Scan(&src, &n); err != nil {
+			return out, fmt.Errorf("scanning a queue source: %w", err)
+		}
+		out.BySource[src] = n
+	}
+	if err := srcRows.Err(); err != nil {
+		return out, fmt.Errorf("iterating queue sources: %w", err)
+	}
+
+	if recent > 0 {
+		// enqueued_at has one-second resolution, so a bulk enqueue shares a
+		// timestamp across hundreds of rows; URL breaks the tie and makes the
+		// list stable between two reads of an unchanged queue.
+		rows, err := s.DB.QueryContext(ctx, `SELECT url, source, attempts,
+			COALESCE(last_error, ''), enqueued_at, done_at IS NOT NULL
+			FROM crawl_queue ORDER BY enqueued_at DESC, url DESC LIMIT ?`, recent)
+		if err != nil {
+			return out, fmt.Errorf("crawl queue rows: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r CrawlRow
+			if err := rows.Scan(&r.URL, &r.Source, &r.Attempts, &r.LastError,
+				&r.EnqueuedAt, &r.Done); err != nil {
+				return out, fmt.Errorf("scanning a queue row: %w", err)
+			}
+			out.Recent = append(out.Recent, r)
+		}
+		if err := rows.Err(); err != nil {
+			return out, fmt.Errorf("iterating queue rows: %w", err)
+		}
+	}
+	return out, nil
+}
