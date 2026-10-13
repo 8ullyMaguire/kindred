@@ -167,7 +167,9 @@ func runDiscover(ctx context.Context, args []string) error {
 		paginate   = fs.Bool("paginate", true, "follow rel=next within a listing")
 		enqueue    = fs.Bool("enqueue", false, "queue the discovered works so serve's auto-crawler fetches their metadata")
 		printURLs  = fs.Bool("print-urls", false, "print discovered work URLs, one per line")
-		statePath  = fs.String("state", "", "resume file; a re-run skips what it already discovered")
+		fresh      = fs.Bool("fresh", false, "ignore the walk checkpoint and re-read every listing page")
+		noResume   = fs.Bool("no-resume", false, "keep no checkpoint at all; the next run starts from scratch")
+		skipKnown  = fs.Bool("skip-known", false, "do not queue works the mirror already holds with a summary")
 		offline    = fs.Bool("offline", false, "make no network request at all")
 		baseURL    = fs.String("base-url", "", "override the AO3 base URL (for a fixture server)")
 		crawlDelay = fs.Duration("crawl-delay", -1, "override the crawl delay; -1 reads robots.txt, 0 means no wait")
@@ -180,9 +182,13 @@ func runDiscover(ctx context.Context, args []string) error {
 	// command: it demands --corpus, but discover's job is to find works the
 	// mirror does not have. Requiring a mirror would demand the very thing this
 	// command exists to fill, and would make it unusable in the case it is for.
-	// The database is needed only to queue.
-	if *enqueue && c.CorpusDB == "" {
-		return errors.New("--enqueue needs --corpus (the mirror the queued works will be written into)")
+	//
+	// --enqueue therefore needs no corpus either: queueing writes the STATE
+	// database, and the mirror is what the worker that drains the queue needs.
+	// --skip-known DOES need one, because the question it asks is about the
+	// mirror's contents.
+	if *skipKnown && c.CorpusDB == "" {
+		return errors.New("--skip-known needs --corpus: it filters against the mirror's contents")
 	}
 	if len(seeds) == 0 {
 		return errors.New("no --seed given; try --seed \"tag:Slow Burn\"")
@@ -206,23 +212,34 @@ func runDiscover(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// Resume. A walk of a popular tag is hours of wall-clock against a 30-second
-	// delay, so a re-run must not start over. The state file is a plain URL
-	// list, one per line, appended as pages are fetched — the same shape the
-	// crawl package uses, because the failure it prevents is the same one.
-	state, closeState, err := openDiscoverState(*statePath)
-	if err != nil {
-		return err
-	}
-	defer closeState()
-
+	// The checkpoint, open by DEFAULT. It used to be an opt-in --state file that
+	// recorded work urls, which meant it could not skip a listing page even when
+	// passed; a walk therefore re-read every page on every run. At AO3's 30 s
+	// crawl delay a 40-page tag is ~20 minutes, repaid in full each time, so
+	// resume is not a convenience here -- making it opt-in was the bug.
+	//
+	// The store is opened even without --enqueue because the checkpoint lives in
+	// state.db, and c.DB always has a value/default. c.CorpusDB may be empty;
+	// only --skip-known needs the corpus.
 	var qs *store.Store
-	if *enqueue {
-		qs, err = store.Open(ctx, c.DB, c.CorpusDB)
-		if err != nil {
-			return fmt.Errorf("opening the state database to queue discovered works: %w", err)
+	qs, err = store.Open(ctx, c.DB, c.CorpusDB)
+	if err != nil {
+		return fmt.Errorf("opening the state database: %w", err)
+	}
+	defer qs.Close()
+
+	walked := map[string]bool{}
+	if !*noResume {
+		if *fresh {
+			n, err := qs.ForgetDiscoveryPages(ctx)
+			if err != nil {
+				return fmt.Errorf("clearing the walk checkpoint: %w", err)
+			}
+			fmt.Printf("discover: --fresh cleared %d page(s) from the checkpoint\n", n)
 		}
-		defer qs.Close()
+		if walked, err = qs.DiscoveryPages(ctx); err != nil {
+			return fmt.Errorf("reading the walk checkpoint: %w", err)
+		}
 	}
 
 	var client crawl.Client
@@ -248,19 +265,31 @@ func runDiscover(ctx context.Context, args []string) error {
 	// not at the end: a walk that dies an hour in must not lose the hour.
 	var queued, alreadyKnown int
 	onWork := func(id int64) error {
-		if err := state.mark(base + "/works/" + strconv.FormatInt(id, 10)); err != nil {
-			return err
-		}
+		workURL := base + "/works/" + strconv.FormatInt(id, 10)
 		if *printURLs {
-			fmt.Println(base + "/works/" + strconv.FormatInt(id, 10))
+			fmt.Println(workURL)
 		}
-		if qs == nil {
-			return nil
+		// The known-check uses store.MirrorHasWork, the SAME predicate the
+		// auto-crawler's skip rule uses. A looser check here (the row exists)
+		// would drop works the worker would have fetched, and they would be
+		// neither queued nor mirrored -- a gap nothing reports, because nothing
+		// failed.
+		if *skipKnown && qs.Corpus != nil {
+			has, err := store.MirrorHasWork(ctx, qs.Corpus, id)
+			if err != nil {
+				return err
+			}
+			if has {
+				alreadyKnown++
+				return nil
+			}
 		}
-		if err := qs.EnqueueCrawl(ctx, base+"/works/"+strconv.FormatInt(id, 10), "discover"); err != nil {
-			return err
+		if *enqueue {
+			if err := qs.EnqueueCrawl(ctx, workURL, "discover"); err != nil {
+				return err
+			}
+			queued++
 		}
-		queued++
 		return nil
 	}
 
@@ -272,18 +301,32 @@ func runDiscover(ctx context.Context, args []string) error {
 		Paginate:    *paginate,
 		FollowKinds: kindList,
 		OnWork:      onWork,
+		Fetched: func(u string) bool {
+			return !*noResume && walked[u]
+		},
+		OnFetch: func(u string, works int) {
+			if *noResume {
+				return
+			}
+			if err := qs.MarkDiscoveryPage(ctx, u, works); err != nil {
+				// Not fatal: the walk continues and the page is simply
+				// re-read next run. Losing the checkpoint is cheaper than
+				// losing the walk.
+				fmt.Fprintf(os.Stderr, "discover: could not record the checkpoint for %s: %v\n", u, err)
+			}
+		},
 	})
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("discover: %d page(s) fetched, %d work(s) discovered, stopped: %s\n",
-		res.Pages, len(res.Works), res.Stopped)
-	if qs != nil {
+	fmt.Printf("discover: %d page(s) fetched, %d already walked, %d work(s) discovered, stopped: %s\n",
+		res.Pages, res.Skipped, len(res.Works), res.Stopped)
+	if queued > 0 {
 		fmt.Printf("discover: %d work(s) queued for metadata fetch\n", queued)
 	}
 	if alreadyKnown > 0 {
-		fmt.Printf("discover: %d already queued\n", alreadyKnown)
+		fmt.Printf("discover: %d work(s) skipped, the mirror already has them\n", alreadyKnown)
 	}
 	if len(res.Failed) > 0 {
 		fmt.Printf("discover: %d page(s) failed:\n", len(res.Failed)+res.Truncated)
@@ -300,7 +343,16 @@ func runDiscover(ctx context.Context, args []string) error {
 		// did not work". Exiting 0 here would let a script treat an offline run
 		// or a mistyped seed as a clean result — the failure mode crawl.go
 		// already names for its own offline mode.
+		//
+		// The exception is the resume: a walk whose every page was already
+		// walked found nothing because it was already done. That is the normal
+		// outcome of a second run, and reporting it as "no page could be
+		// fetched" would make a finished tag look like a broken command — the
+		// exact confusion the Pages/Skipped split exists to prevent.
 		switch {
+		case res.Skipped > 0 && res.Pages == 0:
+			fmt.Printf("discover: nothing new — all %d page(s) were already walked (pass --fresh to re-read them)\n", res.Skipped)
+			return nil
 		case res.Pages == 0:
 			return fmt.Errorf("no page could be fetched (%d failed): the seed, the network, or --offline", len(res.Failed)+res.Truncated)
 		default:
@@ -317,46 +369,4 @@ func sortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// discoverState is the resume file: URLs already fetched or discovered.
-type discoverState struct {
-	path string
-	f    *os.File
-	seen map[string]bool
-}
-
-func openDiscoverState(path string) (*discoverState, func(), error) {
-	st := &discoverState{seen: map[string]bool{}}
-	if path == "" {
-		return st, func() {}, nil
-	}
-	b, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, nil, err
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			st.seen[line] = true
-		}
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, nil, err
-	}
-	st.path, st.f = path, f
-	return st, func() {
-		if f != nil {
-			_ = f.Close()
-		}
-	}, nil
-}
-
-func (s *discoverState) mark(u string) error {
-	if s.f == nil || s.seen[u] {
-		return nil
-	}
-	s.seen[u] = true
-	_, err := fmt.Fprintln(s.f, u)
-	return err
 }

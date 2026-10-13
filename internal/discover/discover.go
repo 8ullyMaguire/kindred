@@ -87,12 +87,39 @@ type Options struct {
 
 	// OnPage is called after each successful fetch, for progress.
 	OnPage func(pages, works int, url string)
+
+	// Fetched reports whether a listing page has already been walked. A page it
+	// answers true for is never fetched AND never expanded: the walk that read
+	// it already queued its links, and re-reading it is the cost this exists to
+	// avoid -- a 40-page tag is ~20 minutes against AO3's 30 s crawl delay,
+	// repaid in full on every re-run.
+	//
+	// The callback, not a []string or a file path, because the walk must not
+	// care where the answer comes from: a caller with a database passes a
+	// lookup, and a test passes a map.
+	Fetched func(url string) bool
+
+	// OnFetch records that a listing page has been walked, with how many
+	// distinct works it carried.
+	//
+	// Called ONLY after a fetch that succeeded and was processed to the end. A
+	// failed page must stay unrecorded so the next run retries it, and a page
+	// the walk abandoned mid-way (MaxWorks) must stay unrecorded too: marking
+	// it would make the next run skip the works it never reached, which trades
+	// 30 seconds of re-fetching for works lost permanently.
+	OnFetch func(url string, works int)
 }
 
 // Result is what a walk found and why it stopped.
 type Result struct {
 	Pages int
-	Works []int64
+	// Skipped counts listing pages the resume checkpoint already had. It is a
+	// separate number from Pages rather than folded into it: "fetched 0 pages"
+	// with 40 skipped is a finished walk, and "fetched 0 pages" with 0 skipped
+	// is a failure -- collapsing them is how a completed tag looks like a
+	// broken command.
+	Skipped int
+	Works   []int64
 	// Failed maps a URL to its fetch error. Bounded: a six-hour walk against a
 	// flaky site must not accumulate one string per request.
 	Failed map[string]string
@@ -165,6 +192,15 @@ func Walk(ctx context.Context, f Fetcher, o Options) (*Result, error) {
 		}
 		visited[item.url] = true
 
+		// Resume BEFORE the fetch, which is the only place it can save
+		// anything. Marked visited so a page reachable from two listings is
+		// not reconsidered, and not expanded: the walk that read it already
+		// queued its links.
+		if o.Fetched != nil && o.Fetched(item.url) {
+			res.Skipped++
+			continue
+		}
+
 		body, err := f.FetchOne(ctx, item.url)
 		if err != nil {
 			recordFailure(res, item.url, err)
@@ -175,7 +211,16 @@ func Walk(ctx context.Context, f Fetcher, o Options) (*Result, error) {
 			o.OnPage(res.Pages, len(res.Works), item.url)
 		}
 
-		for _, id := range crawl.ExtractWorkIDs(body) {
+		// The page's DISTINCT work count, for the checkpoint. Distinct by
+		// construction: crawl.ExtractWorkIDs already dedupes while matching, so
+		// the count cannot be inflated by a listing that repeats a row. That is
+		// a dependency on the crawler's contract, not an accident -- a second
+		// dedupe here would be code no test could distinguish from its absence,
+		// and TestWalkCountsEachWorkOnAPageOnce is what fails if the contract
+		// changes.
+		ids := crawl.ExtractWorkIDs(body)
+		perPage := len(ids)
+		for _, id := range ids {
 			if seenWork[id] {
 				continue
 			}
@@ -188,8 +233,14 @@ func Walk(ctx context.Context, f Fetcher, o Options) (*Result, error) {
 			}
 			if o.MaxWorks > 0 && len(res.Works) >= o.MaxWorks {
 				res.Stopped = StopMaxWorks
+				// Deliberately returns WITHOUT calling OnFetch: this page was
+				// abandoned part-way, and recording it would make the next run
+				// skip the works it never reached.
 				return res, nil
 			}
+		}
+		if o.OnFetch != nil {
+			o.OnFetch(item.url, perPage)
 		}
 
 		if o.Paginate {

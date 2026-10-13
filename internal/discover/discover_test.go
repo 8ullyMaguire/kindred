@@ -411,3 +411,195 @@ func TestWalkFollowsSeveralKindsWhenAsked(t *testing.T) {
 		t.Errorf("Works = %v; want 1, 2 and 3", res.Works)
 	}
 }
+
+// -- resume -----------------------------------------------------------------
+
+func TestWalkSkipsAPageTheCheckpointAlreadyHas(t *testing.T) {
+	// The whole point of the checkpoint: no fetch. Asserting on the fetcher's
+	// own record rather than on the result, because a walk that fetched the
+	// page and then reported it as skipped would pass a result-only assertion
+	// while still paying the 30 seconds.
+	const seed = root + "/tags/A/works"
+	f := &fakeFetcher{pages: map[string]string{seed: listing(1, 2)}}
+
+	res, err := Walk(context.Background(), f, Options{
+		Seeds:   []string{seed},
+		Fetched: func(u string) bool { return u == seed },
+	})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(f.fetched) != 0 {
+		t.Errorf("fetched %v; a page the checkpoint has must not be requested", f.fetched)
+	}
+	if res.Skipped != 1 {
+		t.Errorf("Skipped = %d; want 1", res.Skipped)
+	}
+	if res.Pages != 0 {
+		t.Errorf("Pages = %d; want 0 — skipped is not fetched", res.Pages)
+	}
+}
+
+func TestWalkDoesNotExpandASkippedPage(t *testing.T) {
+	// A skipped page was already expanded by the walk that read it. Expanding
+	// it again is how a resumed walk re-reads the whole graph behind a seed.
+	const seed = root + "/tags/A/works"
+	f := &fakeFetcher{pages: map[string]string{
+		seed:                   listing(1) + `<a href="/tags/B/works">b</a>`,
+		root + "/tags/B/works": listing(2),
+	}}
+
+	res, err := Walk(context.Background(), f, Options{
+		Seeds:       []string{seed},
+		MaxDepth:    2,
+		FollowKinds: []string{"tag"},
+		Fetched:     func(u string) bool { return u == seed },
+	})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(f.fetched) != 0 {
+		t.Errorf("fetched %v; nothing should be requested behind a skipped seed", f.fetched)
+	}
+	if len(res.Works) != 0 {
+		t.Errorf("Works = %v; want none", res.Works)
+	}
+}
+
+func TestWalkResumesOnlyThePagesItKnows(t *testing.T) {
+	// A checkpoint that is too broad silently discovers nothing, and one that is
+	// too narrow re-fetches everything. Both look like a successful walk.
+	const a = root + "/tags/A/works"
+	const b = root + "/tags/B/works"
+	f := &fakeFetcher{pages: map[string]string{a: listing(1), b: listing(2)}}
+
+	res, err := Walk(context.Background(), f, Options{
+		Seeds:   []string{a, b},
+		Fetched: func(u string) bool { return u == a },
+	})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if res.Skipped != 1 {
+		t.Errorf("Skipped = %d; want 1", res.Skipped)
+	}
+	if res.Pages != 1 {
+		t.Errorf("Pages = %d; want 1 — only the unrecorded page is fetched", res.Pages)
+	}
+	if !reflect.DeepEqual(res.Works, []int64{2}) {
+		t.Errorf("Works = %v; want [2] from the one page that was walked", res.Works)
+	}
+}
+
+func TestWalkRecordsEachFetchedPageWithItsOwnCount(t *testing.T) {
+	// The count is per page, not cumulative: a checkpoint that stored the
+	// running total could not answer "did this page change?".
+	const a = root + "/tags/A/works"
+	page2 := a + "?page=2"
+	f := &fakeFetcher{pages: map[string]string{
+		a:     listing(1, 2, 3) + `<a rel="next" href="?page=2">Next</a>`,
+		page2: listing(4),
+	}}
+
+	got := map[string]int{}
+	_, err := Walk(context.Background(), f, Options{
+		Seeds:    []string{a},
+		Paginate: true,
+		OnFetch:  func(u string, n int) { got[u] = n },
+	})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if got[a] != 3 {
+		t.Errorf("OnFetch(%q) = %d; want 3", a, got[a])
+	}
+	if got[page2] != 1 {
+		t.Errorf("OnFetch(%q) = %d; want 1 — pagination pages are recorded too", page2, got[page2])
+	}
+}
+
+func TestWalkDoesNotRecordAFailedPage(t *testing.T) {
+	// A page that failed must be retried next run. Recording it would make the
+	// checkpoint remember a failure as done, which is exactly the mistake
+	// crawl.State.Done's doc names: re-fetching a success is cheap, skipping a
+	// failure loses the work forever.
+	const bad = root + "/tags/Bad/works"
+	f := &fakeFetcher{
+		pages: map[string]string{},
+		fail:  map[string]error{bad: errors.New("503")},
+	}
+	recorded := []string{}
+	_, err := Walk(context.Background(), f, Options{
+		Seeds:   []string{bad},
+		OnFetch: func(u string, n int) { recorded = append(recorded, u) },
+	})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(recorded) != 0 {
+		t.Errorf("recorded %v; a failed page must not be marked walked", recorded)
+	}
+}
+
+func TestWalkDoesNotRecordAPageAbandonedAtMaxWorks(t *testing.T) {
+	// Marking a half-read page would make the next run skip the works this one
+	// never reached -- trading 30 seconds of re-fetching for works lost
+	// permanently, which is the wrong way round.
+	const a = root + "/tags/A/works"
+	f := &fakeFetcher{pages: map[string]string{a: listing(1, 2, 3, 4, 5)}}
+
+	recorded := []string{}
+	res, err := Walk(context.Background(), f, Options{
+		Seeds:    []string{a},
+		MaxWorks: 2,
+		OnFetch:  func(u string, n int) { recorded = append(recorded, u) },
+	})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if res.Stopped != StopMaxWorks {
+		t.Fatalf("Stopped = %q; want MaxWorks", res.Stopped)
+	}
+	if len(recorded) != 0 {
+		t.Errorf("recorded %v; a page abandoned at MaxWorks must stay unrecorded", recorded)
+	}
+}
+
+func TestWalkWithNoCheckpointBehavesAsBefore(t *testing.T) {
+	// Both callbacks nil is the pre-resume behaviour, and every existing caller
+	// depends on it. A checkpoint that became mandatory would be a silent
+	// re-fetch of everything for a caller that did not know to pass one.
+	const a = root + "/tags/A/works"
+	f := &fakeFetcher{pages: map[string]string{a: listing(1, 2)}}
+
+	res, err := Walk(context.Background(), f, Options{Seeds: []string{a}})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if res.Pages != 1 || res.Skipped != 0 {
+		t.Errorf("Pages/Skipped = %d/%d; want 1/0", res.Pages, res.Skipped)
+	}
+	if !reflect.DeepEqual(res.Works, []int64{1, 2}) {
+		t.Errorf("Works = %v; want [1 2]", res.Works)
+	}
+}
+
+func TestWalkCountsEachWorkOnAPageOnce(t *testing.T) {
+	// A listing that repeats a work would otherwise report a page that grew when
+	// the markup duplicated a row -- and the count is what a later pass compares
+	// against to decide whether the page changed.
+	const a = root + "/tags/A/works"
+	f := &fakeFetcher{pages: map[string]string{a: listing(7, 7, 8)}}
+
+	got := -1
+	_, err := Walk(context.Background(), f, Options{
+		Seeds:   []string{a},
+		OnFetch: func(u string, n int) { got = n },
+	})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if got != 2 {
+		t.Errorf("OnFetch count = %d; want 2 distinct works on the page", got)
+	}
+}

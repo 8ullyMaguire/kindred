@@ -140,28 +140,31 @@ func processAutoCrawlJob(
 	// this work with a summary, there is nothing to gather and the fetch
 	// would be pure cost. The row is marked done, so a completed work
 	// never re-enters the queue from this source either.
+	//
+	// The predicate is store.MirrorHasWork, shared with `discover --skip-known`,
+	// because two copies of "do we already have this" drift -- and the visible
+	// symptom of drift is a work that is skipped by one and fetched by the
+	// other, which looks like neither: the queue row simply says done.
 	id := int64(0)
 	if m := workURLRe.FindStringSubmatch(job.URL); m != nil {
 		id, _ = strconv.ParseInt(m[1], 10, 64)
 	}
-	if id > 0 && mirror != nil {
-		var summary sql.NullString
-		err := mirror.QueryRowContext(ctx,
-			`SELECT summary FROM works WHERE id = ?`, id).Scan(&summary)
-		if err == nil && summary.Valid && summary.String != "" {
-			if ferr := s.FinishCrawlJob(ctx, job.URL, ""); ferr != nil {
-				log.Warn("auto-crawl: could not mark job done", "url", job.URL, "err", ferr)
-			}
-			log.Debug("auto-crawl: skipped, metadata exists", "work", id, "source", job.Source)
-			return
-		}
-		if err != nil && err != sql.ErrNoRows {
+	if mirror != nil {
+		has, err := store.MirrorHasWork(ctx, mirror, id)
+		switch {
+		case err != nil:
 			// A locked or unreadable mirror must not be papered over as
 			// "not present": fail the attempt with the reason and let the
 			// retry cap park it if the problem persists.
 			if ferr := s.FinishCrawlJob(ctx, job.URL, "mirror check: "+err.Error()); ferr != nil {
 				log.Warn("auto-crawl: could not record failure", "url", job.URL, "err", ferr)
 			}
+			return
+		case has:
+			if ferr := s.FinishCrawlJob(ctx, job.URL, ""); ferr != nil {
+				log.Warn("auto-crawl: could not mark job done", "url", job.URL, "err", ferr)
+			}
+			log.Debug("auto-crawl: skipped, metadata exists", "work", id, "source", job.Source)
 			return
 		}
 	}

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -95,6 +96,14 @@ type Store struct {
 	DB     *sql.DB // kindred's own state, read-write, local disk
 	Corpus *sql.DB // the mirror, read-only
 	Path   string
+
+	// agreementCacheMu guards the agreementCache map.
+	agreementCacheMu sync.Mutex
+	// agreementCache maps voterKey to cached agreement with the owner vector.
+	agreementCache map[string]agreementCacheEntry
+	// ownerVector is the owner's taste vector, built from profile tags and
+	// learned weights. Nil means owner features are disabled.
+	ownerVector map[int64]float64
 }
 
 // Open opens kindred.db (creating it and its directory) and, if corpusPath
@@ -614,6 +623,28 @@ CREATE TABLE IF NOT EXISTS crawl_queue (
 ) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS crawl_queue_pending ON crawl_queue (done_at);
+
+/* discovery_pages is the WALK's checkpoint, deliberately a separate table from
+   crawl_queue because it answers a different question about a different kind of
+   URL. crawl_queue asks "have we mirrored this WORK?"; discovery_pages asks
+   "have we read this LISTING page?".
+
+   Without it a walk had no memory at all: discover.Options took no
+   already-fetched input, the walk's visited set is per-run and in memory, and
+   --state records WORK urls so it could not skip a page even when passed.
+   Measured cost of that gap: a 40-page tag is ~20 minutes against AO3's 30 s
+   crawl delay, repaid in full on every re-run.
+
+   The skip is "is there a row", not "was it fetched recently", for the same
+   reason crawl_queue.done_at is exact: an exact answer cannot be wrong the way
+   a recency window can, and re-reading a page is cheap next to fetching a work.
+   fetched_at is carried for the operator ("when did we last walk this tag?")
+   and for a future --older-than pass, not for the skip itself. */
+CREATE TABLE IF NOT EXISTS discovery_pages (
+	url         TEXT PRIMARY KEY,
+	fetched_at  TEXT NOT NULL DEFAULT (datetime('now')),
+	works_found INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
 `
 
 // Migrate applies the schema. Idempotent, so it is safe on every start.
