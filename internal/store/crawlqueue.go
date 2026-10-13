@@ -17,11 +17,16 @@ import (
 	"strings"
 )
 
-// crawlMaxAttempts is how many times a job fails before it is parked.
-// Five is generous for a per-work fetch with its own retries underneath
-// (the crawler already retries transient failures), and small enough that a
+// CrawlMaxAttempts is how many times a job fails before it is parked.
+//
+// Five is generous for a per-work fetch with its own retries underneath (the
+// crawler already retries transient failures), and small enough that a
 // permanently deleted AO3 work does not come back on every poll.
-const crawlMaxAttempts = 5
+//
+// Exported because "parked" is meaningless on /crawl without it: the page has
+// to say how many failures it takes to get there, and a second hard-coded
+// "5" in the web layer would drift from this one silently.
+const CrawlMaxAttempts = 5
 
 // CrawlJob is one queued work URL.
 type CrawlJob struct {
@@ -52,7 +57,7 @@ func (s *Store) EnqueueCrawl(ctx context.Context, url, source string) error {
 				WHEN crawl_queue.done_at IS NULL AND crawl_queue.attempts >= ? THEN NULL
 				ELSE crawl_queue.last_error END`
 	if _, err := s.DB.ExecContext(ctx, stmt, url, source,
-		crawlMaxAttempts, crawlMaxAttempts); err != nil {
+		CrawlMaxAttempts, CrawlMaxAttempts); err != nil {
 		return fmt.Errorf("enqueue crawl %s: %w", url, err)
 	}
 	return nil
@@ -116,7 +121,7 @@ func (s *Store) NextCrawlJob(ctx context.Context) (CrawlJob, bool, error) {
 		WHERE done_at IS NULL AND attempts < ?
 		ORDER BY enqueued_at, url LIMIT 1`
 	var j CrawlJob
-	err := s.DB.QueryRowContext(ctx, stmt, crawlMaxAttempts).
+	err := s.DB.QueryRowContext(ctx, stmt, CrawlMaxAttempts).
 		Scan(&j.URL, &j.Source, &j.Attempts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CrawlJob{}, false, nil
@@ -165,7 +170,7 @@ type CrawlRow struct {
 //
 // Three counts rather than one, because they mean different things to whoever
 // is looking. Pending is work in progress, done is the checkpoint, and parked
-// is jobs that failed crawlMaxAttempts times and will NOT be retried until
+// is jobs that failed CrawlMaxAttempts times and will NOT be retried until
 // something asks for them again (EnqueueCrawl re-arms exactly those). A page
 // showing one number could not tell "the crawler is behind" from "the crawler
 // is fine and these are dead links" -- and those call for opposite responses.
@@ -188,14 +193,14 @@ func (s *Store) CrawlQueueStats(ctx context.Context, recent int) (CrawlQueueStat
 		COALESCE(SUM(CASE WHEN done_at IS NOT NULL THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN done_at IS NULL AND attempts >= ? THEN 1 ELSE 0 END), 0)
 		FROM crawl_queue`
-	if err := s.DB.QueryRowContext(ctx, totals, crawlMaxAttempts, crawlMaxAttempts).
+	if err := s.DB.QueryRowContext(ctx, totals, CrawlMaxAttempts, CrawlMaxAttempts).
 		Scan(&out.Pending, &out.Done, &out.Parked); err != nil {
 		return out, fmt.Errorf("crawl queue totals: %w", err)
 	}
 
 	srcRows, err := s.DB.QueryContext(ctx, `SELECT source, COUNT(*) FROM crawl_queue
 		WHERE done_at IS NULL AND attempts < ?
-		GROUP BY source ORDER BY COUNT(*) DESC, source ASC`, crawlMaxAttempts)
+		GROUP BY source ORDER BY COUNT(*) DESC, source ASC`, CrawlMaxAttempts)
 	if err != nil {
 		return out, fmt.Errorf("crawl queue sources: %w", err)
 	}

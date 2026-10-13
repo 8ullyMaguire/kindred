@@ -130,6 +130,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /stats", s.handleStats)
 	mux.HandleFunc("GET /api/v1/stats", s.handleStats)
+	mux.HandleFunc("GET /api/v1/crawl-queue", s.handleCrawlQueue)
 
 	// A 404 that is not JSON is a 404 a JSON client cannot read, and
 	// net/http's default handler returns plain text. Every response this
@@ -189,6 +190,12 @@ func (s *Server) Routes() http.Handler {
 	}
 	if s.Profiles != nil {
 		pages.Profiles = s.Profiles
+	}
+	// The /crawl page reads the same backlog the API endpoint serves. Wired
+	// from the Server's Store, so the read-only deployment (Store nil) gets the
+	// page's "no queue here" text rather than a broken table.
+	if s.Store != nil {
+		pages.Queue = s.Store
 	}
 	// The gate is lowered only by the e2e harness, whose fixture corpus gives
 	// every work four or five tags. A deployed server leaves it 0 and gets
@@ -1121,6 +1128,60 @@ func (s *Server) handleAO3TagWorks(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- operations -----------------------------------------------------------
+
+// handleCrawlQueue reports the auto-crawler's backlog: what the mirror is
+// waiting to fetch and what it has given up on.
+//
+// Separate from /api/v1/stats because it answers a different question. Stats
+// describes what the mirror HOLDS; this describes what it is still missing,
+// which is the only view that shows discovery working.
+func (s *Server) handleCrawlQueue(w http.ResponseWriter, r *http.Request) {
+	if s.Store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "no crawl queue on this deployment: the state database is not writable here",
+		})
+		return
+	}
+
+	// Bounded and validated, because the value goes to a LIMIT: unvalidated it
+	// is how a "give me the last few" request turns into a full table scan of a
+	// queue that can hold hundreds of thousands of rows.
+	recent := 50
+	if v := r.URL.Query().Get("recent"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > 500 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": "recent must be an integer between 0 and 500",
+			})
+			return
+		}
+		recent = n
+	}
+
+	st, err := s.Store.CrawlQueueStats(r.Context(), recent)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	rows := make([]map[string]any, 0, len(st.Recent))
+	for _, row := range st.Recent {
+		rows = append(rows, map[string]any{
+			"url":         row.URL,
+			"source":      row.Source,
+			"attempts":    row.Attempts,
+			"last_error":  row.LastError,
+			"enqueued_at": row.EnqueuedAt,
+			"done":        row.Done,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"pending":   st.Pending,
+		"done":      st.Done,
+		"parked":    st.Parked,
+		"by_source": st.BySource,
+		"recent":    rows,
+	})
+}
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	snap := budget.Snapshot("healthz")

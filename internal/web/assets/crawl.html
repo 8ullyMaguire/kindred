@@ -1,0 +1,113 @@
+{{define "content"}}
+{{if .NoQueue}}
+<p class="empty">
+  This deployment has no crawl queue, so the mirror only ever shrinks as works
+  are deleted upstream. That is the read-only configuration: the state database
+  is not writable here, so nothing can be queued for fetching.
+</p>
+{{else}}
+
+<div class="stat-row crawl-summary">
+  <div class="stat{{if .Pending}} is-live{{end}}">
+    <span class="stat-num">{{.Pending}}</span>
+    <span class="stat-label">waiting</span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">{{.Done}}</span>
+    <span class="stat-label">fetched</span>
+  </div>
+  <div class="stat{{if .Parked}} is-warn{{end}}">
+    <span class="stat-num">{{.Parked}}</span>
+    <span class="stat-label">given up on</span>
+  </div>
+</div>
+
+{{/* Independent statements, not an if/else-if chain. Waiting and given-up-on
+     are separate facts about separate rows, and an else-if made them mutually
+     exclusive: with even one parked row the waiting count vanished from the
+     verdict, so a queue of 900 waiting behind 1 dead link read as "1 dead
+     link" and nothing else. Whichever is more urgent is not a reason to hide
+     the other. */}}
+{{if not .Total}}
+<p class="crawl-verdict is-idle">
+  Nothing is queued. The mirror is not growing. If you expected new works,
+  start a walk: <code>kindred discover --seed "tag:Some Tag" --enqueue</code>
+</p>
+{{else}}
+  {{if .Pending}}
+  <p class="crawl-verdict is-live">
+    {{.Pending}} work{{if ne .Pending 1}}s{{end}} waiting to be fetched, oldest
+    first. This drains on its own while <code>kindred serve</code> is running.
+  </p>
+  {{end}}
+  {{if .Parked}}
+  <p class="crawl-verdict is-warn">
+    {{.Parked}} work{{if ne .Parked 1}}s{{end}} failed {{.Cap}} times and will
+    not be retried on their own &mdash; a fetch is only re-armed when something
+    asks for that work again. Check the reasons below before re-requesting
+    them: a deleted work will never succeed, and re-arming it spends the request
+    budget on the ones that would.
+  </p>
+  {{end}}
+  {{if and (not .Pending) (not .Parked)}}
+  <p class="crawl-verdict">
+    Everything queued has been fetched. Nothing is waiting.
+  </p>
+  {{end}}
+{{end}}
+
+{{if .Sources}}
+<h2>Where the backlog came from</h2>
+<table class="crawl-table">
+  <thead><tr><th>Source</th><th>Waiting</th><th></th></tr></thead>
+  <tbody>
+  {{range .Sources}}
+    <tr>
+      <td><code>{{.Source}}</code></td>
+      <td class="num">{{.Count}}</td>
+      <td class="muted">{{.Why}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{if .Recent}}
+<h2>Most recently queued</h2>
+<table class="crawl-table crawl-recent">
+  <thead>
+    <tr><th>Work</th><th>State</th><th>Source</th><th>Reason</th></tr>
+  </thead>
+  <tbody>
+  {{range .Recent}}
+    <tr{{if .Parked}} class="is-warn"{{end}}>
+      <td><a href="{{.URL}}">{{.URL}}</a></td>
+      <td>
+        {{if .Done}}fetched
+        {{else if .Parked}}given up ({{.Attempts}} tries)
+        {{else}}waiting{{end}}
+      </td>
+      <td class="muted" title="{{.Source}}">{{.Why}}</td>
+      <td class="muted">{{if .LastError}}{{.LastError}}{{else}}&mdash;{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+<h2>Add to the mirror</h2>
+<p>
+  A walk finds works the mirror does not have by following AO3's listings, then
+  queues them here for fetching. It runs as a command rather than from this page
+  because a walk of a popular tag takes hours against AO3's crawl delay, and a
+  page that started one could not show you how it went.
+</p>
+<pre class="crawl-cmd">kindred discover --seed "tag:Slow Burn" --enqueue</pre>
+<p class="muted">
+  Seeds are also <code>search:</code>, <code>user:</code>,
+  <code>bookmarks:</code>, <code>collection:</code> and <code>series:</code>,
+  and <code>--seed</code> can be repeated. Add <code>--print-urls</code> to see
+  what it found without queueing anything.
+</p>
+{{end}}
+{{end}}

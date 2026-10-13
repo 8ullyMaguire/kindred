@@ -65,7 +65,7 @@ func TestCrawlQueueStatsSeparatesParkedFromPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Exactly the cap: parked, not pending.
-	for i := 0; i < crawlMaxAttempts; i++ {
+	for i := 0; i < CrawlMaxAttempts; i++ {
 		if err := s.FinishCrawlJob(ctx, parked, "500 internal server error"); err != nil {
 			t.Fatal(err)
 		}
@@ -82,7 +82,7 @@ func TestCrawlQueueStatsSeparatesParkedFromPending(t *testing.T) {
 		t.Errorf("Done = %d; want 1", got.Done)
 	}
 	if got.Parked != 1 {
-		t.Errorf("Parked = %d; want 1 — attempts == crawlMaxAttempts is parked", got.Parked)
+		t.Errorf("Parked = %d; want 1 — attempts == CrawlMaxAttempts is parked", got.Parked)
 	}
 	if got.BySource["discover"] != 2 {
 		t.Errorf("BySource[discover] = %d; want 2 — the done and parked rows are not pending",
@@ -108,7 +108,7 @@ func TestCrawlQueueStatsPendingBoundaryIsOneBelowTheCap(t *testing.T) {
 	if err := s.EnqueueCrawl(ctx, u, "discover"); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < crawlMaxAttempts-1; i++ {
+	for i := 0; i < CrawlMaxAttempts-1; i++ {
 		if err := s.FinishCrawlJob(ctx, u, "503"); err != nil {
 			t.Fatal(err)
 		}
@@ -120,7 +120,7 @@ func TestCrawlQueueStatsPendingBoundaryIsOneBelowTheCap(t *testing.T) {
 	}
 	if got.Pending != 1 || got.Parked != 0 {
 		t.Errorf("pending/parked = %d/%d after %d failures; want 1/0",
-			got.Pending, got.Parked, crawlMaxAttempts-1)
+			got.Pending, got.Parked, CrawlMaxAttempts-1)
 	}
 
 	// One more failure crosses it.

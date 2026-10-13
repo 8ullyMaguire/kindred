@@ -580,6 +580,7 @@ func init() {
 		"recommend.html", "notfound.html", "error.html",
 		"arena.html", "leaderboard.html", "rank.html", "myranking.html",
 		"block.html", "fandoms.html", "underrated.html", "neighbours.html",
+		"crawl.html",
 		"surprise.html",
 		"profiles.html", "profile.html",
 		"author.html",

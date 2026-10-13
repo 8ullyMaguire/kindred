@@ -54,6 +54,15 @@ type Deps struct {
 	// call site that breaks.
 	Profiles ProfileStore
 
+	// Queue is the auto-crawler's backlog, for the /crawl page.
+	//
+	// Optional, like Profiles and for the same reason: a read-only deployment
+	// has no state database to queue into, so it passes nil and /crawl explains
+	// that in words rather than 503-ing. This is the only page describing what
+	// the mirror is MISSING, and a mirror whose discovery has stopped is
+	// otherwise indistinguishable from a healthy one with nothing new to say.
+	Queue QueueStatter
+
 	// SurpriseMinTags lowers /surprise's eligibility gate. 0 means the
 	// production value (corpusquery's own default of 10).
 	//
@@ -382,6 +391,8 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 		d.renderMyRanking(w, r)
 	case p == "/block":
 		d.renderBlock(w, r)
+	case p == "/crawl":
+		d.renderCrawl(w, r)
 	case strings.HasPrefix(p, "/rank/"):
 		d.renderRank(w, r, strings.TrimPrefix(p, "/rank/"))
 	default:

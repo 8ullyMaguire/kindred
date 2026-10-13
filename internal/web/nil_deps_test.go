@@ -87,6 +87,11 @@ func TestPagesDegradeInsteadOfPanickingWhenTheCorpusIsMissing(t *testing.T) {
 		// corpus. It must keep working on a server that has none.
 		{"/", http.StatusOK, "the home page needs no corpus"},
 		{"/profiles", http.StatusOK, "profiles come from the state db, not the corpus"},
+		// /crawl with no queue is a page that says so, not a 503 — the same
+		// reasoning as /profiles: the absence is a configuration, and the page
+		// can explain it in words. A 503 here would tell a read-only deployment
+		// that its site is broken rather than that it is read-only.
+		{"/crawl", http.StatusOK, "a deployment with no queue must explain itself, not 503"},
 		// These four cannot work without the corpus, and each must say so.
 		{"/search?q=x", http.StatusServiceUnavailable, "a search that cannot search must not read as 'nothing matched'"},
 		{"/work/1", http.StatusServiceUnavailable, "must not 404: that claims the work does not exist"},
