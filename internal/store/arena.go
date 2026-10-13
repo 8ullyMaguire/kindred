@@ -312,27 +312,97 @@ func (s *Store) RecordPresentation(ctx context.Context, c Comparison) (int64, er
 func (s *Store) RecordJudgement(ctx context.Context, sessionKey string, choice string) error {
 	switch choice {
 	case "a", "b":
+
 		// The winner is resolved when the batch reads the row, not here:
 		// the choice is stored as the SIDE ('a' or 'b') and JudgedSince
 		// maps it to the work id. Storing a work id at judgement time
 		// would duplicate the mapping in two places, and the CHECK
 		// constraint already guarantees work_a < work_b.
-		_, err := s.DB.ExecContext(ctx,
+		// Compute agreement with the global owner (the profile owner).
+		var ownerKey string
+		err := s.DB.QueryRowContext(ctx,
+			`SELECT owner_key FROM arena_sessions WHERE session_key = ?`, sessionKey).Scan(&ownerKey)
+		if err != nil {
+			return fmt.Errorf("get session owner_key: %w", err)
+		}
+		agreement, err := s.AgreementFor(ctx, ownerKey, s.ownerVector)
+		if err != nil {
+			return fmt.Errorf("agreement compute: %w", err)
+		}
+		_, err = s.DB.ExecContext(ctx,
 			`UPDATE arena_comparisons
-			 SET choice = ?, judged_at = datetime('now')
+			 SET choice = ?, judged_at = datetime('now'), agreement = ?
 			 WHERE session_key = ? AND judged_at IS NULL`,
-			choice, sessionKey)
+			choice, agreement, sessionKey)
 		if err != nil {
 			return fmt.Errorf("judge: %w", err)
 		}
+
+		// Also record in the new entity comparisons table with agreement.
+		// Get the work_a and work_b from the legacy table for this session.
+		var workA, workB int64
+		err = s.DB.QueryRowContext(ctx,
+			`SELECT work_a, work_b FROM arena_comparisons WHERE session_key = ? AND judged_at IS NOT NULL`,
+			sessionKey).Scan(&workA, &workB)
+		if err != nil {
+			return fmt.Errorf("get works for session: %w", err)
+		}
+		// Determine winner and loser based on choice.
+		var winnerID, loserID int64
+		if choice == "a" {
+			winnerID, loserID = workA, workB
+		} else { // "b"
+			winnerID, loserID = workB, workA
+		}
+		// Insert into arena_entity_comparisons (kind='ao3_work') with agreement.
+		_, err = s.DB.ExecContext(ctx,
+			`INSERT INTO arena_entity_comparisons
+				(kind, winner_id, loser_id, owner_key, agreement, period, created_at)
+			VALUES (?, ?, ?, ?, ?, 0, datetime('now'))`,
+			"ao3_work", winnerID, loserID, ownerKey, agreement)
+		if err != nil {
+			return fmt.Errorf("insert entity comparison: %w", err)
+		}
 		return nil
 	case "neither":
-		_, err := s.DB.ExecContext(ctx,
+		// Compute agreement with the global owner (the profile owner).
+		var ownerKey string
+		err := s.DB.QueryRowContext(ctx,
+			`SELECT owner_key FROM arena_sessions WHERE session_key = ?`, sessionKey).Scan(&ownerKey)
+		if err != nil {
+			return fmt.Errorf("get session owner_key: %w", err)
+		}
+		agreement, err := s.AgreementFor(ctx, ownerKey, s.ownerVector)
+		if err != nil {
+			return fmt.Errorf("agreement compute: %w", err)
+		}
+		_, err = s.DB.ExecContext(ctx,
 			`UPDATE arena_comparisons
-			 SET choice = 'neither', judged_at = datetime('now')
-			 WHERE session_key = ? AND judged_at IS NULL`, sessionKey)
+			 SET choice = 'neither', judged_at = datetime('now'), agreement = ?
+			 WHERE session_key = ? AND judged_at IS NULL`,
+			agreement, sessionKey)
 		if err != nil {
 			return fmt.Errorf("judge (neither): %w", err)
+		}
+
+		// Also record in the new entity comparisons table with agreement.
+		// Get the work_a and work_b from the legacy table for this session.
+		var workA, workB int64
+		err = s.DB.QueryRowContext(ctx,
+			`SELECT work_a, work_b FROM arena_comparisons WHERE session_key = ? AND judged_at IS NOT NULL`,
+			sessionKey).Scan(&workA, &workB)
+		if err != nil {
+			return fmt.Errorf("get works for session: %w", err)
+		}
+		// For a draw, we don't have a winner/loser, but we still need to record the comparison.
+		// We'll record it as workA as winner and workB as loser (agreement is the same regardless).
+		_, err = s.DB.ExecContext(ctx,
+			`INSERT INTO arena_entity_comparisons
+				(kind, winner_id, loser_id, owner_key, agreement, period, created_at)
+			VALUES (?, ?, ?, ?, ?, 0, datetime('now'))`,
+			"ao3_work", workA, workB, ownerKey, agreement)
+		if err != nil {
+			return fmt.Errorf("insert entity comparison (draw): %w", err)
 		}
 		return nil
 	default:

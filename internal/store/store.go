@@ -367,6 +367,12 @@ CREATE TABLE IF NOT EXISTS arena_comparisons (
 	strategy    TEXT NOT NULL,      -- how this pair was chosen
 	presented_at TEXT NOT NULL DEFAULT (datetime('now')),
 	judged_at   TEXT,
+	-- The voter's agreement with the owner at the moment of the vote, so a
+	-- later change to the agreement formula cannot rewrite the past. 1.0 is
+	-- the pre-existing value for rows judged before this column existed: they
+	-- were counted at full weight, and a migration must not silently
+	-- re-weight history it cannot recompute.
+	agreement   REAL NOT NULL DEFAULT 1.0,
 	-- A pair is unordered, so the low id is stored in work_a. Enforced
 	-- here rather than trusted from the caller: the no-repeat query
 	-- depends on it, and a pair stored the other way round is a pair
@@ -688,6 +694,52 @@ func (s *Store) migrate(ctx context.Context) error {
 			ALTER TABLE embeddings_new RENAME TO embeddings;
 			COMMIT;`); err != nil {
 			return fmt.Errorf("migrate embeddings: %w", err)
+		}
+	}
+
+	// arena_comparisons gained an `agreement` column: a judgement records the
+	// voter's agreement with the owner as it stood at vote time, so changing the
+	// agreement formula later cannot rewrite history. The writes in `arena.go`
+	// name the column, so an existing database without it fails every judgement
+	// with "no such column: agreement" -- a failure only operators upgrading
+	// ever see, which is the shape this whole function exists to prevent.
+	has, err = s.columnExists(ctx, "arena_comparisons", "agreement")
+	if err != nil {
+		return err
+	}
+	if !has {
+		// The indexes are recreated here, not left to `schema`: dropping the
+		// table drops them with it, and `CREATE INDEX IF NOT EXISTS` in the
+		// schema block has already run by now, so without this the migration
+		// would quietly cost the no-repeat query its covering index.
+		if _, err := s.DB.ExecContext(ctx, `
+			BEGIN;
+			CREATE TABLE arena_comparisons_new (
+			  id           INTEGER PRIMARY KEY,
+			  work_a       INTEGER NOT NULL,
+			  work_b       INTEGER NOT NULL,
+			  choice       TEXT,
+			  session_key  TEXT NOT NULL,
+			  owner_key    TEXT NOT NULL,
+			  strategy     TEXT NOT NULL,
+			  presented_at TEXT NOT NULL DEFAULT (datetime('now')),
+			  judged_at    TEXT,
+			  agreement    REAL NOT NULL DEFAULT 1.0,
+			  CHECK (work_a < work_b),
+			  CHECK (choice IS NULL OR choice IN ('a', 'b', 'neither'))
+			);
+			INSERT INTO arena_comparisons_new
+			  (id, work_a, work_b, choice, session_key, owner_key, strategy, presented_at, judged_at)
+			  SELECT id, work_a, work_b, choice, session_key, owner_key, strategy, presented_at, judged_at
+			  FROM arena_comparisons;
+			DROP TABLE arena_comparisons;
+			ALTER TABLE arena_comparisons_new RENAME TO arena_comparisons;
+			CREATE INDEX IF NOT EXISTS idx_arena_pairs
+			  ON arena_comparisons(owner_key, work_a, work_b);
+			CREATE INDEX IF NOT EXISTS idx_arena_pending
+			  ON arena_comparisons(session_key) WHERE judged_at IS NULL;
+			COMMIT;`); err != nil {
+			return fmt.Errorf("migrate arena_comparisons.agreement: %w", err)
 		}
 	}
 	return nil
