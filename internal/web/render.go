@@ -19,8 +19,12 @@ import (
 // Base is embedded in every page. It is how the shared header, footer and
 // <head> reach every template without a second parse or a second pass.
 type Base struct {
-	Title       string
-	Heading     string
+	Title   string
+	Heading string
+	// NavKey is the nav item to mark as current, or empty for a page the nav
+	// does not name. See navKey in handlers.go for the two aliases, and for why
+	// work, tag, rank and author pages deliberately have none.
+	NavKey      string
 	Version     string
 	Mode        string
 	CorpusWorks int
@@ -581,6 +585,7 @@ func init() {
 		"arena.html", "leaderboard.html", "rank.html", "myranking.html",
 		"block.html", "fandoms.html", "underrated.html", "neighbours.html",
 		"crawl.html",
+		"mirror.html",
 		"surprise.html",
 		"profiles.html", "profile.html",
 		"author.html",
@@ -650,6 +655,11 @@ var funcMap = template.FuncMap{
 	// href renders as a link that goes somewhere else or nowhere. html/template
 	// escapes for HTML, not for a URI component.
 	"urlquery": url.QueryEscape,
+
+	// mib renders a byte count as MiB. The graph's footprint is the one number
+	// on /mirror that belongs to the machine rather than the corpus, and "25 MiB"
+	// is a size while "26214400" is not.
+	"mib": func(n int64) string { return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20)) },
 
 	// int64 converts a template-visible int to int64 for commas(), which takes
 	// int64. Without it the call site needs a cast in every row.

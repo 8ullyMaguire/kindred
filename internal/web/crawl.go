@@ -95,10 +95,32 @@ func crawlSourceWhy(source string) string {
 	return "queued by " + source
 }
 
+// sortedQueueSources turns the source counts into a display order.
+//
+// Sorted, because a map iterates in a different order every render and a
+// breakdown that reshuffles itself reads as data changing when it is not.
+//
+// Shared with /mirror rather than copied: two orderings of the same map would
+// eventually disagree, and the symptom of that is two pages giving two
+// different "where did this come from" answers about one queue.
+func sortedQueueSources(bySource map[string]int) []QueueSource {
+	out := make([]QueueSource, 0, len(bySource))
+	for src, n := range bySource {
+		out = append(out, QueueSource{Source: src, Count: n, Why: crawlSourceWhy(src)})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Source < out[j].Source
+	})
+	return out
+}
+
 func (d Deps) renderCrawl(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	page := CrawlPage{
-		Base: d.base("Crawl queue", "What the mirror is still missing"),
+		Base: d.baseOf(r, "Crawl queue", "What the mirror is still missing"),
 		Cap:  store.CrawlMaxAttempts,
 	}
 	if d.Queue == nil {
@@ -115,18 +137,7 @@ func (d Deps) renderCrawl(w http.ResponseWriter, r *http.Request) {
 	page.Pending, page.Done, page.Parked = st.Pending, st.Done, st.Parked
 	page.Total = st.Pending + st.Done + st.Parked
 
-	// Sorted, because a map iterates in a different order every render and a
-	// breakdown that reshuffles itself reads as data changing when it is not.
-	page.Sources = make([]QueueSource, 0, len(st.BySource))
-	for src, n := range st.BySource {
-		page.Sources = append(page.Sources, QueueSource{Source: src, Count: n, Why: crawlSourceWhy(src)})
-	}
-	sort.Slice(page.Sources, func(i, j int) bool {
-		if page.Sources[i].Count != page.Sources[j].Count {
-			return page.Sources[i].Count > page.Sources[j].Count
-		}
-		return page.Sources[i].Source < page.Sources[j].Source
-	})
+	page.Sources = sortedQueueSources(st.BySource)
 
 	page.Recent = make([]QueueRow, 0, len(st.Recent))
 	for _, row := range st.Recent {

@@ -170,7 +170,7 @@ type BlockPage struct {
 func (d Deps) renderBlock(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	page := BlockPage{
-		Base:           d.base("Block tags", "Tags you probably do not want"),
+		Base:           d.baseOf(r, "Block tags", "Tags you probably do not want"),
 		MinimumForView: 3,
 	}
 
@@ -551,7 +551,7 @@ func safeReturnTo(v string) string {
 // renderArena presents a comparison.
 func (d Deps) renderArena(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	page := ArenaPage{Base: d.base("Arena", "Compare two works"),
+	page := ArenaPage{Base: d.baseOf(r, "Arena", "Compare two works"),
 		Strategy: "maxinfo"}
 
 	// A tag filter scopes the arena to a fandom, which is the only way to
@@ -570,7 +570,7 @@ func (d Deps) renderArena(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if tagID > 0 {
-		page.Base = d.base("Arena", "Compare within "+tagName(d, ctx, tagID))
+		page.Base = d.baseOf(r, "Arena", "Compare within "+tagName(d, ctx, tagID))
 	}
 
 	if st, err := d.Engine.Store.Stats(ctx); err == nil {
@@ -859,7 +859,7 @@ func (d Deps) tagLinksForWork(ctx context.Context, workIDs ...int64) map[int64][
 func (d Deps) renderLeaderboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	page := LeaderboardPage{
-		Base:   d.base("Leaderboard", "Works the arena has ranked"),
+		Base:   d.baseOf(r, "Leaderboard", "Works the arena has ranked"),
 		Median: arena.MU_INIT,
 		Note: "A work shown at 1500 has not been compared yet, and sits at " +
 			"the middle because that is where an unrated work honestly " +
@@ -1068,7 +1068,7 @@ func (d Deps) renderRank(w http.ResponseWriter, r *http.Request, idStr string) {
 		return
 	}
 	page := RankPage{
-		Base:    d.base("Rank", "Arena rating"),
+		Base:    d.baseOf(r, "Rank", "Arena rating"),
 		WorkID:  id,
 		WorkURL: fmt.Sprintf("/work/%d", id),
 	}
@@ -1114,7 +1114,7 @@ func (d Deps) renderRank(w http.ResponseWriter, r *http.Request, idStr string) {
 func (d Deps) renderMyRanking(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	page := MyRankingPage{
-		Base:           d.base("Your ranking", "What the arena has learned about you"),
+		Base:           d.baseOf(r, "Your ranking", "What the arena has learned about you"),
 		MinimumForView: 3,
 		Note: "Preferences come from the tags that DIFFER between the two " +
 			"works you were shown. A tag on both teaches nothing, and a tag " +

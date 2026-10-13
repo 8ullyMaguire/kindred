@@ -1,0 +1,108 @@
+{{define "content"}}
+{{/* The counts. Each is stated as a fact about the mirror, and the ones that
+     answer "can this recommend anything sensible" come first: a recommender
+     with 12 tags and no edges will answer every query with the same handful of
+     works, and nothing else on the site says so. */}}
+{{if .NoCorpus}}
+<p class="empty">
+  This deployment has no corpus handle, so it cannot report what the mirror
+  holds. That is the corpus-less configuration: the pages that need to rank
+  works are unavailable here, and this one exists to say why.
+</p>
+{{else}}
+<div class="stat-row">
+  <div class="stat">
+    <span class="stat-num">{{commas .Works}}</span>
+    <span class="stat-label">works</span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">{{commas .Tags}}</span>
+    <span class="stat-label">tags</span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">{{commas .WorkTags}}</span>
+    <span class="stat-label">tags on works</span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">{{commas .Edges}}</span>
+    <span class="stat-label">tag co-occurrences</span>
+  </div>
+</div>
+
+<h2>The graph the recommendations walk</h2>
+{{if .HasGraph}}
+<div class="stat-row">
+  <div class="stat">
+    <span class="stat-num">{{commas .Nodes}}</span>
+    <span class="stat-label">nodes</span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">{{commas .GraphEdges}}</span>
+    <span class="stat-label">edges</span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">{{mib .GraphBytes}}</span>
+    <span class="stat-label">in memory</span>
+  </div>
+</div>
+<p class="muted">
+  Ranking a seed walks these edges. A small graph is not a broken one &mdash; it
+  is a mirror that has not seen enough of AO3 yet, and it answers from what it
+  has rather than refusing. If a ranking looks thin, this is the number that
+  explains it.
+</p>
+{{else}}
+<p class="empty">
+  No co-occurrence graph is loaded in this process, so ranking falls back to the
+  corpus tables directly. That is slower and asks for no extra memory, which is
+  the lite configuration.
+</p>
+{{end}}
+{{end}}
+
+{{/* The backlog and the API links sit OUTSIDE the corpus branch on purpose.
+     They were inside it, so every one of them vanished on a corpus-less
+     deployment -- and the backlog is exactly what a read-only or misconfigured
+     instance most needs to be able to state. */}}
+<h2>Still to fetch</h2>
+{{if .NoQueue}}
+<p class="empty">
+  This deployment has no crawl queue, so the mirror only shrinks as works are
+  deleted upstream. The state database is not writable here, so nothing can be
+  queued for fetching.
+</p>
+{{else if .QueueErr}}
+<p class="crawl-verdict is-warn">
+  The crawl queue could not be read, so how far behind the mirror is cannot be
+  stated. This is not the same as a queue with nothing in it: it means the
+  backlog is unknown, which is the state where discovery could have stopped
+  without anything saying so.
+</p>
+{{else if .Pending}}
+<p class="crawl-verdict is-live">
+  {{commas .Pending}} work{{if ne .Pending 1}}s{{end}} waiting to be fetched.
+  <a href="/crawl">See the backlog and where it came from.</a>
+</p>
+{{else if .Parked}}
+<p class="crawl-verdict is-warn">
+  Nothing is waiting, but {{commas .Parked}} work{{if ne .Parked 1}}s{{end}}
+  failed {{.Cap}} times and were given up on.
+  <a href="/crawl">See why.</a>
+</p>
+{{else}}
+<p class="crawl-verdict is-idle">
+  Nothing is queued. The mirror is not growing: if you expected new works, a
+  discovery walk is what adds them.
+  <a href="/crawl">Add to the mirror.</a>
+</p>
+{{end}}
+
+<h2>Machine-readable</h2>
+<p class="muted">
+  Every number on this page, and the memory and embedding counts that belong to
+  an operator rather than a reader, are at
+  <a href="/api/v1/stats"><code>/api/v1/stats</code></a>. Liveness is at
+  <a href="/healthz"><code>/healthz</code></a>. These pages are a front for that
+  API, not a second source of the same facts.
+</p>
+{{end}}

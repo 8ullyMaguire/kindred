@@ -190,7 +190,7 @@ func (d Deps) Pages(api http.Handler) http.Handler {
 // readers -- and the footer version is the one a human actually sees.
 func withFreshnessHeaders(d Deps, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b := d.base("", "")
+		b := d.baseOf(r, "", "")
 
 		// SPEC §3.2.3: "Server: kindred plus a JSON unofficial: true on
 		// every document, and a human-visible line on the root page."
@@ -393,6 +393,8 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 		d.renderBlock(w, r)
 	case p == "/crawl":
 		d.renderCrawl(w, r)
+	case p == "/mirror":
+		d.renderMirror(w, r)
 	case strings.HasPrefix(p, "/rank/"):
 		d.renderRank(w, r, strings.TrimPrefix(p, "/rank/"))
 	default:
@@ -410,7 +412,7 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 // knowing and worth being able to say out loud.
 func (d Deps) renderFandoms(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	base := d.base("Fandoms", "Fandoms")
+	base := d.baseOf(r, "Fandoms", "Fandoms")
 
 	if d.CorpusQuery == nil {
 		d.fail(w, r, http.StatusServiceUnavailable,
@@ -515,7 +517,7 @@ func (d Deps) renderUnderrated(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page := UnderratedPage{
-		Base: d.base("Underrated", "Underrated"), Rows: res.Rows, Notes: res.Notes,
+		Base: d.baseOf(r, "Underrated", "Underrated"), Rows: res.Rows, Notes: res.Notes,
 		Truncated: res.Truncated, MinWords: int64(words), Complete: complete,
 	}
 	d.page(w, "underrated.html", page, http.StatusOK)
@@ -559,7 +561,7 @@ func (d Deps) renderSurprise(w http.ResponseWriter, r *http.Request) {
 		// simply have nothing well-tagged in it yet. Render the form with the
 		// query's own explanation rather than a bare error page.
 		d.page(w, "surprise.html", SurprisePage{
-			Base:  d.base("Surprise", "Corpus"),
+			Base:  d.baseOf(r, "Surprise", "A random work"),
 			Notes: res.Notes,
 		}, http.StatusOK)
 		return
@@ -577,7 +579,7 @@ func (d Deps) renderSurprise(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d.page(w, "surprise.html", SurprisePage{
-		Base:  d.base("Surprise", "Corpus"),
+		Base:  d.baseOf(r, "Surprise", "A random work"),
 		Row:   row,
 		Seed:  seed,
 		Notes: res.Notes,
@@ -588,7 +590,7 @@ func (d Deps) renderSurprise(w http.ResponseWriter, r *http.Request) {
 func (d Deps) renderNeighbours(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tag := strings.TrimSpace(r.URL.Query().Get("tag"))
-	base := d.base("Tag neighbours", "Tag neighbours")
+	base := d.baseOf(r, "Tag neighbours", "Tag neighbours")
 
 	// No tag is the untouched form, not a 404: the page has to be able to say
 	// "name a tag" in its own voice.
@@ -637,7 +639,7 @@ func (d Deps) renderNeighbours(w http.ResponseWriter, r *http.Request) {
 // renderProfiles lists stored profiles and builds new ones.
 func (d Deps) renderProfiles(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	page := ProfilesPage{Base: d.base("Taste profiles", "Taste profiles")}
+	page := ProfilesPage{Base: d.baseOf(r, "Taste profiles", "Taste profiles")}
 
 	names, err := d.profileNames(ctx)
 	if err != nil {
@@ -731,7 +733,7 @@ func (d Deps) renderProfile(w http.ResponseWriter, r *http.Request) {
 	// <h1> at all. Six pages shipped that way (an <h1> is the document's main
 	// heading for a screen reader, and its absence is invisible in a rendered
 	// screenshot).
-	base := d.base("Taste profile", "Taste profile")
+	base := d.baseOf(r, "Taste profile", "Taste profile")
 
 	page := ProfilePage{Base: base}
 	if p, ok := d.loadProfile(&page, ctx, name); ok {
@@ -1164,7 +1166,19 @@ func cloneWeights(m map[int32]float64) map[int32]float64 {
 // empty and why.
 func (d Deps) renderSearch(w http.ResponseWriter, r *http.Request, q string) {
 	ctx := r.Context()
-	base := d.base("kindred", "")
+	// The home page and /search both rendered with NO heading: the layout emits
+	// <h1> only when Heading is set, and both passed "". A page with no h1 has
+	// no landmark for a screen reader and nothing to scan for anyone else, and
+	// the home page is the one page every visitor sees.
+	//
+	// The two get different words because one is an invitation and the other is
+	// an answer: "Find something to read" above an empty box would be a lie once
+	// a query is in it.
+	heading := "Find something to read"
+	if q != "" {
+		heading = "Search results"
+	}
+	base := d.baseOf(r, "kindred", heading)
 	base.Query = q
 	page := SearchPage{Base: base}
 	page.N = clampInt(atoiDefault(r.URL.Query().Get("n"), 50), 1, 200)
@@ -1435,7 +1449,7 @@ func (d Deps) renderAuthor(w http.ResponseWriter, r *http.Request) {
 	if q != "" {
 		title = "Works by " + q
 	}
-	page := AuthorPage{Base: d.base(title, "Search"), Query: q}
+	page := AuthorPage{Base: d.baseOf(r, title, "Search"), Query: q}
 	// Same contract as every list: ?n= picks the count, 20 by default so
 	// the page is useful before any parameter is known to exist.
 	page.N = clampInt(atoiDefault(r.URL.Query().Get("n"), 20), 1, 500)
@@ -1549,7 +1563,7 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 		d.queueAutoCrawl(ctx, id, ent.URL, "viewed-incomplete")
 	}
 
-	page := WorkPage{Base: d.base(ent.Title, ent.Title), Work: ent}
+	page := WorkPage{Base: d.baseOf(r, ent.Title, ent.Title), Work: ent}
 
 	// How many "more like this" the reader wants. Default 10 (the page's
 	// historical size), ?n= raises it: the list was hard-capped at 10 with
@@ -1612,7 +1626,7 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	// the ceiling, because past that the page is a scroll and the engine's
 	// blended half grows with it.
 	n := clampInt(atoiDefault(r.URL.Query().Get("n"), 20), 1, 200)
-	page := TagPage{Base: d.base(name, name), Tag: TagInfo{ID: id, Name: name}}
+	page := TagPage{Base: d.baseOf(r, name, name), Tag: TagInfo{ID: id, Name: name}}
 	page.N = n
 	page.NextN = n * 2
 
@@ -2091,7 +2105,7 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 		// anyone types. A 404 here would be right for a bad URL and wrong for
 		// an untouched form, so the form is rendered empty instead.
 		d.page(w, "recommend.html",
-			RecommendPage{Base: d.base("Recommendations", "Recommendations"), MaxSeeds: maxSeeds},
+			RecommendPage{Base: d.baseOf(r, "Recommendations", "Recommendations"), MaxSeeds: maxSeeds},
 			http.StatusOK)
 		return
 	}
@@ -2273,7 +2287,7 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page := RecommendPage{
-		Base:            d.base(heading, heading),
+		Base:            d.baseOf(r, heading, heading),
 		Similar:         res.Items,
 		Seeds:           echo,
 		N:               n,
@@ -2637,6 +2651,38 @@ func (d Deps) neighbours(ctx context.Context, id int64) []Neighbour {
 
 // -- plumbing ---------------------------------------------------------------
 
+// baseOf is base plus the nav key for the request, which the layout needs to
+// mark the page the reader is on. A separate function rather than a change to
+// base's signature, because base is also called from renders that have no
+// request to hand (a Base describing a failed page still gets built), and those
+// simply have no current nav item.
+func (d Deps) baseOf(r *http.Request, title, heading string) Base {
+	b := d.base(title, heading)
+	if r != nil {
+		b.NavKey = navKey(r.URL.Path)
+	}
+	return b
+}
+
+// navKey maps a request path to the nav item it belongs to.
+//
+// Only two paths need mapping, and both are cases where the URL the reader
+// arrived on is not the URL the nav names: /search is the home page's form
+// action, and /profile is one profile reached from /profiles.
+//
+// Work, tag, rank and author pages are deliberately absent. They are reachable
+// from every section, so marking one would be a claim about how the reader got
+// there rather than about where they are.
+func navKey(path string) string {
+	switch path {
+	case "/search":
+		return "/"
+	case "/profile":
+		return "/profiles"
+	}
+	return path
+}
+
 func (d Deps) base(title, heading string) Base {
 	b := Base{Title: title, Heading: heading, Version: d.Version}
 	if d.Lite {
@@ -2984,7 +3030,7 @@ func (d Deps) page(w http.ResponseWriter, name string, data any, status int) {
 }
 
 func (d Deps) notFound(w http.ResponseWriter, r *http.Request) {
-	page := NotFoundPage{Base: d.base("Not found", "Not found"), Path: r.URL.Path}
+	page := NotFoundPage{Base: d.baseOf(r, "Not found", "Not found"), Path: r.URL.Path}
 	var buf bytes.Buffer
 	if err := Render(&buf, "notfound.html", page); err != nil {
 		// The 404 page itself failed. Fall back to text, because a broken
@@ -3006,7 +3052,7 @@ func (d Deps) fail(w http.ResponseWriter, r *http.Request, status int, err error
 		path = r.URL.Path
 	}
 	page := ErrorPage{
-		Base:    d.base("Error", "Something went wrong"),
+		Base:    d.baseOf(r, "Error", "Something went wrong"),
 		Path:    path,
 		Message: err.Error(),
 	}

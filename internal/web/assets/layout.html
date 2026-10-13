@@ -3,15 +3,23 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{.Title}} &middot; kindred</title>
+    {{/* The home page's title IS the site name, so appending it produced
+         "kindred &middot; kindred" -- the page every visitor lands on announced
+         itself twice. Guarded rather than special-cased in Go, because any
+         future page whose title is the site name would hit the same thing. */}}
+    <title>{{if and .Title (ne .Title "kindred")}}{{.Title}} &middot; kindred{{else}}kindred{{end}}</title>
     <link rel="stylesheet" href="/static/style.css">
   </head>
   <body>
     <div id="header">
       <p class="brand"><a href="/">kindred</a></p>
+      {{/* The count is guarded, not printed unconditionally. Without a corpus
+           it rendered "a local mirror of 0 works" -- a claim about the data
+           made from no data, on every page of a corpus-less deployment. */}}
       <p class="tagline">
         A general entity recommender over a local mirror of
-        {{.CorpusWorks}} works. Not affiliated with Archive of Our Own.
+        {{if .CorpusWorks}}{{commas .CorpusWorks}} works{{else}}works{{end}}.
+        Not affiliated with Archive of Our Own.
       </p>
       {{/* Query lives on Base so every page can prefill the box, including
            the ones that have no search results of their own. */}}
@@ -29,32 +37,48 @@
     </div>
 
     {{/* A nav, not a footer link dump. There were four reader-facing pages when
-         this was a paragraph of links; there are ten now, and the ones that got
-         lost in the middle are exactly the ones a reader needs most (rank from
-         a seed, rank fandoms, find what is underrated). Grouped by what the
-         reader is trying to do, so the list is short enough to scan. */}}
+         this was a paragraph of links; there are fifteen now, in three
+         UNLABELLED columns -- so the grouping existed only in the markup and a
+         reader saw thirteen flat links with no way to tell which were related.
+
+         Grouped by what the reader is trying to do, and each group is NAMED,
+         because an unlabelled group is a grouping nobody can see. */}}
     <nav id="nav" aria-label="Main">
-      <ul>
-        <li><a href="/">Search</a></li>
-        <li><a href="/recommend">Rank from seeds</a></li>
-        <li><a href="/fandoms">Fandoms</a></li>
-        <li><a href="/underrated">Underrated</a></li>
-        <li><a href="/neighbours">Tag neighbours</a></li>
-        <li><a href="/surprise">Surprise me</a></li>
-        <li><a href="/profiles">Taste profiles</a></li>
-      </ul>
-      <ul>
-        <li><a href="/arena">Arena</a></li>
-        <li><a href="/leaderboard">Rankings</a></li>
-        <li><a href="/my-ranking">Your ranking</a></li>
-        <li><a href="/block">Block tags</a></li>
-      </ul>
-      <ul>
-        <li><a href="/stats">Stats</a></li>
-        <li><a href="/crawl">Crawl queue</a></li>
-        <li><a href="/healthz">Health</a></li>
-        <li><a href="/api/v1/stats">JSON API</a></li>
-      </ul>
+      <div class="nav-group">
+        <h2 class="nav-label">Find something to read</h2>
+        <ul>
+          <li><a href="/"{{if eq .NavKey "/"}} class="is-current" aria-current="page"{{end}}>Search</a></li>
+          <li><a href="/recommend"{{if eq .NavKey "/recommend"}} class="is-current" aria-current="page"{{end}}>Rank from seeds</a></li>
+          <li><a href="/fandoms"{{if eq .NavKey "/fandoms"}} class="is-current" aria-current="page"{{end}}>Fandoms</a></li>
+          <li><a href="/underrated"{{if eq .NavKey "/underrated"}} class="is-current" aria-current="page"{{end}}>Underrated</a></li>
+          <li><a href="/neighbours"{{if eq .NavKey "/neighbours"}} class="is-current" aria-current="page"{{end}}>Tag neighbours</a></li>
+          <li><a href="/surprise"{{if eq .NavKey "/surprise"}} class="is-current" aria-current="page"{{end}}>Surprise me</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h2 class="nav-label">Your taste</h2>
+        <ul>
+          <li><a href="/arena"{{if eq .NavKey "/arena"}} class="is-current" aria-current="page"{{end}}>Arena</a></li>
+          <li><a href="/leaderboard"{{if eq .NavKey "/leaderboard"}} class="is-current" aria-current="page"{{end}}>Rankings</a></li>
+          <li><a href="/my-ranking"{{if eq .NavKey "/my-ranking"}} class="is-current" aria-current="page"{{end}}>Your ranking</a></li>
+          <li><a href="/profiles"{{if eq .NavKey "/profiles"}} class="is-current" aria-current="page"{{end}}>Taste profiles</a></li>
+          <li><a href="/block"{{if eq .NavKey "/block"}} class="is-current" aria-current="page"{{end}}>Block tags</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h2 class="nav-label">This mirror</h2>
+        <ul>
+          {{/* /stats and /healthz were linked here and both return JSON: the
+               nav offered a reader "Stats" and "Health" as pages and delivered
+               a wall of minified JSON. The JSON endpoints keep their contracts
+               and their tests; /mirror is the page a reader was asking for, and
+               the raw ones are named as JSON at the bottom where a reader who
+               wants them can find them. */}}
+          <li><a href="/mirror"{{if eq .NavKey "/mirror"}} class="is-current" aria-current="page"{{end}}>This mirror</a></li>
+          <li><a href="/crawl"{{if eq .NavKey "/crawl"}} class="is-current" aria-current="page"{{end}}>Crawl queue</a></li>
+          <li><a href="/api/v1/stats">JSON API</a></li>
+        </ul>
+      </div>
     </nav>
 
     <div id="footer">
