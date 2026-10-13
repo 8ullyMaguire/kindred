@@ -133,6 +133,78 @@ func resolveHref(base *url.URL, raw string) (string, bool) {
 	return u.String(), true
 }
 
+// ListingKind classifies an AO3 URL by whether it yields a LIST OF WORKS, and
+// which kind of list it is. It returns "" for anything else.
+//
+// This is the difference between a frontier that grows usefully and one that
+// wanders. From a listing page, the links on it are mostly tag links, author
+// pages and the site's own chrome; only some of those lead to more works, and
+// at a 30-second crawl delay a wrong guess is half a minute spent learning
+// nothing. Naming the kinds also lets a caller decide which to follow — an
+// operator expanding a fandom does not necessarily want every bookmarker.
+//
+// The kinds are the shapes AO3 actually uses, established by reading the site's
+// own link structure:
+//
+//	/tags/<name>/works                      "tag"
+//	/works?work_search[query]=...           "search"
+//	/users/<name>/works                     "user-works"
+//	/users/<name>/bookmarks                 "user-bookmarks"
+//	/users/<name>/pseuds/<pseudo>/bookmarks "user-bookmarks"
+//	/collections/<name>/works               "collection"
+//	/series/<id>                            "series"
+func ListingKind(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	p := strings.Trim(u.Path, "/")
+	if p == "" {
+		return ""
+	}
+	seg := strings.Split(p, "/")
+	switch seg[0] {
+	case "tags":
+		// /tags/<name>/works. The bare /tags/<name> is the tag landing page,
+		// which is also a work list (it is what a reader sees when they click a
+		// tag), so it counts.
+		if len(seg) >= 3 && seg[len(seg)-1] == "works" {
+			return "tag"
+		}
+		if len(seg) == 2 {
+			return "tag"
+		}
+		return ""
+	case "works":
+		// /works?query — a search. Without a query it is the whole-mirror
+		// listing, which is a valid seed but says nothing about taste.
+		if u.RawQuery == "" {
+			return ""
+		}
+		return "search"
+	case "users":
+		last := seg[len(seg)-1]
+		switch last {
+		case "works":
+			return "user-works"
+		case "bookmarks":
+			return "user-bookmarks"
+		}
+		return ""
+	case "collections":
+		if seg[len(seg)-1] == "works" {
+			return "collection"
+		}
+		return ""
+	case "series":
+		if len(seg) == 2 && seg[1] != "new" {
+			return "series"
+		}
+		return ""
+	}
+	return ""
+}
+
 // NextPageURL returns the absolute URL of the next page of a listing, or "" when
 // this page is the last one.
 //

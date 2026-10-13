@@ -267,22 +267,54 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// Defaults for a run that leaves a knob unset. They are constants so Run and
+// FetchOne cannot drift apart: a BFS that retried differently from a plain
+// crawl would be two politeness policies pointed at one host.
+const (
+	DefaultMaxRetries    = 3
+	DefaultRetryBackoff  = 2 * time.Second
+	DefaultWorkers       = 1
+	DefaultCheckpoint    = 25
+	DefaultProgressEvery = 5 * time.Second
+)
+
+// FetchOne fetches a single URL under the crawler's delay and retry policy.
+//
+// It exists for callers that cannot name their URLs up front — a BFS discovers
+// the next URL by fetching the current one, so it cannot hand Run a list. The
+// alternative was for the BFS to call client.Fetch directly, which would have
+// skipped both the crawl delay and the transient-error retry, and would have
+// looked correct in every test that used a fake client.
+func (c *Crawler) FetchOne(ctx context.Context, rawURL string) ([]byte, error) {
+	if err := c.sleep(ctx, c.client.Delay()); err != nil {
+		return nil, err
+	}
+	var (
+		mu      sync.Mutex
+		retried int
+	)
+	return c.fetchWithRetry(ctx, rawURL, Options{
+		MaxRetries:   DefaultMaxRetries,
+		RetryBackoff: DefaultRetryBackoff,
+	}, &mu, &retried)
+}
+
 // Run fetches every URL in opts, honouring resume and the crawl delay.
 func (c *Crawler) Run(ctx context.Context, opts Options) (*Report, error) {
 	if opts.Workers <= 0 {
-		opts.Workers = 1
+		opts.Workers = DefaultWorkers
 	}
 	if opts.CheckpointURLs <= 0 {
-		opts.CheckpointURLs = 25
+		opts.CheckpointURLs = DefaultCheckpoint
 	}
 	if opts.MaxRetries <= 0 {
-		opts.MaxRetries = 3
+		opts.MaxRetries = DefaultMaxRetries
 	}
 	if opts.RetryBackoff <= 0 {
-		opts.RetryBackoff = 2 * time.Second
+		opts.RetryBackoff = DefaultRetryBackoff
 	}
 	if opts.ProgressEvery <= 0 {
-		opts.ProgressEvery = 5 * time.Second
+		opts.ProgressEvery = DefaultProgressEvery
 	}
 
 	start := time.Now()
