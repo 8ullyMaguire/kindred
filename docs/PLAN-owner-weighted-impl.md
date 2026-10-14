@@ -517,6 +517,32 @@ Commit E4–E5: `arena+web: pair/judge/leaderboard for tags, characters, ships, 
 
 Commit F: `web: leaderboard names the owner-cohort weighting; deploy gate checks it`.
 
+**Landed** (commit `d6fd7e7`, 2026-10-14). Deviations from the text above, as this
+file asks to have recorded:
+
+- **"Same on the per-kind leaderboards" — no such page exists.** `?kind=` is not
+  a route on `/leaderboard`. The per-kind standings surface a reader can reach is
+  `/rank/{kind}/{id}`, which carries the note now. The machine surface,
+  `GET /api/v1/arena/leaderboard?kind=…`, already reports the owner dimension via
+  `meta.degraded[]` and was left alone rather than growing a `note` field in the
+  same change.
+- **The condition is the wiring point, not `cfg.OwnerSession != ""` alone.**
+  `cmd/kindred` sets it where the owner cohort is wired (session named AND taste
+  profiles available), before the first vector build — a named owner who has
+  never voted is configured, not misconfigured. See DECISIONS.
+- **The gate's two states became three.** "Env file unreadable" and "env file
+  names no owner" are different facts and only one is evidence, so the unreadable
+  case prints `skipped (no owner session in gate env)` while the readable-but-empty
+  case asserts silence. It reads the SERVICE's env file (`/etc/default/kindred-restrictions`,
+  override `KINDRED_DEPLOY_ENV`), never its own environment.
+- **The empty board carries the note**, so the gate cannot report drift on a
+  correct deploy whose leaderboard has no rows yet.
+
+Verified: gofmt clean, go vet clean, `go test ./...` 24 packages ok, `make e2e`
+117 passed (22.7s), and `check-deploy.sh` against a real server in all four
+directions (present 49 checks, absent 48, both drift cases exit 1 naming the
+reason).
+
 ## Step G — docs + deploy + gates
 
 1. `docs/SPEC.md`: new §2.9 "Owner-weighted consensus" — P1/P2 semantics,
