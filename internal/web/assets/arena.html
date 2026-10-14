@@ -11,9 +11,16 @@
      Session is on the page struct, not a cookie template function: no
      such function exists, and {{cookie ...}} renders as an execution
      error rather than a missing value. */}}
+{{if .KindLinks}}
+<nav class="arena-kinds">
+  <span class="muted">Arena:</span>
+  {{range .KindLinks}}{{if .Active}}<span class="kind current">{{.Label}}</span>{{else}}<a class="kind" href="{{.URL}}">{{.Label}}</a>{{end}}{{end}}
+</nav>
+{{end}}
 {{if .Cards}}
 <form method="post" action="/arena/judge" class="arena">
   <input type="hidden" name="session" value="{{.Session}}">
+  <input type="hidden" name="kind" value="{{.Kind}}">
 
   <div class="arena-pair">
     {{range $i, $c := .Cards}}

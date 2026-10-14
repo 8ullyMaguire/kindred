@@ -8,6 +8,9 @@ package web
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
@@ -80,3 +83,72 @@ func TestAWebJudgementLandsInTheArenaThatPresentedIt(t *testing.T) {
 // CORPUS database, and store.OpenMemory leaves that nil -- the call panics on a nil *sql.DB
 // (database/sql.(*DB).conn(0x0)). Writing it needs the testcorpus fixture; until then the
 // work path is covered by internal/api's own judge tests.
+
+// GET /arena is a user-facing surface for the entity arenas, and these tests pin
+// what it says rather than how it says it: the switcher offers every kind, an
+// unknown kind lands on the work arena instead of failing, and a mirror with no
+// corpus attached gets an honest message rather than a nil-handle crash.
+func arenaBody(t *testing.T, d Deps, target string) (int, string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	d.route(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	if rec.Code != http.StatusOK {
+		// The body carries the reason; a bare status code sends the next person
+		// hunting through the router for it.
+		t.Logf("GET %s -> %d: %s", target, rec.Code, rec.Body.String())
+	}
+	return rec.Code, rec.Body.String()
+}
+
+func TestTheArenaSwitcherOffersEveryKind(t *testing.T) {
+	d, _ := judgeDeps(t)
+	code, body := arenaBody(t, d, "/arena")
+	if code != http.StatusOK {
+		t.Fatalf("GET /arena = %d", code)
+	}
+	if !strings.Contains(body, "arena-kinds") {
+		t.Fatal("the arena page has no switcher at all")
+	}
+	for _, k := range arena.Kinds {
+		if !strings.Contains(body, k.Label()) {
+			t.Errorf("the switcher never names %q", k)
+		}
+		// The ACTIVE arena is a marker, not a link to itself -- so it is the one
+		// kind with no href, and asserting an href for every kind was wrong
+		// when this test was first written.
+		wantHref := k != arena.KindWork
+		if got := strings.Contains(body, "?kind="+string(k)); got != wantHref {
+			t.Errorf("href for %q present = %v, want %v", k, got, wantHref)
+		}
+	}
+}
+
+func TestAnEntityArenaSaysWhichKindItIsJudging(t *testing.T) {
+	d, _ := judgeDeps(t)
+	// No corpus attached in this fixture, so the honest outcome is the message
+	// naming the kind -- which is also the assertion that the kind reached the
+	// entity flow at all rather than falling through to works.
+	code, body := arenaBody(t, d, "/arena?kind=ao3_tag")
+	if code != http.StatusOK {
+		t.Fatalf("GET /arena?kind=ao3_tag = %d", code)
+	}
+	if !strings.Contains(body, "tag") {
+		t.Fatalf("the page for a tag arena does not name tags: %s", body)
+	}
+	if !strings.Contains(body, "Compare two tags") {
+		t.Error("the heading does not name the arena being judged")
+	}
+}
+
+func TestAnUnknownKindLandsOnTheWorkArenaRatherThanFailing(t *testing.T) {
+	d, _ := judgeDeps(t)
+	plain, bare := arenaBody(t, d, "/arena")
+	_, nonsense := arenaBody(t, d, "/arena?kind=not-a-kind")
+	if plain != http.StatusOK {
+		t.Fatalf("GET /arena = %d", plain)
+	}
+	if nonsense != bare {
+		t.Fatal("?kind=not-a-kind rendered something other than the work arena: " +
+			"ParseKind is supposed to send anything unknown to works")
+	}
+}

@@ -17,6 +17,8 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
+	"net/url"
+	"time"
 )
 
 // ArenaCookieName is the session cookie shared by the pages and the JSON
@@ -28,6 +30,16 @@ const ArenaCookieName = "kindred_arena"
 // ArenaPage is one presented comparison.
 type ArenaPage struct {
 	Base
+	// Kind is the arena this page is judging. Every kind stores its
+	// judgements in the same table, separated by this field, and the form
+	// carries it back so a tag vote cannot be recorded against a work pair.
+	Kind string
+	// KindLabel names the kind in prose ("tag", "author") for the heading,
+	// the switcher and the card bylines.
+	KindLabel string
+	// KindLinks is the switcher. Rendered as links, not script: the arena
+	// works with scripting off, and this is no exception.
+	KindLinks []KindLink
 	// A and B are nil together, and Message explains why. An exhausted
 	// pool is a normal outcome, and rendering it as an invitation is the
 	// difference between a feature and a dead end.
@@ -64,6 +76,13 @@ type WorkCard struct {
 	Rated  bool
 	TagURL []TagLink
 	URL    string
+}
+
+// KindLink is one arena in the switcher.
+type KindLink struct {
+	Label  string
+	URL    string
+	Active bool
 }
 
 // TagLink is a tag with its page URL.
@@ -561,6 +580,15 @@ func (d Deps) renderArena(w http.ResponseWriter, r *http.Request) {
 		tagID, _ = strconv.ParseInt(v, 10, 64)
 	}
 
+	// Which arena. ParseKind sends anything unknown to works rather than
+	// failing: this page is linked and bookmarkable, and a mistyped ?kind=
+	// should land somewhere real. The JSON API answers 400 instead, where a
+	// caller can be told what the allowlist is.
+	kind := arena.ParseKind(r.URL.Query().Get("kind"))
+	page.Kind = string(kind)
+	page.KindLabel = kind.Label()
+	page.KindLinks = kindLinks(r, kind)
+
 	// The session cookie is the same one the API sets, so a user who has
 	// already been comparing keeps their history and their learned
 	// preferences across both interfaces.
@@ -571,10 +599,31 @@ func (d Deps) renderArena(w http.ResponseWriter, r *http.Request) {
 	}
 	if tagID > 0 {
 		page.Base = d.baseOf(r, "Arena", "Compare within "+tagName(d, ctx, tagID))
+	} else if kind != arena.KindWork {
+		page.Base = d.baseOf(r, "Arena", "Compare two "+kind.Label()+"s")
 	}
 
 	if st, err := d.Engine.Store.Stats(ctx); err == nil {
 		page.TotalJudged = st.Judged
+	}
+
+	// The arena draws its candidates, tags and ratings from the mirror. Without
+	// it every path below dereferences a nil handle -- the work path through
+	// CandidateWorkIDs, the entity kinds through the corpus-side loaders. Both
+	// were crashes until this guard; a deployment with no corpus attached now
+	// says so.
+	if d.Engine.Store.Corpus == nil {
+		page.Message = "The corpus is not attached, so there is nothing to compare yet."
+		d.page(w, "arena.html", page, http.StatusOK)
+		return
+	}
+
+	if kind != arena.KindWork {
+		// The entity arenas are a separate flow end to end: different
+		// candidates, different id space, same table. Delegated so the work
+		// path below is not asked to carry a kind it never had.
+		d.renderArenaKind(w, r, page, sessionKey, ownerKey, kind)
+		return
 	}
 
 	pair, ok, err := d.Engine.Store.UnjudgedInSession(ctx, sessionKey)
@@ -1331,4 +1380,181 @@ func round1(f float64) float64 {
 		return 0
 	}
 	return math.Round(f*10) / 10
+}
+
+// kindLinks builds the arena switcher. A tag filter is carried across so that
+// switching arena does not silently drop the fandom the reader is looking at.
+func kindLinks(r *http.Request, active arena.EntityKind) []KindLink {
+	out := make([]KindLink, 0, len(arena.Kinds))
+	byKind := map[arena.EntityKind]bool{}
+	for _, k := range arena.Kinds {
+		byKind[k] = true
+	}
+	if !byKind[active] {
+		// ParseKind never returns an unknown kind, but a caller could have
+		// passed an empty one; showing it as active would name an arena that
+		// does not exist.
+		active = arena.KindWork
+	}
+	tag := r.URL.Query().Get("tag_id")
+	for _, k := range arena.Kinds {
+		u := "/arena?kind=" + string(k)
+		if tag != "" {
+			u += "&tag_id=" + tag
+		}
+		out = append(out, KindLink{Label: k.Label(), URL: u, Active: k == active})
+	}
+	return out
+}
+
+// entityCandidateTTL is how long a materialised candidate set is trusted. The
+// grouping query behind the tag kinds measured 2.2s on the real mirror, so a
+// page view must never pay it.
+const entityCandidateTTL = 24 * time.Hour
+
+// entityCandidatePool bounds the candidate set a page view considers.
+const entityCandidatePool = 300
+
+// entityURL is where an entity's own page lives. The tag-shaped kinds share the
+// corpus tags id space, so they already have pages; authors are addressed by
+// name. A link that 404s would be worse than no link at all.
+func entityURL(kind arena.EntityKind, id int64, name string) string {
+	if kind == arena.KindAuthor {
+		return "/author/" + url.PathEscape(name)
+	}
+	return "/tag/" + strconv.FormatInt(id, 10)
+}
+
+// renderArenaKind serves the arena for every kind that is not a work.
+//
+// The flow is the work arena's, with the pieces swapped: candidates come from
+// the corpus-side loaders materialised into the state database, ratings from
+// the kind-taking accessors, and a comparison is stored with its kind. Nothing
+// here learns tag weights -- a tag-vs-tag vote feeding the weights that select
+// works is circular, which is the plan's D4.
+func (d Deps) renderArenaKind(w http.ResponseWriter, r *http.Request, page ArenaPage,
+	sessionKey, ownerKey string, kind arena.EntityKind) {
+
+	ctx := r.Context()
+	st := d.Engine.Store
+
+	if stt, err := st.Stats(ctx); err == nil {
+		page.TotalJudged = stt.Judged
+	}
+
+	// Resume: a reload must not reshuffle, and it must not resume this
+	// session's WORK pair either.
+	resumed := false
+	strategy := arena.StrategyMaxInfo
+	ids := []int64{}
+	if c, ok, err := st.UnjudgedInSessionKind(ctx, sessionKey, kind); err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	} else if ok {
+		ids, resumed, strategy = []int64{c.WorkA, c.WorkB}, true, arena.Strategy(c.Strategy)
+	}
+
+	if !resumed {
+		if _, err := st.EnsureEntityCandidates(ctx, kind,
+			corpus.NewAO3(st.Corpus), entityCandidatePool, entityCandidateTTL); err != nil {
+			d.fail(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		cands, err := st.EntityCandidates(ctx, kind, entityCandidatePool)
+		if err != nil {
+			d.fail(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		if len(cands) < 2 {
+			page.Message = "The mirror has too few " + kind.Label() + "s with enough " +
+				"evidence to compare yet."
+			d.page(w, "arena.html", page, http.StatusOK)
+			return
+		}
+		byID := map[int64]arena.EntityCandidate{}
+		// Ratings, not tags: an entity arena has no tag vector to steer on, and
+		// ChoosePair degrades its explore arm for exactly that case.
+		entityIDs := make([]int64, 0, len(cands))
+		for _, c := range cands {
+			byID[c.ID] = c
+			entityIDs = append(entityIDs, c.ID)
+		}
+		ratings, err := st.RatingForKind(ctx, kind, entityIDs)
+		if err != nil {
+			d.fail(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		seen, err := st.SeenPairsKind(ctx, ownerKey, kind, 4000)
+		if err != nil {
+			d.fail(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		reqs := make([]arena.Candidate, 0, len(cands))
+		for _, c := range cands {
+			rating := arena.Initial()
+			if row, ok := ratings[c.ID]; ok {
+				rating = row.Rating
+			}
+			reqs = append(reqs, arena.Candidate{ID: c.ID, Rating: rating})
+		}
+		chosen, err := arena.ChoosePair(arena.PairRequest{
+			Candidates: reqs, Seen: seen,
+			Strategy: strategy, Explored: 0.15,
+			Rand: sessionRand(sessionKey),
+		})
+		if err != nil {
+			// An exhausted pool is a normal outcome, and the page says so
+			// rather than showing an empty pair.
+			page.Message = "No " + kind.Label() + " pair left to show you."
+			d.page(w, "arena.html", page, http.StatusOK)
+			return
+		}
+		strategy = chosen.Strategy
+		if _, err := st.RecordPresentation(ctx, store.Comparison{
+			Kind: kind, SessionKey: sessionKey, OwnerKey: ownerKey,
+			WorkA: chosen.A.ID, WorkB: chosen.B.ID, Strategy: string(strategy),
+		}); err != nil {
+			d.fail(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		ids = []int64{chosen.A.ID, chosen.B.ID}
+	}
+
+	ratings, err := st.RatingForKind(ctx, kind, ids)
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	cards := make([]WorkCard, 0, len(ids))
+	for _, id := range ids {
+		name, ok, err := st.EntityName(ctx, kind, id)
+		if err != nil {
+			d.fail(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		if !ok || name == "" {
+			// A candidate whose name never reached the state database still
+			// has a pair to judge; naming it by kind and id keeps the page
+			// usable and does not pretend to know more than it does.
+			name = kind.Label() + " " + strconv.FormatInt(id, 10)
+		}
+		card := WorkCard{
+			ID: id, Title: name, Author: kind.Label(),
+			Rating: arena.MU_INIT, RD: arena.PHI_INIT,
+			URL: entityURL(kind, id, name),
+		}
+		if row, ok := ratings[id]; ok && row.Comparisons > 0 {
+			card.Rating, card.RD, card.Rated = round1(row.Rating.Mu), round1(row.Rating.Phi), true
+		}
+		cards = append(cards, card)
+	}
+
+	page.Cards = cards
+	page.Session = sessionKey
+	page.Strategy = string(strategy)
+	page.Resumed = resumed
+	if resumed {
+		page.Message = ""
+	}
+	d.page(w, "arena.html", page, http.StatusOK)
 }
