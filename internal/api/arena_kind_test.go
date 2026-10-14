@@ -284,3 +284,66 @@ func TestLeaderboardForAnEntityKind(t *testing.T) {
 		t.Fatalf("unknown kind status %d, want 400", res3.StatusCode)
 	}
 }
+
+// One entity's page of numbers, in any arena. The work shape already existed and is
+// reached through this route by delegating, so the two cannot drift.
+func TestRankOfAnEntityKind(t *testing.T) {
+	ts, st := newTestServerFull(t)
+	defer ts.Close()
+	ctx := context.Background()
+
+	if _, err := st.ReplaceEntityCandidates(ctx, arena.KindTag, []arena.EntityCandidate{
+		{ID: 501, Name: "slow burn", Weight: 40},
+	}); err != nil {
+		t.Fatalf("candidates: %v", err)
+	}
+	// Two periods, so the history has two points rather than one.
+	for p := int64(1); p <= 2; p++ {
+		if err := st.SaveRatingKind(ctx, arena.KindTag, store.RatingRow{
+			WorkID: 501, Rating: arena.Rating{Mu: 1500 + float64(p)*100, Phi: 60, Sigma: 0.06},
+			Comparisons: int(p) + 3, Wins: int(p), Period: p,
+		}); err != nil {
+			t.Fatalf("rating %d: %v", p, err)
+		}
+	}
+
+	get := func(path string) (int, map[string]any) {
+		t.Helper()
+		res, err := ts.Client().Get(ts.URL + path)
+		if err != nil {
+			t.Fatalf("get %s: %v", path, err)
+		}
+		defer res.Body.Close()
+		var body map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&body)
+		return res.StatusCode, body
+	}
+
+	code, body := get("/api/v1/arena/rank/ao3_tag/501")
+	if code != http.StatusOK {
+		t.Fatalf("status %d, want 200 (%+v)", code, body)
+	}
+	if body["name"] != "slow burn" || body["kind"] != string(arena.KindTag) {
+		t.Fatalf("body %+v, want the tag's name and kind", body)
+	}
+	if body["rated"] != true {
+		t.Fatalf("rated = %v after 4 comparisons", body["rated"])
+	}
+	hist, _ := body["history"].([]any)
+	if len(hist) != 2 {
+		t.Fatalf("history has %d points, want 2", len(hist))
+	}
+
+	// An id the candidate table does not hold is a 404, not a blank row.
+	if code, _ := get("/api/v1/arena/rank/ao3_tag/9999"); code != http.StatusNotFound {
+		t.Fatalf("unknown entity status %d, want 404", code)
+	}
+	// An unknown kind is refused here as on every other surface.
+	if code, _ := get("/api/v1/arena/rank/ao3_nope/501"); code != http.StatusBadRequest {
+		t.Fatalf("unknown kind status %d, want 400", code)
+	}
+	// The work route still answers through the new path by delegating.
+	if code, body := get("/api/v1/arena/rank/ao3_work/4242"); code != http.StatusOK {
+		t.Fatalf("work path status %d (%+v)", code, body)
+	}
+}

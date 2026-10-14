@@ -233,6 +233,74 @@ func (s *Server) handleEntityLeaderboard(w http.ResponseWriter, r *http.Request,
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleArenaRankKind returns one entity's rating and history, in any arena.
+//
+// The work route above predates kinds and keeps its exact shape; this one is the
+// same question about an entity. An entity's NAME comes from our candidate table
+// and its URL is left to the consumer: this repo serves the arena API, and the
+// app that renders a tag page is a different program with its own routes.
+func (s *Server) handleArenaRankKind(w http.ResponseWriter, r *http.Request) {
+	kind, err := ParseKind(r.PathValue("kind"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("bad entity id: %w", err))
+		return
+	}
+	if kind == arena.KindWork {
+		// The work arena answers through the route it already had, so the two
+		// shapes cannot drift apart.
+		s.handleArenaRank(w, r)
+		return
+	}
+	name, ok, err := s.Store.EntityName(r.Context(), kind, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !ok {
+		// 404, not an empty name: an id the candidate table does not hold is
+		// not an entity of this arena, and rendering a blank row would hide
+		// that a crawl dropped it.
+		writeErr(w, http.StatusNotFound,
+			fmt.Errorf("no %s entity %d: the candidate table does not hold it", kind, id))
+		return
+	}
+	ratings, err := s.Store.RatingForKind(r.Context(), kind, []int64{id})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	row := ratings[id]
+	hist, err := s.Store.RatingHistoryKind(r.Context(), kind, id, 40)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := map[string]any{
+		"kind": string(kind), "entity_id": id, "name": name,
+		"rating": round1(row.Rating.Mu), "rd": round1(row.Rating.Phi),
+		"sigma": row.Rating.Sigma, "comparisons": row.Comparisons,
+		"wins": row.Wins, "losses": row.Losses, "draws": row.Draws,
+		"rated": row.Comparisons > 0,
+	}
+	if row.Comparisons == 0 {
+		out["message"] = "This " + string(kind) + " has not been compared yet, so it " +
+			"carries the starting rating rather than a measured one."
+	}
+	series := make([]map[string]float64, 0, len(hist))
+	for _, h := range hist {
+		series = append(series, map[string]float64{
+			"period": float64(h.Period), "rating": round1(h.Rating.Mu),
+		})
+	}
+	out["history"] = series
+	writeJSON(w, http.StatusOK, out)
+}
+
 // handleArenaRank returns one work's rating and history.
 func (s *Server) handleArenaRank(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

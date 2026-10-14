@@ -158,6 +158,13 @@ func ArenaKind(r *http.Request) (arena.EntityKind, error) {
 	if raw == "" {
 		return arena.KindWork, nil
 	}
+	return ParseKind(raw)
+}
+
+// ParseKind validates a kind named in a request, from a query or a path segment.
+// One function because a refusal that only one surface performs is a rule the next
+// surface will not have.
+func ParseKind(raw string) (arena.EntityKind, error) {
 	k := arena.EntityKind(raw)
 	if !k.Valid() {
 		return "", fmt.Errorf("unknown arena kind %q (want one of %v)", raw, arena.Kinds)

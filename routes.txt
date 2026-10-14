@@ -25,4 +25,5 @@ GET /my-ranking
 GET /rank/1
 GET /api/v1/arena/leaderboard
 GET /api/v1/arena/my-ranking
+GET /api/v1/arena/rank/{kind}/{id}
 GET /api/v1/arena/rank/1

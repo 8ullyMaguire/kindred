@@ -123,6 +123,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/arena/compare", s.handleArenaJudge)
 	mux.HandleFunc("GET /api/v1/arena/leaderboard", s.handleArenaLeaderboard)
 	mux.HandleFunc("GET /api/v1/arena/rank/{id}", s.handleArenaRank)
+	mux.HandleFunc("GET /api/v1/arena/rank/{kind}/{id}", s.handleArenaRankKind)
 	mux.HandleFunc("GET /api/v1/arena/my-ranking", s.handleArenaMyRanking)
 	mux.HandleFunc("POST /api/v1/arena/batch", s.handleArenaBatch)
 

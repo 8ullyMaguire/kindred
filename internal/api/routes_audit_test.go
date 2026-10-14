@@ -48,6 +48,7 @@ var routeTable = map[string]routeAudit{
 	"POST /api/v1/arena/compare":           {Page: "/arena"},
 	"GET /api/v1/arena/leaderboard":        {Page: "/leaderboard"},
 	"GET /api/v1/arena/rank/{id}":          {Page: "/rank/{id}"},
+	"GET /api/v1/arena/rank/{kind}/{id}":   {Why: "the page is the frontend app's route, not this repo's; this repo owes the API, and no page exists for it yet"},
 	"GET /api/v1/arena/my-ranking":         {Page: "/my-ranking"},
 	"GET /api/v1/crawl-queue":              {Page: "/crawl"},
 
