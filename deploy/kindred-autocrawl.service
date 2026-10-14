@@ -21,12 +21,46 @@ Documentation=https://github.com/polarisocial/kindred
 # The queue lives in the state database, and that is the whole of the state: a
 # run that stops at its bound leaves the remaining rows undoned, so nothing is
 # lost between ticks and there is no resume file to go stale.
+#
+# ---------------------------------------------------------------------------
+# TWO MEASURED PRECONDITIONS BEFORE YOU INSTALL THIS. Both were found by trying
+# it, on the host this file was written from, and neither is a guess:
+#
+# 1. THE CORPUS MUST BE WRITABLE BY THE SERVICE USER. On thinkcentre the corpus
+#    is `-rw-r--r-- alvaro alvaro` and the state database belongs to `kindre`,
+#    so neither user can write both (`sudo -u kindre test -w` and
+#    `sudo -u alvaro test -w` were both false, measured). A crawler that fetches
+#    and then cannot save is worse than no crawler, because the queue looks
+#    alive. Either run this as the owner of the corpus with the state database
+#    group-writable, or grant the service user access with an ACL. That is a
+#    permission decision, so it is left to the owner rather than made here.
+#
+# 2. THE HOST MUST BE ABLE TO REACH AO3. thinkcentre cannot: archiveofourown.org
+#    answers it with a Cloudflare **525 SSL handshake failed**, three attempts
+#    out of three, while `openssl s_client` completes TLSv1.3 and other
+#    Cloudflare sites on the same host return 200. So the block is that IP, not
+#    the local TLS stack and not the sandbox — curl outside any unit gets the
+#    same 525. Install this timer on a host AO3 serves; on a host it refuses, the
+#    timer will fire, fail, and record the reason per row, which is at least
+#    honest but is not a working mirror.
+#
+# (A related note, because it is the reason preconditions are written down: the
+# 525 page is 9KB of Cloudflare HTML and the parser refuses it as "no title
+# heading; not a work page" rather than writing a work with an empty title. The
+# anti-poison guard paid for itself on live traffic.)
+# ---------------------------------------------------------------------------
 
 [Service]
 Type=oneshot
 User=kindre
+
+# THESE PATHS ARE THE DEPLOYED ONES, read off the live unit rather than copied
+# from this repo's own deploy/kindred.service, which is a template the host has
+# since customised (it also loads /etc/default/kindred-restrictions). Writing
+# /srv/ao3 here because the template says so points at a directory that does not
+# exist on the host, and the unit fails on start.
 Environment=STATE=/var/lib/kindred
-Environment=CORPUS=/srv/ao3/ao3_metadata.db
+Environment=CORPUS=/home/alvaro/kindling-data/ao3_metadata.db
 
 # NOTE ON PATHS: the executable path is written out literally on purpose.
 # systemd does not expand Environment= in the executable position -- it execs
@@ -52,7 +86,7 @@ ProtectSystem=strict
 ProtectHome=yes
 
 # The state database and the corpus are both written, and nothing else is.
-ReadWritePaths=/var/lib/kindred /srv/ao3
+ReadWritePaths=/var/lib/kindred /home/alvaro/kindling-data
 
 # NETWORK IS THE POINT. Unlike the web unit this one is allowed to dial out,
 # which is the entire reason it exists. It is still restricted to TCP/UDP over

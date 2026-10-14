@@ -155,6 +155,22 @@ on the dial, so the feature was live, honest and inert. `deploy/kindred-autocraw
 {service,timer}` runs this command from a unit that is allowed to dial out; the
 web unit keeps its guarantee. `make autocrawl-timer` prints the install steps.
 
+Two preconditions, both measured rather than assumed (the unit's header records
+the measurements):
+
+1. **The corpus must be writable by the service user.** On thinkcentre it is not:
+   the corpus is `alvaro`'s and the state database is `kindre`'s, so neither can
+   write both. A crawler that fetches and cannot save is worse than no crawler,
+   because the queue looks alive.
+2. **The host must be reachable by AO3.** thinkcentre is not — AO3's front end
+   answers it with a Cloudflare **525 SSL handshake failed**, consistently, while
+   other Cloudflare sites on the same host return 200 and `openssl s_client`
+   completes TLSv1.3. That is an IP-level refusal, not a sandbox and not the local
+   TLS stack.
+
+Neither is fatal to the design; both decide *where* the timer belongs. On a host
+that satisfies them, this command is the whole auto-crawler.
+
 A crawled work enters the **corpus** immediately. The tag graph the recommender
 scores against is built by `ingest`, so a new work starts influencing rankings at
 the next ingest — crawling faster than you re-index does not make the mirror more
