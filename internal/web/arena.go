@@ -964,7 +964,8 @@ func (d Deps) postJudge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := d.judge(ctx, session, choice); err != nil {
+	kind := arena.ParseKind(r.PostFormValue("kind"))
+	if err := d.judge(ctx, session, choice, kind); err != nil {
 		d.fail(w, r, http.StatusInternalServerError, err)
 		return
 	}
@@ -973,8 +974,15 @@ func (d Deps) postJudge(w http.ResponseWriter, r *http.Request) {
 	// failure to record: the comparison is already judged, so say so
 	// rather than re-rendering the form and inviting a second judgement.
 	back := "/arena"
+	if kind != arena.KindWork {
+		back += "?kind=" + string(kind)
+	}
 	if tag := r.PostFormValue("tag_id"); tag != "" {
-		back += "?tag_id=" + tag
+		sep := "?"
+		if strings.Contains(back, "?") {
+			sep = "&"
+		}
+		back += sep + "tag_id=" + tag
 	}
 	http.Redirect(w, r, back, http.StatusSeeOther)
 }
@@ -985,10 +993,16 @@ func (d Deps) postJudge(w http.ResponseWriter, r *http.Request) {
 // average per user and are correct to fold in one at a time. Ratings do
 // NOT update here -- those are period statistics, and updating them per
 // click is the mistake the paper specifically warns about.
-func (d Deps) judge(ctx context.Context, sessionKey, choice string) error {
+func (d Deps) judge(ctx context.Context, sessionKey, choice string, kind arena.EntityKind) error {
 	st := d.Engine.Store
-	if err := st.RecordJudgement(ctx, sessionKey, choice); err != nil {
+	if err := st.RecordJudgementKind(ctx, sessionKey, choice, kind); err != nil {
 		return err
+	}
+	// Tag learning happens only for work choices (the plan's D4): a tag-vs-tag
+	// vote feeding the same weights that select works would be circular. The
+	// API's JudgeKind has always had this rule.
+	if kind != arena.KindWork {
+		return nil
 	}
 	if err := st.BumpSession(ctx, sessionKey); err != nil {
 		return err
@@ -1000,20 +1014,13 @@ func (d Deps) judge(ctx context.Context, sessionKey, choice string) error {
 		return nil
 	}
 
-	comp, ok, err := st.LastJudgedInSession(ctx, sessionKey)
+	// Resolved BY KIND. LastJudgedInSession is work-only, so a non-work
+	// judgement resolved with it would pick up the last WORK comparison in the
+	// session and learn tag weights from a choice the reader never made -- and
+	// the failure is silent, because the shape of the row looks legitimate.
+	comp, ok, err := st.LastJudgedInSessionKind(ctx, sessionKey, kind)
 	if err != nil || !ok {
 		return err
-	}
-	if comp.Kind != arena.KindWork {
-		// Tag learning happens only for work choices (the plan's D4): a
-		// tag-vs-tag vote feeding the same weights that select works would be
-		// circular. The API's JudgeKind has always returned here; this path has
-		// no kind of its own yet, and LastJudgedInSession is WORK-ONLY, so a
-		// non-work presentation would otherwise resolve to the last WORK
-		// comparison in the session and teach tag weights from a judgement the
-		// reader never made. Guarding here means the web cannot inherit that
-		// bug on the day it gains a kind switcher.
-		return nil
 	}
 	winner, loser := comp.WorkA, comp.WorkB
 	if choice == "b" {
