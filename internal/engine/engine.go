@@ -71,6 +71,36 @@ type Engine struct {
 	// in meta.degraded[], so the absence is reported rather than inferred
 	// from a ranking that quietly lost a dimension.
 	Collab *collab.Index
+
+	// OwnerTaste is the owner cohort's signed tag vector: the global prior
+	// owner_taste scores with, for every reader rather than only for the
+	// owner. Nil means this deployment named no owner, which is the
+	// default and a supported state.
+	//
+	// Guarded by ownerMu for the same reason ArenaRatings is: the refresh
+	// loop (KINDRED_OWNER_SESSION deployments rebuild the vector on a
+	// ticker) replaces the map while requests are reading it, and an
+	// unsynchronised map read racing that assignment is a fatal runtime
+	// error rather than a race the detector merely flags. Use
+	// SetOwnerTaste and OwnerTasteSignal.
+	OwnerTaste map[int32]float64
+	ownerMu    sync.RWMutex
+}
+
+// SetOwnerTaste replaces the owner cohort's taste vector atomically with
+// respect to readers.
+func (e *Engine) SetOwnerTaste(weights map[int32]float64) {
+	e.ownerMu.Lock()
+	defer e.ownerMu.Unlock()
+	e.OwnerTaste = weights
+}
+
+// OwnerTasteSignal returns the owner cohort's vector for the signal to score
+// with. Nil means there is no owner, and the signal reports itself degraded.
+func (e *Engine) OwnerTasteSignal() map[int32]float64 {
+	e.ownerMu.RLock()
+	defer e.ownerMu.RUnlock()
+	return e.OwnerTaste
 }
 
 // SetArenaRatings replaces the arena's ratings atomically with respect to
@@ -131,6 +161,20 @@ type Request struct {
 	// Exclude drops the seeds themselves from the results: nobody wants to
 	// be recommended the work they seeded from.
 	Exclude bool
+
+	// NoOwnerTaste opts the ranking OUT of the deployment's owner-taste
+	// prior, and out of nothing else: it is the `?personal=0` escape hatch
+	// for a caller who wants the mirror's own opinion of a work rather than
+	// the owner cohort's opinion of it.
+	//
+	// It is an OPT-OUT rather than the plan's `Personal bool` because a
+	// bool's zero value decides what every caller who forgets the field
+	// gets, and a caller who forgets must get the ranking the site actually
+	// serves. With `Personal bool` the zero value would silently switch a
+	// dimension off for the CLI path, the e2e server, and every test that
+	// builds a Request literally — the exact "signal absent without saying
+	// so" failure this codebase has now found five times.
+	NoOwnerTaste bool
 
 	// PoolMode selects how candidates enter the pool.
 	PoolMode PoolMode
@@ -403,6 +447,19 @@ func DefaultTune() rank.Tune {
 			// with a handful of comparisons should nudge a ranking, not
 			// steer it. `kindred tune` raises it without a code change.
 			"peer_rating": 0.11,
+			// owner_taste is the owner cohort's taste as a global prior.
+			// It is deliberately the smallest weight here: it is one
+			// person's preferences applied to every other reader, so it
+			// must nudge rather than override the signals that describe
+			// the work and the reading evidence around it.
+			//
+			// A deployment with no owner configured pays nothing for this
+			// entry: the signal skips for every candidate, and a skipped
+			// signal contributes no term, so the surviving weights keep
+			// their ratios exactly and the ranking is identical to one
+			// compiled before this signal existed. That is why the weight
+			// does not need the `renormalise` treatment embedding gets.
+			"owner_taste": 0.06,
 		},
 	}
 }
@@ -542,7 +599,7 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	sigs, tune := e.signals(seeds, collabVotes, collabScale, tuneWeights, tuneName)
+	sigs, tune := e.signals(seeds, collabVotes, collabScale, tuneWeights, tuneName, !req.NoOwnerTaste)
 	ranked, meta, err := rank.Score(ctx, cands, seeds, sigs, tune, e)
 	if err != nil {
 		return nil, err
@@ -1140,7 +1197,7 @@ func filterSQL(f Filter, args *[]any) string {
 // this project has found repeatedly.
 //
 // `overrides` is nil when the request named no tune.
-func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, collabScale float64, overrides map[string]float64, tuneName string) ([]rank.Signal, rank.Tune) {
+func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, collabScale float64, overrides map[string]float64, tuneName string, personal bool) ([]rank.Signal, rank.Tune) {
 	tune := DefaultTune()
 	tune.Name = tuneName
 	if len(overrides) > 0 {
@@ -1199,6 +1256,36 @@ func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, 
 		Ratings: arenaRatings,
 		Median:  arenaMedian,
 	})
+
+	// owner_taste is the owner cohort's taste as a GLOBAL prior — the one
+	// signal here that is registered for every reader rather than for the
+	// reader who asked. It is the mechanism behind this deployment's whole
+	// request ("I want my taste to influence recommendations for all
+	// users"), and it nudges rather than overrides: its weight is small and
+	// explicit in the tune, so a reader's own signals still dominate.
+	//
+	// Registered UNCONDITIONALLY, for the same reason peer_rating is: with
+	// no owner configured it skips for every candidate and names itself in
+	// meta.degraded[], which is the difference between "this deployment has
+	// no owner" and "the owner signal is broken".
+	//
+	// Graph is only handed over when it is non-nil: assigning a typed nil
+	// *graph.CSR into the interface field would make it non-nil as an
+	// interface and the first Name(id) call would dereference it.
+	var ownerGraph signal.Graph
+	if e.Graph != nil {
+		ownerGraph = e.Graph
+	}
+	ownerWeights := e.OwnerTasteSignal()
+	if !personal {
+		// ?personal=0 asks for the ranking with NO personal prior applied.
+		// The vector is withheld rather than the signal dropped: the signal
+		// still registers, still skips, and still says so in
+		// meta.degraded[]. Dropping it would make a deliberate request and a
+		// broken installation indistinguishable in the response.
+		ownerWeights = nil
+	}
+	sigs = append(sigs, signal.OwnerTaste{Weights: ownerWeights, Graph: ownerGraph})
 
 	// collab is the mirror's own collaborative filtering: the 180,677
 	// bookmark rows from 6,261 real readers, ranked item-item.

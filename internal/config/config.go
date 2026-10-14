@@ -45,6 +45,23 @@ type Config struct {
 	// key=value: min_words, lang, not_updated_within_days, complete).
 	// A request that sets its own value for a key overrides that key only.
 	Standing *engine.Filter
+
+	// OwnerSession is the arena cookie value belonging to this deployment's
+	// owner (env KINDRED_OWNER_SESSION). It is a high-entropy secret, so it
+	// is env-only for the same reason StableSalt is: it decides whose taste
+	// is the site's prior, and that must leave a trace rather than be
+	// something any invocation can pass casually.
+	//
+	// EMPTY IS A SUPPORTED AND IMPORTANT VALUE: it means the deployment has
+	// no owner, so owner_taste skips (and says so in meta.degraded), and
+	// every vote keeps full influence on the shared ratings. That is the
+	// legacy behaviour, and it is the safe default for a fresh install.
+	OwnerSession string
+
+	// OwnerProfile is the profile name whose tag weights are the owner's
+	// taste (env KINDRED_OWNER_PROFILE, default "leather" — the profile
+	// built from the owner's imported calibre ratings).
+	OwnerProfile string
 }
 
 func env(key, def string) string {
@@ -88,6 +105,11 @@ func Load() *Config {
 		EmbedDim:   envInt("KINDRED_EMBED_DIM", 32),
 		KAnon:      envInt("KINDRED_K_ANON", 20),
 		StableSalt: os.Getenv("KINDRED_STABLE_SALT") == "1",
+		// No owner by default. Owner-weighted ranking is a configuration a
+		// deployment opts into by naming the session that belongs to the
+		// owner, not a behaviour it inherits silently.
+		OwnerSession: os.Getenv("KINDRED_OWNER_SESSION"),
+		OwnerProfile: env("KINDRED_OWNER_PROFILE", "leather"),
 	}
 	c.PublicAPI.Store(env("KINDRED_PUBLIC_API", "1") == "1")
 	if v := env("KINDRED_DEFAULT_BLOCKED_TAGS", ""); v != "" {

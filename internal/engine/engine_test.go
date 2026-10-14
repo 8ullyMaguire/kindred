@@ -166,7 +166,7 @@ func TestDefaultTuneIsUsable(t *testing.T) {
 
 	for _, name := range []string{
 		"tag_overlap", "neighbourhood", "quality", "recency",
-		"popularity", "embedding", "peer_rating",
+		"popularity", "embedding", "peer_rating", "owner_taste",
 	} {
 		w, ok := tune.Weights[name]
 		if !ok {

@@ -295,6 +295,12 @@ func (s *Server) parseRecommend(r *http.Request) (*engine.Request, error) {
 		N:           atoiDefault(q.Get("n"), 10),
 		PoolSize:    atoiDefault(q.Get("pool"), 0),
 		MaxPerGroup: atoiDefault(q.Get("max_per_group"), 0),
+		// personal=0 withholds the owner cohort's prior, so a caller can
+		// see the mirror's own opinion of a work rather than this
+		// deployment's opinion of it. Its default is ON, and the field is
+		// named for the opt-OUT so that a caller who omits the parameter
+		// gets the ranking the site actually serves.
+		NoOwnerTaste: q.Get("personal") == "0",
 	}
 
 	var seeds []string

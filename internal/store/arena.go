@@ -325,7 +325,7 @@ func (s *Store) RecordJudgement(ctx context.Context, sessionKey string, choice s
 		if err != nil {
 			return fmt.Errorf("get session owner_key: %w", err)
 		}
-		agreement, err := s.AgreementFor(ctx, ownerKey, s.ownerVector)
+		agreement, err := s.AgreementWithOwner(ctx, ownerKey)
 		if err != nil {
 			return fmt.Errorf("agreement compute: %w", err)
 		}
@@ -372,7 +372,7 @@ func (s *Store) RecordJudgement(ctx context.Context, sessionKey string, choice s
 		if err != nil {
 			return fmt.Errorf("get session owner_key: %w", err)
 		}
-		agreement, err := s.AgreementFor(ctx, ownerKey, s.ownerVector)
+		agreement, err := s.AgreementWithOwner(ctx, ownerKey)
 		if err != nil {
 			return fmt.Errorf("agreement compute: %w", err)
 		}

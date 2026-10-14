@@ -97,13 +97,24 @@ type Store struct {
 	Corpus *sql.DB // the mirror, read-only
 	Path   string
 
-	// agreementCacheMu guards the agreementCache map.
+	// agreementCacheMu guards agreementCache, ownerVector and ownerKey.
+	//
+	// It guards ownerVector and ownerKey as well because a refresh ticker
+	// swaps them while requests are judging, and assigning a map field is
+	// not atomic: an unsynchronised reader during a refresh is a
+	// concurrent map read and write, which is a fatal runtime error rather
+	// than a race the detector merely flags. Same reason Engine guards its
+	// ratings. Use SetOwnerVector to replace them and ownerState to read a
+	// consistent pair.
 	agreementCacheMu sync.Mutex
 	// agreementCache maps voterKey to cached agreement with the owner vector.
 	agreementCache map[string]agreementCacheEntry
 	// ownerVector is the owner's taste vector, built from profile tags and
 	// learned weights. Nil means owner features are disabled.
 	ownerVector map[int64]float64
+	// ownerKey is the arena owner key the configured owner session resolves
+	// to, when a deployment named one. Empty means no owner is configured.
+	ownerKey string
 }
 
 // Open opens kindred.db (creating it and its directory) and, if corpusPath

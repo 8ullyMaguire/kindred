@@ -17,8 +17,28 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
+	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
+
+// ownerVectorTagLimit bounds how many of the owner's learned arena weights
+// go into the owner vector.
+//
+// Bounded for the same reason the plan bounds the voter side: agreement is a
+// cosine, and a cosine over tens of thousands of near-zero weights is
+// dominated by the long tail rather than by what the owner actually
+// discriminates on. 200 is the limit the owner-weighted plan names for both
+// sides, so the two halves of the comparison stay symmetric.
+const ownerVectorTagLimit = 200
+
+// ownerVectorRefresh is how often the owner's vector is rebuilt from the
+// profile and the learned weights.
+//
+// Matched to the agreement cache's 10-minute TTL on purpose: a refresh is
+// what invalidates cached agreements, so an interval longer than the TTL
+// would leave a cached answer about the previous vector live for longer than
+// the cache is supposed to hold anything at all.
+const ownerVectorRefresh = 10 * time.Minute
 
 // runServe starts the read-only HTTP API.
 //
@@ -218,6 +238,118 @@ func runServe(ctx context.Context, args []string) error {
 		} else {
 			logger.Info("taste profiles enabled", "state_db", c.DB)
 		}
+	}
+
+	// The owner cohort, when a deployment names one.
+	//
+	// This is the mechanism behind the request the whole feature exists for
+	// ("I want my taste to influence recommendations for all users"), and
+	// with KINDRED_OWNER_SESSION unset it is correctly a no-op: the
+	// owner_taste signal stays registered, skips for every candidate, and
+	// names itself in meta.degraded[], so "no owner here" is a reported
+	// fact rather than an inference from a ranking that quietly lost a
+	// dimension.
+	//
+	// The vector is built ONCE and replaced on a ticker. Building it per
+	// request would put a profile read and an arena_user_tag_weights query
+	// on every ranking path, and building it once and never refreshing it
+	// would mean the owner's latest feedback never reaches a single reader
+	// — which for a feature whose entire purpose is "my taste, everywhere"
+	// is the same as not having it.
+	//
+	// A failure is logged and the previous vector (or none) is kept: a
+	// reader must not lose recommendations because the owner's profile
+	// could not be read.
+	if c.OwnerSession != "" && srv.Profiles != nil {
+		buildOwnerVector := func() error {
+			ownerKey, err := s.OwnerKey(ctx, c.OwnerSession)
+			if err != nil {
+				return fmt.Errorf("owner key: %w", err)
+			}
+			// A missing profile is NOT an error: a deployment can name an
+			// owner before that owner has imported anything, and the
+			// learned arena weights alone are a legitimate vector.
+			var profileTags map[int32]float64
+			p, err := srv.Profiles.Load(ctx, c.OwnerProfile)
+			switch {
+			case err == nil:
+				profileTags = p.Tags
+			case errors.Is(err, profile.ErrNotFound):
+				logger.Warn("owner profile not found; owner_taste scores on learned arena weights only",
+					"profile", c.OwnerProfile)
+			default:
+				return fmt.Errorf("load owner profile %q: %w", c.OwnerProfile, err)
+			}
+
+			learned, err := s.TagWeights(ctx, ownerKey, ownerVectorTagLimit)
+			if err != nil {
+				return fmt.Errorf("owner learned weights: %w", err)
+			}
+			learnedByTag := make(map[int64]float64, len(learned))
+			for _, tw := range learned {
+				learnedByTag[tw.TagID] = tw.Weight
+			}
+
+			vector := s.BuildOwnerVector(profileTags, learnedByTag)
+			// The store needs the vector AND the key: the key is what lets
+			// a judgement made by the owner's own session short-circuit to
+			// agreement 1.0 instead of measuring the owner against
+			// themself.
+			s.SetOwnerVector(ownerKey, vector)
+
+			// The signal wants int32 keys because every tag id in the
+			// corpus is int32 (the profile's map already is). A tag id that
+			// did not fit int32 could not have come from this mirror, so
+			// the conversion is a narrowing of a value that was widened by
+			// the weights table's INTEGER column, not of one that could
+			// overflow.
+			names := make(map[int32]float64, len(vector))
+			for id, w := range vector {
+				names[int32(id)] = w
+			}
+			eng.SetOwnerTaste(names)
+
+			logger.Info("owner cohort loaded",
+				"profile", c.OwnerProfile,
+				"owner_key_prefix", ownerKey[:min(8, len(ownerKey))],
+				"profile_tags", len(profileTags),
+				"learned_tags", len(learned),
+				"vector_tags", len(vector))
+			return nil
+		}
+
+		if err := buildOwnerVector(); err != nil {
+			logger.Warn("owner cohort unavailable; owner_taste will report degraded",
+				"err", err)
+		}
+
+		// Ten minutes, the same interval the agreement cache's TTL uses, so
+		// a refresh cannot leave a cached agreement answering a question
+		// about the previous vector for longer than one TTL.
+		stopOwner := make(chan struct{})
+		defer close(stopOwner)
+		go func() {
+			t := time.NewTicker(ownerVectorRefresh)
+			defer t.Stop()
+			for {
+				select {
+				case <-stopOwner:
+					return
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if err := buildOwnerVector(); err != nil {
+						logger.Warn("owner cohort refresh failed; keeping the previous vector",
+							"err", err)
+					}
+				}
+			}
+		}()
+	} else if c.OwnerSession != "" {
+		logger.Warn("KINDRED_OWNER_SESSION is set but taste profiles are unavailable; " +
+			"owner_taste will report degraded")
+	} else {
+		logger.Info("no owner configured; owner_taste will report degraded (set KINDRED_OWNER_SESSION)")
 	}
 
 	// Timeouts. ReadHeaderTimeout is the one that matters: without it a

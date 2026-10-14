@@ -101,8 +101,13 @@ func Agreement(a, b map[int64]float64) float64 {
 }
 
 // AgreementFor returns the voter's taste agreement with the given owner
-// vector, from the voter's arena_user_tag_weights rows. The owner's own key
-// short-circuits to exactly 1.0 without a query.
+// vector, from the voter's arena_user_tag_weights rows.
+//
+// The owner identity is NOT here: this function cannot tell whether the
+// voter is the owner, because it is handed a vector rather than an owner
+// key. The short-circuit for the owner's own votes lives in
+// AgreementWithOwner, which is what callers should use; this stays
+// exported because it is the pure half and the tests drive it directly.
 //
 // A voter with fewer than minEvidence total observations (n summed) has no
 // taste worth trusting yet and scores 0 — the conservative default: the
@@ -206,4 +211,84 @@ func (s *Store) FlushAgreementCache() {
 	s.agreementCacheMu.Lock()
 	s.agreementCache = make(map[string]agreementCacheEntry)
 	s.agreementCacheMu.Unlock()
+}
+
+// ------------------------------------------------------------------- owner
+
+// SetOwnerVector installs the owner's taste vector together with the owner
+// key it belongs to, and flushes the agreement cache.
+//
+// One call for two fields because they are one fact. The cache is keyed by
+// voter alone, so a vector that is replaced without a flush leaves every
+// cached agreement answering a question about the *previous* vector; making
+// the flush the caller's to remember is how that goes wrong. And a vector
+// with no key is worse than no vector: agreement would be computed against
+// an owner that no session can be, so the owner's own votes would come back
+// as a number near but not equal to 1 — a measurement claiming the owner
+// disagrees slightly with themself.
+//
+// Passing an empty key disables owner features, which is the default
+// deployment state. Callers should pass a nil vector with it.
+func (s *Store) SetOwnerVector(ownerKey string, v map[int64]float64) {
+	s.agreementCacheMu.Lock()
+	s.ownerKey = ownerKey
+	s.ownerVector = v
+	s.agreementCache = make(map[string]agreementCacheEntry)
+	s.agreementCacheMu.Unlock()
+}
+
+// ownerState returns the owner key and vector as one consistent pair.
+//
+// Read under the mutex because a refresh ticker replaces both while
+// requests are judging, and an unsynchronised map read racing that
+// assignment is a fatal runtime error rather than a detector warning.
+func (s *Store) ownerState() (string, map[int64]float64) {
+	s.agreementCacheMu.Lock()
+	defer s.agreementCacheMu.Unlock()
+	return s.ownerKey, s.ownerVector
+}
+
+// AgreementWithOwner returns a voter's taste agreement with THIS
+// deployment's owner, resolving the owner from the store's own state.
+//
+// This is the producer `RecordJudgement` needs, and it is the seam the
+// feature shipped without: `BuildOwnerVector` had no caller, so
+// `ownerVector` was always nil and every judgement recorded the same
+// constant 0 into a column nothing read. A feature that computes a
+// constant is not an unverified feature, it is an inert one.
+//
+// Three outcomes, and the first is the one that would have been a
+// regression:
+//
+//  1. **No owner configured → 1.0, not 0.** Agreement is the influence
+//     weight the batch applies to a comparison, so a deployment with no
+//     owner must keep every vote at full influence. That is exactly the
+//     behaviour that shipped before this feature existed, and 0 here would
+//     silently exclude every comparison in the estate from the global
+//     ratings the moment the weighting step lands.
+//  2. **The voter is the owner → exactly 1.0, without a query.** By
+//     definition, not by measurement: the owner's taste agrees with itself.
+//     Computing it would compare the owner's learned weights against a
+//     blend of those same weights and return something like 0.87, which
+//     reads as "the owner disagrees with themself a bit".
+//  3. **Otherwise → the cosine from AgreementFor**, cached for the TTL.
+func (s *Store) AgreementWithOwner(ctx context.Context, voterKey string) (float64, error) {
+	ownerKey, ownerVector := s.ownerState()
+	if ownerKey == "" {
+		// Owner features are off. Full influence, which is the legacy
+		// behaviour and the safe one.
+		return 1.0, nil
+	}
+	if voterKey == ownerKey {
+		return 1.0, nil
+	}
+	if len(ownerVector) == 0 {
+		// An owner is configured but has no taste yet: no profile, or no
+		// learned weights. 0 here is the conservative answer and it is
+		// deliberate — but note it is the answer only because an owner IS
+		// configured, so the deployment has asked to be weighted by a
+		// taste that does not exist yet.
+		return 0, nil
+	}
+	return s.AgreementFor(ctx, voterKey, ownerVector)
 }
