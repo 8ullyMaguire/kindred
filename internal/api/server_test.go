@@ -38,8 +38,16 @@ import (
 // is derived from the real mirror's CREATE TABLE.
 const corpusSchema = testcorpus.Schema
 
-// newTestServer builds a server over a small corpus: 4 works sharing tags,
-// which is enough for a pool, a ranking and a diversified list.
+func newTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	ts, _ := newTestServerFull(t)
+	return ts
+}
+
+// newTestServerFull is newTestServer plus the store handle, for tests that
+// have to read or write rows the HTTP surface does not expose. The arena's
+// agreement column is one: what the batch does depends on it and no
+// endpoint sets it, so a test of the weighted batch has to reach the table.
 //
 // The returned client HAS a cookie jar, and that is load-bearing rather than
 // incidental. httptest.NewServer's own ts.Client() has Jar == nil, so the
@@ -50,7 +58,13 @@ const corpusSchema = testcorpus.Schema
 // in the table — paired with a page that lists nothing, which reads as a store
 // bug and is not one. It is the fixture, not the handler: a real browser sends
 // the cookie, so production is correct and needs no change here.
-func newTestServer(t *testing.T) *httptest.Server {
+//
+// The pool is what a session needs: a corpus with ONE work cannot form a
+// pair, so GET /arena serves its page and mints no session, and a later
+// judgement against that session 500s with "get session owner_key: sql: no
+// rows in result set". That reads as a broken session table and is a fixture
+// with nothing to compare.
+func newTestServerFull(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.db")
@@ -171,7 +185,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}
 	ts := httptest.NewServer(srv.Routes())
 	t.Cleanup(ts.Close)
-	return ts
+	return ts, s
 }
 
 func get(t *testing.T, ts *httptest.Server, path string) (int, map[string]any) {

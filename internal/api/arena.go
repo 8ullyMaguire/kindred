@@ -354,6 +354,29 @@ func (a *ArenaService) tagStats(ctx context.Context) (map[int64]int, int, error)
 	return counts, total, nil
 }
 
+// agreeFloor is the influence below which a comparison is dropped from the
+// rating period entirely, rather than counted at a small weight. It sits on
+// the INFLUENCE (agreement squared), so it excludes voters whose taste
+// cosine is below about 0.22.
+const agreeFloor = 0.05
+
+// influenceOf turns a voter's taste agreement with the owner into that
+// comparison's influence on the ratings, per the owner-weighted plan:
+// similar taste counts in full, mild disagreement is dampened quadratically,
+// opposite taste counts for nothing (the floor then drops it).
+//
+// It is a package-level function rather than a closure inside RunBatch so
+// that the curve is testable: it is a hand-chosen constant policy, and the
+// only thing standing between "a deliberate choice" and "a number nobody
+// remembers changing" is a test that pins the shape.
+func influenceOf(agree float64) float64 {
+	if agree <= 0 {
+		// A cosine of zero or below is no agreement at all.
+		return 0
+	}
+	return agree * agree
+}
+
 // RunBatch is the periodic rating update. It is the "nightly" in a system
 // that has no night: every comparison judged since the last run is treated
 // as ONE rating period, per Glickman's batch step.
@@ -410,16 +433,45 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 		preRatings[id] = row.Rating
 	}
 
+	// Influence per the owner-weighted plan: similar taste counts in
+	// full, mild disagreement is dampened quadratically, opposite taste
+	// counts for nothing.
+	//
+	//	agree  0.00  0.22  0.50  0.71  1.00
+	//	w      0.00  0.05  0.25  0.50  1.00
+	//
+	// The floor is what makes "opposite taste" mean MINIMAL change rather
+	// than a change in the other direction. Below it the outcome is
+	// dropped from the period entirely.
+	//
+	// Dropping it, not weighting it zero: Weight 0 means UNSET in the
+	// rating maths (see arena.weightOf), so a zero-weight opponent would
+	// be counted at FULL influence -- exactly backwards. That is why the
+	// skip below is a `continue` and not a clamp.
 	outcomes := make([]arena.PeriodOutcome, 0, len(judged)*2)
 	for _, j := range judged {
+		w := influenceOf(j.Agreement)
+		if w < agreeFloor {
+			continue
+		}
 		outcomes = append(outcomes,
-			arena.PeriodOutcome{Work: j.Winner, Score: j.Score, OppWork: j.Loser})
+			arena.PeriodOutcome{Work: j.Winner, Score: j.Score, OppWork: j.Loser, Weight: w})
 		// A draw is symmetric, so recording it twice would double-count.
 		// The complement is only recorded for a decisive result.
 		if j.Score != arena.Draw {
 			outcomes = append(outcomes,
-				arena.PeriodOutcome{Work: j.Loser, Score: 1.0 - j.Score, OppWork: j.Winner})
+				arena.PeriodOutcome{Work: j.Loser, Score: 1.0 - j.Score, OppWork: j.Winner, Weight: w})
 		}
+	}
+	if len(outcomes) == 0 {
+		// Every comparison in the period came from a voter whose taste
+		// disagrees with the owner's. The batch has nothing to learn
+		// from, and saying so is better than running an empty period:
+		// an empty period would advance the watermark and the period
+		// counter, permanently discarding these rows' influence should
+		// the owner's vector later change.
+		res.Skipped = "no influential comparisons"
+		return res, nil
 	}
 
 	updated := arena.Apply(preRatings, outcomes)

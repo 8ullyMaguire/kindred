@@ -32,6 +32,18 @@ type PeriodOutcome struct {
 	// opponent only in the degenerate self-comparison, which the store's
 	// CHECK constraint prevents.
 	OppWork int64
+	// Weight is the VOTER's taste influence on this result, 0..1. Zero
+	// means "unset", and OpponentsFor passes it through as 1 -- see
+	// weightOf for why the zero cannot mean silence. A batch that wants
+	// ZERO influence must exclude the outcome before building the
+	// opponent list, which is what RunBatch does with its agreement
+	// floor.
+	//
+	// It rides on the outcome rather than being applied to the finished
+	// ratings because the weight belongs to the comparison: a batch
+	// whose outcomes came from different voters has no single weight, and
+	// the plan's "one math path" only works if each result carries its own.
+	Weight float64
 }
 
 // OpponentsFor groups a period's outcomes by work and builds the opponent
@@ -64,12 +76,16 @@ func OpponentsFor(outcomes []PeriodOutcome, pre map[int64]Rating) map[int64][]Op
 		if !ok {
 			them = Initial()
 		}
-		// Record the result for BOTH sides, because both worked.
+		// Record the result for BOTH sides, because both worked. Both
+		// sides get the SAME weight: the voter's influence is on the
+		// result, not on one of the two players, and giving the winner
+		// full influence while the loser got less would move the pair
+		// by different amounts.
 		ops[o.Work] = append(ops[o.Work], Opponent{
-			Mu: them.Mu, Phi: them.Phi, Score: o.Score,
+			Mu: them.Mu, Phi: them.Phi, Score: o.Score, Weight: o.Weight,
 		})
 		ops[o.OppWork] = append(ops[o.OppWork], Opponent{
-			Mu: me.Mu, Phi: me.Phi, Score: oppScore,
+			Mu: me.Mu, Phi: me.Phi, Score: oppScore, Weight: o.Weight,
 		})
 	}
 	return ops

@@ -488,7 +488,7 @@ func (s *Store) JudgedAfter(ctx context.Context, since time.Time, limit int) ([]
 		limit = 20000
 	}
 	rows, err := s.DB.QueryContext(ctx,
-		`SELECT work_a, work_b, choice FROM arena_comparisons
+		`SELECT work_a, work_b, choice, agreement FROM arena_comparisons
 		 WHERE judged_at IS NOT NULL AND judged_at > ?
 		 ORDER BY id LIMIT ?`, since.UTC().Format("2006-01-02 15:04:05"), limit)
 	if err != nil {
@@ -500,7 +500,7 @@ func (s *Store) JudgedAfter(ctx context.Context, since time.Time, limit int) ([]
 	for rows.Next() {
 		var j JudgedComparison
 		var choice string
-		if err := rows.Scan(&j.WorkA, &j.WorkB, &choice); err != nil {
+		if err := rows.Scan(&j.WorkA, &j.WorkB, &choice, &j.Agreement); err != nil {
 			return nil, fmt.Errorf("judged scan: %w", err)
 		}
 		switch choice {
@@ -530,6 +530,12 @@ type JudgedComparison struct {
 	Winner       int64
 	Loser        int64
 	Score        float64
+	// Agreement is the voter's taste agreement with the owner, recorded at
+	// judgement time (arena_comparisons.agreement, REAL NOT NULL DEFAULT
+	// 1.0). The batch turns it into the voter's influence on the ratings;
+	// rows judged before the column existed carry the default and keep the
+	// full influence they were counted at.
+	Agreement float64
 }
 
 // ------------------------------------------------------------- leaderboard

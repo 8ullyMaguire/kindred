@@ -532,3 +532,79 @@ wrong reason. The tell is always the same: ask what the test would do if the
 code it guards were deleted, and actually delete it and run it.
 
 Commit `263174a`.
+
+## 2026-10-14 — the agreement finally moves something (Step C)
+
+Step B recorded `arena_comparisons.agreement` at judgement time and Step D
+produced the owner vector. Neither changed a rating: the batch read the
+comparisons and weighted them all equally, so a voter with diametrically
+opposite taste moved the leaderboard exactly as far as the owner would.
+
+Now `PeriodOutcome` carries the voter's influence and the two formulas that
+consume it are weighted. **No second math path**: `ApplyWeighted` or a
+parallel `varianceWeighted` would have been two copies of Glicko-2 to keep in
+step, and the published form has already been wrong once in this repo (the
+pre-2012 variance, the step-7 draft). The weighting is five terms inside the
+functions that already existed.
+
+### Zero means unset, and that is the whole regression contract
+
+The `Weight` field cannot mean "no influence", because **every caller that
+predates weighting leaves it at its zero value** — the pairing code, the
+resume tests, `Apply` from a fixture. `weightOf` maps 0 to 1, and that one
+line is why the existing suite was green on the first run after the change.
+
+The consequence is the sharp edge: an outcome that should count for NOTHING
+has to be *left out*, not passed down as 0, or it arrives at full influence —
+backwards. `RunBatch` skips those comparisons rather than clamping them, and
+the test that pins it is at the endpoint, because that is where the mistake
+would be made.
+
+### The weight had to go in two places, and the obvious test could not tell
+
+`Delta` is **invariant** under a uniform weight: v is a reciprocal, so w
+cancels between the variance and the sum, and a test that measured a move
+through `Delta` would report "no effect" while the change was working.
+(Measured, not reasoned: `delta ratio = 1.000000` for w = 1, 0.5, 0.25, while
+the actual rating move went 102 → 65 → 38.)
+
+The move arrives through the **step-7 update**, `mu' = mu + phi'^2 · Σ w g (s−E)`:
+the weight shrinks the evidence and grows v, and phi'² carries the second
+effect. So the two places are pinned *separately*, by their exact scaling
+laws — `residualSum(w)/residualSum(1) = w` and `variance(w)/variance(1) = 1/w` —
+because leaving the weight out of one of them is invisible to any assertion
+of the form "the result differs".
+
+### Plan-vs-reality, as the plan asked to have recorded
+
+- Item 6 of the plan's Step C said `LearnTags` and the per-voter tag weights
+  were **not** to be weighted, and that the earlier draft had said otherwise.
+  Confirmed against the code: `arena_user_tag_weights` is per voter, there is
+  no global tag-weight store, and per D1 every voter keeps full influence on
+  their own profile. `LearnTags` and `BuildTagSignals` were not touched.
+- The plan normalised 0→1 in `OpponentsFor` *and* described the same rule for
+  `Opponent.Weight`. That is the rule in two places, so it lives in `weightOf`
+  alone and `OpponentsFor` passes the value through.
+- The influence curve moved from a closure inside `RunBatch` to a
+  package-level `influenceOf`: it is a hand-chosen policy, and a policy inside
+  a function body cannot be pinned, so "dampened quadratically" was a sentence
+  in a comment that any edit could contradict while every test stayed green.
+- The plan's `TestApplyOppositeTasteMovesNothing` is asserted at the endpoint
+  instead. The floor and the exclusion live in `RunBatch`; an arena-level
+  version would have tested the test's own fixture filtering.
+- The plan's skip string had a typo ("no influencial comparisons"). Fixed,
+  and it is asserted by a test, so it is now a contract rather than a string.
+
+### Two things found on the way
+
+`arena_ratings` was **declared twice in the schema**, identically, one copy
+reformatted. `CREATE TABLE IF NOT EXISTS` means the second ran, matched, and
+reported success: a duplicate that cannot fail, only drift. Now declared once,
+with a test that scans the schema for any object declared more than once —
+verified by reintroducing the duplicate and watching it fail.
+
+`internal/store/{arena,store}.go.bak` were sitting untracked next to their
+originals: stale copies of the two largest files in the package, reachable in
+git history, and one edit away from being believed. Deleted.
+
+Commit `5eb30c1`.

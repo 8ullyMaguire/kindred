@@ -443,19 +443,15 @@ CREATE TABLE IF NOT EXISTS arena_entity_history (
 );
 
 -- Current Glicko-2 rating per work. One row per work, updated in batch.
--- Kept as a view/compat layer; all new code should use arena_entities.
-CREATE TABLE IF NOT EXISTS arena_ratings (
-    work_id     INTEGER PRIMARY KEY,
-    mu          REAL NOT NULL DEFAULT 1500.0,
-    phi         REAL NOT NULL DEFAULT 350.0,
-    sigma       REAL NOT NULL DEFAULT 0.06,
-    comparisons INTEGER NOT NULL DEFAULT 0,
-    wins        INTEGER NOT NULL DEFAULT 0,
-    losses      INTEGER NOT NULL DEFAULT 0,
-    draws       INTEGER NOT NULL DEFAULT 0,
-    period      INTEGER NOT NULL DEFAULT 0,
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
+-- Kept as a compat layer; new code should use arena_entities.
+--
+-- Declared ONCE. It was declared twice here, in identical form, and the
+-- duplicate was invisible because the statement is CREATE TABLE IF NOT
+-- EXISTS: the second one runs, does nothing, and reports success. Two
+-- copies that can drift are worse than one, because the next edit lands on
+-- whichever copy the editor found first and the other keeps describing the
+-- old table.
+--
 -- phi (the rating deviation) is the confidence and is what stops a single
 -- comparison from creating a celebrity.
 CREATE TABLE IF NOT EXISTS arena_ratings (

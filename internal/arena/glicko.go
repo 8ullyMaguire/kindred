@@ -95,10 +95,23 @@ const (
 // residual this player's result against them produced. Volatility is
 // deliberately absent -- the paper states the opponents' volatilities are
 // not relevant in the calculations.
+//
+// Weight is the VOTER's taste influence on this result, 0..1, and it is
+// carried by the opponent rather than by the player because a result
+// belongs to the voter who produced it: the same number has to reach both
+// sides of the comparison or the two works would move by different
+// amounts and the pair's symmetry would be lost.
+//
+// Zero means UNSET, not "no influence" (see weightOf). A caller that
+// wants no influence must drop the opponent before building the list --
+// RunBatch does exactly that -- because an Opponent with Weight 0 and one
+// that was never weighted have to behave identically for every existing
+// caller and test to keep producing the numbers it produced before.
 type Opponent struct {
-	Mu    float64
-	Phi   float64
-	Score float64
+	Mu     float64
+	Phi    float64
+	Score  float64
+	Weight float64
 }
 
 // Rating is a Glicko-2 rating on the Glicko scale.
@@ -111,6 +124,21 @@ type Rating struct {
 // Initial is the rating of a work nobody has compared.
 func Initial() Rating {
 	return Rating{Mu: MU_INIT, Phi: PHI_INIT, Sigma: SIGMA_INIT}
+}
+
+// weightOf reads an opponent's influence, mapping the UNSET zero to full
+// influence.
+//
+// This is the whole regression contract of weighted ratings in one line:
+// every call site that predates the weighting builds its opponents with
+// the struct's zero Weight, so every one of them keeps the exact numbers
+// it had before. It is also why "weight 0" cannot mean silence -- a
+// caller asking for silence has to leave the opponent out.
+func weightOf(op Opponent) float64 {
+	if op.Weight <= 0 {
+		return 1
+	}
+	return op.Weight
 }
 
 // g is g(phi) = 1/sqrt(1 + 3 phi^2/pi^2), phi on the Glicko-2 scale.
@@ -147,13 +175,18 @@ func ExpectedWrong(mu, muJ, phiJ float64) float64 {
 	return 1.0 / (1.0 + math.Pow(10, -g(reducePhi(phiJ))*(mu-muJ)/SCALE)/400)
 }
 
-// residualSum is the evidence in the period: sum g(phi_j)(s_j - E). Both
+// residualSum is the evidence in the period: sum w_j g(phi_j)(s_j - E). Both
 // the variance and the rating update are functions of it (the former
 // with the E(1-E) weights).
+//
+// w_j is the voter's influence. Folded in here rather than applied to the
+// finished sum: the sum is over results, and each result carries its own
+// voter, so a total scaled afterwards would be saying every voter's
+// evidence is worth the same.
 func residualSum(mu float64, ops []Opponent) float64 {
 	sum := 0.0
 	for _, o := range ops {
-		sum += g(reducePhi(o.Phi)) * (o.Score - Expected(mu, o.Mu, o.Phi))
+		sum += weightOf(o) * g(reducePhi(o.Phi)) * (o.Score - Expected(mu, o.Mu, o.Phi))
 	}
 	return sum
 }
@@ -161,16 +194,22 @@ func residualSum(mu float64, ops []Opponent) float64 {
 // variance is step 3, the PUBLISHED form: each opponent is weighted by
 // how decisive the game was.
 //
-//	v = [sum g(phi_j)^2 E(1-E)]^-1
+//	v = [sum w_j g(phi_j)^2 E(1-E)]^-1
 //
 // The pre-2012 draft used 1/(1 + sum g(phi_j)^2), which weights an
 // expected result the same as an upset, and is what the reference example
 // rejects: 0.2921 against the paper's 1.7785.
+//
+// w_j is the voter's influence, and it appears in the DENOMINATOR's sum,
+// which is the direction that is easy to get backwards: more weight means
+// more evidence, more evidence means a smaller v, and a smaller v means
+// the rating moves LESS for the same delta. Weighting the delta alone
+// would move a low-influence comparison further, not less far.
 func variance(mu float64, ops []Opponent) float64 {
 	sum := 0.0
 	for _, o := range ops {
 		e := Expected(mu, o.Mu, o.Phi)
-		sum += g(reducePhi(o.Phi)) * g(reducePhi(o.Phi)) * e * (1.0 - e)
+		sum += weightOf(o) * g(reducePhi(o.Phi)) * g(reducePhi(o.Phi)) * e * (1.0 - e)
 	}
 	if sum == 0 {
 		// Every comparison was exactly 50/50 expected AND the opponent had
@@ -184,7 +223,12 @@ func variance(mu float64, ops []Opponent) float64 {
 }
 
 // Delta is step 4, exposed for tests and for explaining a rating move.
-// delta = v * sum g(phi_j)(s_j - E).
+// delta = v * sum w_j g(phi_j)(s_j - E).
+//
+// It needs no weight term of its own: v and the residual sum both carry
+// them, and the plan's note that this function "computes v internally" is
+// the reason to leave it alone -- a third copy of the weighting rule is a
+// third place for it to disagree.
 func Delta(mu float64, ops []Opponent) float64 {
 	return variance(mu, ops) * residualSum(mu, ops)
 }

@@ -195,6 +195,13 @@ Commit B: `arena: record voter taste agreement on every judgement`.
 
 ## Step C — agreement-weighted batch (the literal "opposite taste → minimal change")
 
+**LANDED** 2026-10-14. Deviations from the text below, all recorded in
+DECISIONS: 0→1 normalisation lives only in `weightOf` (not in `OpponentsFor`
+too); the influence curve is a package-level `influenceOf` so it can be
+pinned; the floor is asserted at the endpoint rather than as an arena-level
+test of the test's own fixture filtering. `LearnTags`/`BuildTagSignals` were
+not touched, as item 6 requires.
+
 One math path, weights folded into the existing functions — no `ApplyWeighted`
 clone, no parallel code:
 
