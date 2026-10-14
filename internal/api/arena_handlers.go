@@ -139,7 +139,15 @@ func (s *Server) handleArenaJudge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.arena().Judge(r.Context(), session, body.Choice); err != nil {
+	// Which arena the choice belongs to. Absent means works; an unknown kind is
+	// a 400 rather than a fallback, because judging a tag pair in the work arena
+	// records a choice nobody can see.
+	kind, kerr := ArenaKind(r)
+	if kerr != nil {
+		writeErr(w, http.StatusBadRequest, kerr)
+		return
+	}
+	if err := s.arena().JudgeKind(r.Context(), session, body.Choice, kind); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

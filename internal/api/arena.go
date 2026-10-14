@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
+	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
 
@@ -102,9 +103,30 @@ type WorkBrief struct {
 }
 
 // PairResult is a presented pair plus the context needed to render it.
+// EntityBrief is one side of a comparison in an arena that is not about works.
+//
+// Two fields rather than one shape for both: an entity is not a work with an
+// empty title, and a page that renders a tag's name in a work's card is a page
+// that lies about what it is showing.
+type EntityBrief struct {
+	ID     int64
+	Name   string
+	Kind   arena.EntityKind
+	Rating arena.Rating
+	Rated  bool
+	Counts int
+}
+
 type PairResult struct {
 	A, B     WorkBrief
 	Strategy arena.Strategy
+	// Kind is the arena this pair belongs to. Works is what an unset kind
+	// has always meant, so a caller that predates kinds sees the work arena.
+	Kind arena.EntityKind
+	// EntityA/EntityB carry the two sides when Kind is not works, leaving the
+	// work briefs zero. Which pair of fields is populated says what the pair
+	// is; no field ever holds an entity dressed as a work.
+	EntityA, EntityB EntityBrief
 	// ComparisonID identifies the presentation, so a judgement can be
 	// attributed to it. The row already exists at this point -- fatigue is
 	// recorded at PRESENTATION.
@@ -121,7 +143,40 @@ type PairResult struct {
 // returned to the caller, so a client that crashes mid-render still
 // prevents the same pair coming back. Writing it after would reintroduce
 // the repeat-pair bug the whole design is built to avoid.
+// ArenaKind resolves the request's arena kind.
+//
+// An absent parameter means works: that is what every existing caller, bookmark
+// and curl invocation asks for, and it is what the arena has always been. A
+// parameter that is present but unknown is an ERROR rather than a silent
+// fallback, because "you asked for the tag arena and I showed you works" is a
+// wrong answer that looks like a right one.
+func ArenaKind(r *http.Request) (arena.EntityKind, error) {
+	raw := r.URL.Query().Get("kind")
+	if raw == "" {
+		return arena.KindWork, nil
+	}
+	k := arena.EntityKind(raw)
+	if !k.Valid() {
+		return "", fmt.Errorf("unknown arena kind %q (want one of %v)", raw, arena.Kinds)
+	}
+	return k, nil
+}
+
+// entityCandidateTTL is how long a materialised candidate set is trusted.
+//
+// A day: the corpus grows by a crawl, not by the second, and the set is the head
+// of a distribution that does not reorder quickly. Set through the same kind of
+// knob as CandidatePool so a test can force a reload.
+var entityCandidateTTL = 24 * time.Hour
+
 func (a *ArenaService) Pair(ctx context.Context, w http.ResponseWriter, r *http.Request, tagID int64) (PairResult, error) {
+	kind, err := ArenaKind(r)
+	if err != nil {
+		return PairResult{}, err
+	}
+	if kind != arena.KindWork {
+		return a.pairEntities(ctx, w, r, kind)
+	}
 	sessionKey, ownerKey, err := a.SessionKey(w, r)
 	if err != nil {
 		return PairResult{}, err
@@ -137,7 +192,7 @@ func (a *ArenaService) Pair(ctx context.Context, w http.ResponseWriter, r *http.
 		if err == nil {
 			return PairResult{
 				A: works[0], B: works[1], Strategy: arena.Strategy(c.Strategy),
-				ComparisonID: c.ID, Resumed: true,
+				Kind: arena.KindWork, ComparisonID: c.ID, Resumed: true,
 			}, nil
 		}
 		// The works vanished from the corpus under us. Fall through and
@@ -202,7 +257,8 @@ func (a *ArenaService) Pair(ctx context.Context, w http.ResponseWriter, r *http.
 		return PairResult{}, err
 	}
 	return PairResult{
-		A: briefs[0], B: briefs[1], Strategy: pair.Strategy, ComparisonID: id,
+		A: briefs[0], B: briefs[1], Strategy: pair.Strategy, Kind: arena.KindWork,
+		ComparisonID: id,
 	}, nil
 }
 
@@ -214,8 +270,21 @@ func (a *ArenaService) Pair(ctx context.Context, w http.ResponseWriter, r *http.
 // Glicko rating is a period statistic and updating it per click is the
 // documented mistake.
 func (a *ArenaService) Judge(ctx context.Context, sessionKey, choice string) error {
-	if err := a.Store.RecordJudgement(ctx, sessionKey, choice); err != nil {
+	return a.JudgeKind(ctx, sessionKey, choice, arena.KindWork)
+}
+
+// JudgeKind records one choice in one arena.
+//
+// Tag learning happens only for works. A tag-vs-tag vote feeding the same
+// weights that select works would be circular -- the plan's D4 -- and ratings do
+// not move here at all: they are a period statistic, and updating one per click
+// is the documented mistake this service already avoids for works.
+func (a *ArenaService) JudgeKind(ctx context.Context, sessionKey, choice string, kind arena.EntityKind) error {
+	if err := a.Store.RecordJudgementKind(ctx, sessionKey, choice, kind); err != nil {
 		return err
+	}
+	if kind != arena.KindWork {
+		return nil
 	}
 	if choice == "neither" {
 		// A draw is a real judgement -- "these are equally uninteresting"
@@ -411,6 +480,32 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 		res.Skipped = "no new comparisons"
 		return res, nil
 	}
+
+	// Only works are rated below. This batch writes its final statements
+	// directly on a transaction against arena_ratings, and an entity id is a
+	// DIFFERENT id space: rating a tag vote as a work would move some work's
+	// rating from a comparison of two tags, which is a wrong answer that looks
+	// like a working one. The entity comparisons are counted and named, so the
+	// state is visible instead of silently dropped, and the watermark is
+	// deliberately NOT advanced past them -- advancing it would discard their
+	// influence permanently, which is the same reasoning that keeps an empty
+	// period from running.
+	//
+	// The per-kind batch is the next step (the plan's E4).
+	workRows := make([]store.JudgedComparison, 0, len(judged))
+	pending := map[arena.EntityKind]int{}
+	for _, j := range judged {
+		if j.Kind == arena.KindWork {
+			workRows = append(workRows, j)
+			continue
+		}
+		pending[j.Kind]++
+	}
+	if len(workRows) == 0 {
+		res.Skipped = fmt.Sprintf("no work comparisons; %d entity comparisons await the per-kind batch", len(judged))
+		return res, nil
+	}
+	judged = workRows
 
 	// Collect every work involved, then take ONE pre-period snapshot. This
 	// is what makes the batch order-independent.
@@ -614,4 +709,144 @@ func sortedTagIDs(m map[int64]float64) []int64 {
 		out = append(out, id)
 	}
 	return sortedIDs(out)
+}
+
+// pairEntities presents a comparison between two entities of a kind that is not
+// works.
+func (a *ArenaService) pairEntities(ctx context.Context, w http.ResponseWriter, r *http.Request, kind arena.EntityKind) (PairResult, error) {
+	sessionKey, ownerKey, err := a.SessionKey(w, r)
+	if err != nil {
+		return PairResult{}, err
+	}
+
+	// Resume, per kind: a reload must not reshuffle, and it must not resume
+	// the other arena's pair either.
+	if c, ok, err := a.Store.UnjudgedInSessionKind(ctx, sessionKey, kind); err != nil {
+		return PairResult{}, err
+	} else if ok {
+		if res, err := a.entityPairResult(ctx, kind, c.WorkA, c.WorkB); err == nil {
+			res.ComparisonID, res.Resumed, res.Strategy = c.ID, true, arena.Strategy(c.Strategy)
+			return res, nil
+		}
+		// Both entities lost their names under us -- a re-crawl can drop a
+		// candidate -- so present a fresh pair rather than wedge the session
+		// on a row nothing can render.
+	}
+
+	pool := a.CandidatePool
+	if pool <= 0 {
+		pool = 300
+	}
+	// The candidate set lives on the corpus side (grouping the mirror's tag
+	// rows measured 2.2s) and is materialised into the state database, so a page
+	// view never pays it. A kind the mirror has almost none of is a normal
+	// outcome: it answers zero candidates and is still recorded as loaded.
+	if _, err := a.Store.EnsureEntityCandidates(ctx, kind,
+		corpus.NewAO3(a.Store.Corpus), pool, entityCandidateTTL); err != nil {
+		return PairResult{}, err
+	}
+	cands, err := a.Store.EntityCandidates(ctx, kind, pool)
+	if err != nil {
+		return PairResult{}, err
+	}
+	if len(cands) < 2 {
+		return PairResult{}, store.ErrNoPair
+	}
+	ids := make([]int64, 0, len(cands))
+	for _, c := range cands {
+		ids = append(ids, c.ID)
+	}
+	ratings, err := a.Store.RatingForKind(ctx, kind, ids)
+	if err != nil {
+		return PairResult{}, err
+	}
+	arenaCands := make([]arena.Candidate, 0, len(cands))
+	for _, c := range cands {
+		r := arena.Initial()
+		if row, ok := ratings[c.ID]; ok {
+			r = row.Rating
+		}
+		arenaCands = append(arenaCands, arena.Candidate{ID: c.ID, Rating: r})
+	}
+
+	seen, err := a.Store.SeenPairsKind(ctx, ownerKey, kind, 4000)
+	if err != nil {
+		return PairResult{}, err
+	}
+
+	strategy := a.Strategy
+	if s := r.URL.Query().Get("strategy"); s != "" {
+		if cs := arena.Strategy(s); cs.Valid() {
+			strategy = cs
+		}
+	}
+
+	// No Preferred map and no Tags on the candidates, deliberately: the learned
+	// tag weights come from work choices, and feeding them back into a
+	// tag-versus-tag vote is circular. ChoosePair degrades to a random pick when
+	// the preference map is empty, which is the honest behaviour for an arena
+	// that has no signal about its entities yet.
+	pair, err := arena.ChoosePair(arena.PairRequest{
+		Candidates: arenaCands,
+		Seen:       seen,
+		Strategy:   strategy,
+		Explored:   a.Explored,
+		Rand:       func(n int) int { return mrand.IntN(n) },
+	})
+	if err != nil {
+		return PairResult{}, err
+	}
+
+	id, err := a.Store.RecordPresentation(ctx, store.Comparison{
+		Kind: kind, WorkA: pair.A.ID, WorkB: pair.B.ID,
+		SessionKey: sessionKey, OwnerKey: ownerKey,
+		Strategy: string(pair.Strategy),
+	})
+	if err != nil {
+		return PairResult{}, err
+	}
+	if _, err := a.Store.TouchSession(ctx, sessionKey, ownerKey); err != nil {
+		return PairResult{}, err
+	}
+	res, err := a.entityPairResult(ctx, kind, pair.A.ID, pair.B.ID)
+	if err != nil {
+		return PairResult{}, err
+	}
+	res.ComparisonID, res.Strategy = id, pair.Strategy
+	return res, nil
+}
+
+// entityPairResult names the two sides of one entity pair.
+//
+// A missing name is an ERROR, not an empty label: an entity with a rating but no
+// name is one the candidate table has dropped, and rendering it as a blank card
+// would hide that the crawl lost it.
+func (a *ArenaService) entityPairResult(ctx context.Context, kind arena.EntityKind, aID, bID int64) (PairResult, error) {
+	ratings, err := a.Store.RatingForKind(ctx, kind, []int64{aID, bID})
+	if err != nil {
+		return PairResult{}, err
+	}
+	brief := func(id int64) (EntityBrief, error) {
+		name, ok, err := a.Store.EntityName(ctx, kind, id)
+		if err != nil {
+			return EntityBrief{}, err
+		}
+		if !ok {
+			return EntityBrief{}, fmt.Errorf("entity %s/%d has no name: the candidate table no longer holds it", kind, id)
+		}
+		b := EntityBrief{ID: id, Name: name, Kind: kind, Rating: arena.Initial()}
+		if row, ok := ratings[id]; ok {
+			b.Rating, b.Rated, b.Counts = row.Rating, row.Comparisons > 0, row.Comparisons
+		}
+		return b, nil
+	}
+	ea, err := brief(aID)
+	if err != nil {
+		return PairResult{}, err
+	}
+	eb, err := brief(bID)
+	if err != nil {
+		return PairResult{}, err
+	}
+	return PairResult{Kind: kind, EntityA: ea, EntityB: eb}, nil
 }
