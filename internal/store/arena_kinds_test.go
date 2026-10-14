@@ -728,6 +728,28 @@ func TestJudgingOneKindLeavesTheOtherPending(t *testing.T) {
 	if err != nil || !ok || tag.Choice != "b" {
 		t.Fatalf("tag judgement: ok=%v choice=%q err=%v", ok, tag.Choice, err)
 	}
+	// The second judgement's OWN entity-comparison row, which is where two
+	// things are visible that the work case cannot show: the read-back must
+	// resolve THIS kind's pair (the work row has the higher id and would win
+	// an unfiltered "newest judged" scan), and the insert must carry THIS
+	// kind rather than defaulting to the one it started with.
+	var kind2 string
+	var winner2, loser2 int64
+	if err := s.DB.QueryRow(`SELECT kind, winner_id, loser_id FROM arena_entity_comparisons
+		ORDER BY rowid DESC LIMIT 1`).Scan(&kind2, &winner2, &loser2); err != nil {
+		t.Fatalf("second entity comparison: %v", err)
+	}
+	if kind2 != string(arena.KindTag) {
+		t.Fatalf("second entity comparison kind %q, want %q", kind2, arena.KindTag)
+	}
+	// The choice is a SIDE ('a'/'b'), so 'b' makes the second id the winner:
+	// 22 beats 21 here. Reading it as "the first id wins" is the mistake the
+	// store's own comment warns about, and it is mine to make in the assertion
+	// rather than to hide by adjusting the code.
+	if winner2 != 22 || loser2 != 21 {
+		t.Fatalf("second entity comparison (winner=%d loser=%d), want 22/21 — the tag pair, not the work pair",
+			winner2, loser2)
+	}
 	after, _, _ := s.LastJudgedInSessionKind(ctx, "two", arena.KindWork)
 	if after.Choice != before.Choice || after.ID != before.ID {
 		t.Fatalf("judging the tag pair changed the work pair: %+v -> %+v", before, after)
