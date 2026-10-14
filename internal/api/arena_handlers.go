@@ -56,6 +56,9 @@ type pairJSON struct {
 type leaderboardJSON struct {
 	Entries []leaderboardRowJSON `json:"entries"`
 	Median  float64              `json:"median"`
+	// Kind says which arena these are the standings of. Absent for a caller
+	// that predates kinds, which is what the work arena has always been.
+	Kind string `json:"kind,omitempty"`
 	// Note is rendered on the page, because a leaderboard with no stated
 	// basis is the first thing a user stops trusting.
 	Note string `json:"note"`
@@ -159,6 +162,16 @@ func (s *Server) handleArenaLeaderboard(w http.ResponseWriter, r *http.Request) 
 	limit := intParam(r, "limit", 50)
 	minC := intParam(r, "min_comparisons", 0)
 
+	kind, kerr := ArenaKind(r)
+	if kerr != nil {
+		writeErr(w, http.StatusBadRequest, kerr)
+		return
+	}
+	if kind != arena.KindWork {
+		s.handleEntityLeaderboard(w, r, kind, limit, minC)
+		return
+	}
+
 	entries, err := s.Store.Leaderboard(r.Context(), limit, minC)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -178,6 +191,39 @@ func (s *Server) handleArenaLeaderboard(w http.ResponseWriter, r *http.Request) 
 		Note: "Ratings come from pairwise comparisons. A work shown at " +
 			"1500 has not been compared yet, and sits at the middle because " +
 			"that is where an unrated work honestly belongs."}
+	for _, e := range entries {
+		if e.Rank == 1 && e.Comparisons > 0 {
+			out.Median = e.Rating.Mu
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleEntityLeaderboard renders the standings of an arena that is not about
+// works.
+//
+// The names come from our own candidate table, not the corpus. The corpus knows
+// a tag id and its text; it does not know which tags the arena holds candidates
+// for, and joining a second database file to render a row is a dependency this
+// page does not need.
+func (s *Server) handleEntityLeaderboard(w http.ResponseWriter, r *http.Request, kind arena.EntityKind, limit, minC int) {
+	entries, err := s.Store.LeaderboardForKind(r.Context(), kind, limit, minC)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	rows := make([]leaderboardRowJSON, 0, len(entries))
+	for _, e := range entries {
+		// Title carries the entity's name. One field, two kinds, and the
+		// JSON consumers already hold the field.
+		rows = append(rows, leaderboardRowJSON{Rank: e.Rank, WorkID: e.WorkID, Title: e.Title})
+	}
+
+	out := leaderboardJSON{Entries: rows, Median: arena.MU_INIT, Kind: string(kind),
+		Note: "Ratings come from pairwise comparisons in this arena. An empty " +
+			"list means no comparison has been settled yet -- the kinds a corpus " +
+			"can supply are a measurement, not a promise."}
 	for _, e := range entries {
 		if e.Rank == 1 && e.Comparisons > 0 {
 			out.Median = e.Rating.Mu

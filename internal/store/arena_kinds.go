@@ -236,6 +236,9 @@ func (s *Store) LeaderboardForKind(ctx context.Context, kind arena.EntityKind, l
 		// The display name of an entity goes in Title, the field the work
 		// leaderboard fills with a work's title: one field, two kinds.
 		e.Title = name
+		// Ranked here rather than by the caller, so a page and the API cannot
+		// disagree about what "3rd" means (the work leaderboard does the same).
+		e.Rank = len(out) + 1
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {

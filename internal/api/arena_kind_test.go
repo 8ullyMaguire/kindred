@@ -12,8 +12,10 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -125,5 +127,86 @@ func TestRunBatchLeavesEntityComparisonsAloneAndSaysSo(t *testing.T) {
 		t.Fatalf("watermark: %v", err)
 	} else if last != 0 {
 		t.Fatalf("the watermark advanced to %d over unprocessed entity comparisons", last)
+	}
+}
+
+// The standings of an entity arena. The rows are seeded directly through the
+// store: the per-kind batch does not exist yet, so nothing else can produce a
+// rated entity — and this endpoint has to be right before it does, or the page
+// that reads it would be the first place a mistake showed.
+func TestLeaderboardForAnEntityKind(t *testing.T) {
+	ts, st := newTestServerFull(t)
+	defer ts.Close()
+	ctx := context.Background()
+
+	if _, err := st.ReplaceEntityCandidates(ctx, arena.KindTag, []arena.EntityCandidate{
+		{ID: 501, Name: "slow burn", Weight: 40},
+		{ID: 502, Name: "time travel", Weight: 30},
+	}); err != nil {
+		t.Fatalf("candidates: %v", err)
+	}
+	for _, r := range []store.RatingRow{
+		{WorkID: 501, Rating: arena.Rating{Mu: 1800, Phi: 60, Sigma: 0.06}, Comparisons: 12, Period: 1},
+		{WorkID: 502, Rating: arena.Rating{Mu: 1500, Phi: 60, Sigma: 0.06}, Comparisons: 8, Period: 1},
+	} {
+		if err := st.SaveRatingKind(ctx, arena.KindTag, r); err != nil {
+			t.Fatalf("rating %d: %v", r.WorkID, err)
+		}
+	}
+
+	res, err := ts.Client().Get(ts.URL + "/api/v1/arena/leaderboard?kind=ao3_tag")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", res.StatusCode)
+	}
+	var out struct {
+		Kind    string  `json:"kind"`
+		Median  float64 `json:"median"`
+		Entries []struct {
+			Rank   int    `json:"rank"`
+			WorkID int64  `json:"work_id"`
+			Title  string `json:"title"`
+		} `json:"entries"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Kind != string(arena.KindTag) {
+		t.Fatalf("kind %q, want %q", out.Kind, arena.KindTag)
+	}
+	if len(out.Entries) != 2 {
+		t.Fatalf("got %d entries (%+v), want the 2 tags", len(out.Entries), out.Entries)
+	}
+	if out.Entries[0].Rank != 1 || out.Entries[0].WorkID != 501 || out.Entries[0].Title != "slow burn" {
+		t.Fatalf("top entry %+v, want rank 1, id 501, named 'slow burn'", out.Entries[0])
+	}
+	if out.Entries[1].Rank != 2 {
+		t.Fatalf("second entry rank %d, want 2", out.Entries[1].Rank)
+	}
+	if out.Median <= 0 {
+		t.Fatal("median is unset: the note tells a reader what 1500 means, so it has to be a number")
+	}
+
+	// The work arena answers through the same endpoint and is unchanged.
+	res2, err := ts.Client().Get(ts.URL + "/api/v1/arena/leaderboard")
+	if err != nil {
+		t.Fatalf("work get: %v", err)
+	}
+	defer res2.Body.Close()
+	if res2.StatusCode != http.StatusOK {
+		t.Fatalf("work leaderboard status %d", res2.StatusCode)
+	}
+
+	// An unknown kind is refused here too, not only on /pair.
+	res3, err := ts.Client().Get(ts.URL + "/api/v1/arena/leaderboard?kind=ao3_nope")
+	if err != nil {
+		t.Fatalf("bad kind get: %v", err)
+	}
+	defer res3.Body.Close()
+	if res3.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown kind status %d, want 400", res3.StatusCode)
 	}
 }
