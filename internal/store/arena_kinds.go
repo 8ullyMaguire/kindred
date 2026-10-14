@@ -22,6 +22,37 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
 )
 
+// LastJudgedInSessionKind is the newest judged comparison for one kind.
+//
+// The arena's two kinds share one session (one cookie, one browser), so the
+// judgement that was just recorded has to be resolved within the kind that
+// recorded it: without the filter, judging a tag pair while a work pair was the
+// newest row would resolve the tag choice to the work pair's ids, and the
+// rating would move the wrong entities -- silently, because both are integers.
+func (s *Store) LastJudgedInSessionKind(ctx context.Context, sessionKey string, kind arena.EntityKind) (Comparison, bool, error) {
+	if !kind.Valid() {
+		kind = arena.KindWork
+	}
+	var c Comparison
+	var choice string
+	var kindCol string
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT id, kind, work_a, work_b, choice, session_key, owner_key, strategy
+		 FROM arena_comparisons
+		 WHERE session_key = ? AND kind = ? AND judged_at IS NOT NULL
+		 ORDER BY id DESC LIMIT 1`, sessionKey, string(kind)).
+		Scan(&c.ID, &kindCol, &c.WorkA, &c.WorkB, &choice, &c.SessionKey, &c.OwnerKey, &c.Strategy)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, false, nil
+	}
+	if err != nil {
+		return c, false, fmt.Errorf("last judged in session (kind %s): %w", kind, err)
+	}
+	c.Kind = arena.ParseKind(kindCol)
+	c.Choice = choice
+	return c, true, nil
+}
+
 // ------------------------------------------------------------------ ratings
 
 // RatingForKind reads the current ratings of entities of one kind.

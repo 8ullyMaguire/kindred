@@ -612,3 +612,56 @@ type fakeSource struct {
 func (f fakeSource) EntityCandidates(ctx context.Context, kind arena.EntityKind, _ int) ([]arena.EntityCandidate, error) {
 	return f.load(ctx, kind)
 }
+
+// Judging a tag pair while a NEWER work pair sits in the same session must
+// resolve the choice to the tag pair. Both are integers, so getting this wrong
+// moves the wrong entities and shows up only as a rating that drifts.
+func TestLastJudgedInSessionKindPicksItsOwnKind(t *testing.T) {
+	ctx := context.Background()
+	s := kindsStore(t)
+	if _, err := s.TouchSession(ctx, "shared", "o"); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+
+	// The tag pair is judged first...
+	if _, err := s.RecordPresentation(ctx, Comparison{
+		Kind: arena.KindTag, WorkA: 11, WorkB: 12, SessionKey: "shared", OwnerKey: "o", Strategy: "maxinfo",
+	}); err != nil {
+		t.Fatalf("record tag: %v", err)
+	}
+	if err := s.RecordJudgement(ctx, "shared", "b"); err != nil {
+		t.Fatalf("judge tag: %v", err)
+	}
+	// ...then a work pair, which is the newest row overall.
+	if _, err := s.RecordPresentation(ctx, Comparison{
+		Kind: arena.KindWork, WorkA: 50, WorkB: 51, SessionKey: "shared", OwnerKey: "o", Strategy: "maxinfo",
+	}); err != nil {
+		t.Fatalf("record work: %v", err)
+	}
+	if err := s.RecordJudgement(ctx, "shared", "a"); err != nil {
+		t.Fatalf("judge work: %v", err)
+	}
+
+	tag, ok, err := s.LastJudgedInSessionKind(ctx, "shared", arena.KindTag)
+	if err != nil || !ok {
+		t.Fatalf("tag lookup: ok=%v err=%v", ok, err)
+	}
+	if tag.WorkA != 11 || tag.WorkB != 12 || tag.Choice != "b" {
+		t.Fatalf("tag row %+v, want the (11,12) pair judged b", tag)
+	}
+	if tag.Kind != arena.KindTag {
+		t.Fatalf("kind %q, want %q", tag.Kind, arena.KindTag)
+	}
+	work, ok, err := s.LastJudgedInSessionKind(ctx, "shared", arena.KindWork)
+	if err != nil || !ok {
+		t.Fatalf("work lookup: ok=%v err=%v", ok, err)
+	}
+	if work.WorkA != 50 || work.WorkB != 51 {
+		t.Fatalf("work row %+v, want the (50,51) pair", work)
+	}
+	// A kind this session has never judged answers "nothing", not the other
+	// kind's row.
+	if _, ok, err := s.LastJudgedInSessionKind(ctx, "shared", arena.KindAuthor); err != nil || ok {
+		t.Fatalf("author lookup: ok=%v err=%v, want none", ok, err)
+	}
+}
