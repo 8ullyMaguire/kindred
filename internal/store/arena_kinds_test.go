@@ -145,7 +145,10 @@ func TestJudgedAfterCarriesTheKind(t *testing.T) {
 	if _, err := s.TouchSession(ctx, "s", "o"); err != nil {
 		t.Fatalf("touch session: %v", err)
 	}
-	if err := s.RecordJudgement(ctx, "s", "a"); err != nil {
+	// The kind-taking entry point, because the work-only one deliberately
+	// does not touch another kind's row: judging a fandom pair through it
+	// would silently do nothing at all.
+	if err := s.RecordJudgementKind(ctx, "s", "a", arena.KindFandom); err != nil {
 		t.Fatalf("judge: %v", err)
 	}
 
@@ -629,7 +632,7 @@ func TestLastJudgedInSessionKindPicksItsOwnKind(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("record tag: %v", err)
 	}
-	if err := s.RecordJudgement(ctx, "shared", "b"); err != nil {
+	if err := s.RecordJudgementKind(ctx, "shared", "b", arena.KindTag); err != nil {
 		t.Fatalf("judge tag: %v", err)
 	}
 	// ...then a work pair, which is the newest row overall.
@@ -638,7 +641,7 @@ func TestLastJudgedInSessionKindPicksItsOwnKind(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("record work: %v", err)
 	}
-	if err := s.RecordJudgement(ctx, "shared", "a"); err != nil {
+	if err := s.RecordJudgementKind(ctx, "shared", "a", arena.KindWork); err != nil {
 		t.Fatalf("judge work: %v", err)
 	}
 
@@ -663,5 +666,70 @@ func TestLastJudgedInSessionKindPicksItsOwnKind(t *testing.T) {
 	// kind's row.
 	if _, ok, err := s.LastJudgedInSessionKind(ctx, "shared", arena.KindAuthor); err != nil || ok {
 		t.Fatalf("author lookup: ok=%v err=%v, want none", ok, err)
+	}
+}
+
+// One choice must judge ONE comparison. Both arenas share a session, so a WHERE
+// clause that pins only the session judges every pending row at once: the tag
+// pair would be recorded as chosen with an answer the user never gave, and its
+// agreement would be an agreement for a comparison that never happened.
+func TestJudgingOneKindLeavesTheOtherPending(t *testing.T) {
+	ctx := context.Background()
+	s := kindsStore(t)
+	if _, err := s.TouchSession(ctx, "two", "o"); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+	for _, c := range []Comparison{
+		{Kind: arena.KindTag, WorkA: 21, WorkB: 22, SessionKey: "two", OwnerKey: "o", Strategy: "maxinfo"},
+		{Kind: arena.KindWork, WorkA: 60, WorkB: 61, SessionKey: "two", OwnerKey: "o", Strategy: "maxinfo"},
+	} {
+		if _, err := s.RecordPresentation(ctx, c); err != nil {
+			t.Fatalf("record %s: %v", c.Kind, err)
+		}
+	}
+
+	if err := s.RecordJudgementKind(ctx, "two", "a", arena.KindWork); err != nil {
+		t.Fatalf("judge work: %v", err)
+	}
+
+	// The tag pair is untouched...
+	if c, ok, err := s.UnjudgedInSessionKind(ctx, "two", arena.KindTag); err != nil || !ok {
+		t.Fatalf("the tag pair was judged by a work choice: ok=%v err=%v", ok, err)
+	} else if c.WorkA != 21 {
+		t.Fatalf("pending tag pair is %+v, want (21,22)", c)
+	}
+	// ...and the work pair is the one that got the answer.
+	w, ok, err := s.LastJudgedInSessionKind(ctx, "two", arena.KindWork)
+	if err != nil || !ok {
+		t.Fatalf("work judgement: ok=%v err=%v", ok, err)
+	}
+	if w.Choice != "a" {
+		t.Fatalf("work choice %q, want a", w.Choice)
+	}
+	// The entity-comparison row it wrote carries the kind it belongs to, and
+	// the winner/loser resolve from the side that was chosen.
+	var kind string
+	var winner, loser int64
+	if err := s.DB.QueryRow(`SELECT kind, winner_id, loser_id FROM arena_entity_comparisons
+		ORDER BY rowid DESC LIMIT 1`).Scan(&kind, &winner, &loser); err != nil {
+		t.Fatalf("entity comparison: %v", err)
+	}
+	if kind != string(arena.KindWork) || winner != 60 || loser != 61 {
+		t.Fatalf("entity comparison (kind=%s winner=%d loser=%d), want work/60/61", kind, winner, loser)
+	}
+
+	// Now the tag pair, judged in its own kind: the work row must not be
+	// re-judged (its choice and timestamp stay as they were).
+	before, _, _ := s.LastJudgedInSessionKind(ctx, "two", arena.KindWork)
+	if err := s.RecordJudgementKind(ctx, "two", "b", arena.KindTag); err != nil {
+		t.Fatalf("judge tag: %v", err)
+	}
+	tag, ok, err := s.LastJudgedInSessionKind(ctx, "two", arena.KindTag)
+	if err != nil || !ok || tag.Choice != "b" {
+		t.Fatalf("tag judgement: ok=%v choice=%q err=%v", ok, tag.Choice, err)
+	}
+	after, _, _ := s.LastJudgedInSessionKind(ctx, "two", arena.KindWork)
+	if after.Choice != before.Choice || after.ID != before.ID {
+		t.Fatalf("judging the tag pair changed the work pair: %+v -> %+v", before, after)
 	}
 }

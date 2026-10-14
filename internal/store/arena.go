@@ -322,6 +322,21 @@ func (s *Store) RecordPresentation(ctx context.Context, c Comparison) (int64, er
 // judgements for one presentation, and the second would be counted twice
 // in the rating period.
 func (s *Store) RecordJudgement(ctx context.Context, sessionKey string, choice string) error {
+	return s.RecordJudgementKind(ctx, sessionKey, choice, arena.KindWork)
+}
+
+// RecordJudgementKind records a choice against the pending comparison of ONE kind.
+//
+// The kind is not decoration. The two arenas share a session -- one cookie, one
+// browser -- so a WHERE clause pinning only the session and the unjudged state
+// matches EVERY pending row that session has, and one choice would judge the tag
+// pair and the work pair with the same answer: entities the user never saw, moved,
+// with an agreement recorded for a comparison they did not make. With one kind that
+// clause was unambiguous; it stops being so the moment a second kind can hold a row.
+func (s *Store) RecordJudgementKind(ctx context.Context, sessionKey string, choice string, kind arena.EntityKind) error {
+	if !kind.Valid() {
+		kind = arena.KindWork
+	}
 	switch choice {
 	case "a", "b":
 
@@ -344,8 +359,8 @@ func (s *Store) RecordJudgement(ctx context.Context, sessionKey string, choice s
 		_, err = s.DB.ExecContext(ctx,
 			`UPDATE arena_comparisons
 			 SET choice = ?, judged_at = datetime('now'), agreement = ?
-			 WHERE session_key = ? AND judged_at IS NULL`,
-			choice, agreement, sessionKey)
+			 WHERE session_key = ? AND kind = ? AND judged_at IS NULL`,
+			choice, agreement, sessionKey, string(kind))
 		if err != nil {
 			return fmt.Errorf("judge: %w", err)
 		}
@@ -354,8 +369,10 @@ func (s *Store) RecordJudgement(ctx context.Context, sessionKey string, choice s
 		// Get the work_a and work_b from the legacy table for this session.
 		var workA, workB int64
 		err = s.DB.QueryRowContext(ctx,
-			`SELECT work_a, work_b FROM arena_comparisons WHERE session_key = ? AND judged_at IS NOT NULL`,
-			sessionKey).Scan(&workA, &workB)
+			`SELECT work_a, work_b FROM arena_comparisons
+			 WHERE session_key = ? AND kind = ? AND judged_at IS NOT NULL
+			 ORDER BY id DESC LIMIT 1`,
+			sessionKey, string(kind)).Scan(&workA, &workB)
 		if err != nil {
 			return fmt.Errorf("get works for session: %w", err)
 		}
@@ -371,7 +388,7 @@ func (s *Store) RecordJudgement(ctx context.Context, sessionKey string, choice s
 			`INSERT INTO arena_entity_comparisons
 				(kind, winner_id, loser_id, owner_key, agreement, period, created_at)
 			VALUES (?, ?, ?, ?, ?, 0, datetime('now'))`,
-			"ao3_work", winnerID, loserID, ownerKey, agreement)
+			string(kind), winnerID, loserID, ownerKey, agreement)
 		if err != nil {
 			return fmt.Errorf("insert entity comparison: %w", err)
 		}
@@ -391,8 +408,8 @@ func (s *Store) RecordJudgement(ctx context.Context, sessionKey string, choice s
 		_, err = s.DB.ExecContext(ctx,
 			`UPDATE arena_comparisons
 			 SET choice = 'neither', judged_at = datetime('now'), agreement = ?
-			 WHERE session_key = ? AND judged_at IS NULL`,
-			agreement, sessionKey)
+			 WHERE session_key = ? AND kind = ? AND judged_at IS NULL`,
+			agreement, sessionKey, string(kind))
 		if err != nil {
 			return fmt.Errorf("judge (neither): %w", err)
 		}
@@ -401,8 +418,10 @@ func (s *Store) RecordJudgement(ctx context.Context, sessionKey string, choice s
 		// Get the work_a and work_b from the legacy table for this session.
 		var workA, workB int64
 		err = s.DB.QueryRowContext(ctx,
-			`SELECT work_a, work_b FROM arena_comparisons WHERE session_key = ? AND judged_at IS NOT NULL`,
-			sessionKey).Scan(&workA, &workB)
+			`SELECT work_a, work_b FROM arena_comparisons
+			 WHERE session_key = ? AND kind = ? AND judged_at IS NOT NULL
+			 ORDER BY id DESC LIMIT 1`,
+			sessionKey, string(kind)).Scan(&workA, &workB)
 		if err != nil {
 			return fmt.Errorf("get works for session: %w", err)
 		}
@@ -412,7 +431,7 @@ func (s *Store) RecordJudgement(ctx context.Context, sessionKey string, choice s
 			`INSERT INTO arena_entity_comparisons
 				(kind, winner_id, loser_id, owner_key, agreement, period, created_at)
 			VALUES (?, ?, ?, ?, ?, 0, datetime('now'))`,
-			"ao3_work", workA, workB, ownerKey, agreement)
+			string(kind), workA, workB, ownerKey, agreement)
 		if err != nil {
 			return fmt.Errorf("insert entity comparison (draw): %w", err)
 		}
