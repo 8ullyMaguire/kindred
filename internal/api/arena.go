@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
-	"sort"
+	"math"
 	"strings"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
@@ -452,9 +452,65 @@ func influenceOf(agree float64) float64 {
 // RunBatch is the periodic rating update. It is the "nightly" in a system
 // that has no night: every comparison judged since the last run is treated
 // as ONE rating period, per Glickman's batch step.
+// RunBatch runs one rating period per arena.
+//
+// The kinds are independent populations with independent watermarks: a tag
+// comparison says nothing about a work's rating, and a single shared watermark
+// would let one kind's quiet period discard another kind's rows. KindWork runs
+// first and its keys are the bare ones it has always used, so an install that has
+// been running keeps its position instead of re-folding its whole history.
 func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
-	var res BatchResult
+	res := BatchResult{ByKind: map[string]int64{}}
+	var skipped []string
+	kinds := []arena.EntityKind{arena.KindWork}
+	for _, k := range arena.Kinds {
+		if k != arena.KindWork {
+			kinds = append(kinds, k)
+		}
+	}
+	for _, kind := range kinds {
+		one, err := a.runKindBatch(ctx, kind)
+		if err != nil {
+			// Each kind is its own transaction, so a failure here leaves the
+			// others committed. The error names the kind: a batch that is
+			// behind is a fact about one arena, not about the batch.
+			return res, fmt.Errorf("%s arena batch: %w", kind, err)
+		}
+		res.Updated += one.Updated
+		res.Comparisons += one.Comparisons
+		res.ByKind[string(kind)] = one.Period
+		if one.Skipped != "" {
+			// "No new comparisons" for an entity kind is the ordinary state
+			// of the world -- nothing was judged in that arena -- and is not
+			// news in a report. A kind that HAD rows it could not use is.
+			// The work arena always speaks, so a run with nothing anywhere
+			// still reports the message callers have always read.
+			if kind != arena.KindWork && one.Skipped == "no new comparisons" {
+				continue
+			}
+			if kind == arena.KindWork {
+				skipped = append(skipped, one.Skipped)
+			} else {
+				skipped = append(skipped, string(kind)+": "+one.Skipped)
+			}
+			continue
+		}
+		if kind == arena.KindWork {
+			res.Period = one.Period
+		}
+	}
+	// Skipped means the batch did NOTHING. A kind that had a quiet period is
+	// normal and is not reported: a run that rated works and found no new tag
+	// comparisons has run, and saying otherwise would read as a no-op.
+	if res.Updated == 0 && len(skipped) > 0 {
+		res.Skipped = strings.Join(skipped, "; ")
+	}
+	return res, nil
+}
 
+// runKindBatch runs one arena's period.
+func (a *ArenaService) runKindBatch(ctx context.Context, kind arena.EntityKind) (BatchResult, error) {
+	var res BatchResult
 	// arena_last_period is a WATERMARK, and it has to be a timestamp for
 	// JudgedSince to work at all. It is written as the period counter
 	// (1, 2, 3...) further down, which read back as time.Unix(1, 0) --
@@ -466,7 +522,7 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 	// statement about time, and the period NUMBER is derived from it
 	// afterwards. The two are different quantities and the table stores
 	// the time.
-	lastRun, err := a.Store.MetaInt(ctx, "arena_last_run")
+	lastRun, err := a.Store.MetaInt(ctx, kindMeta(kind, "arena_last_run"))
 	if err != nil {
 		return res, err
 	}
@@ -475,7 +531,7 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 		since = time.Unix(int64(lastRun), 0).UTC()
 	}
 
-	judged, err := a.Store.JudgedAfter(ctx, since, 0)
+	judged, err := a.Store.JudgedAfterKind(ctx, kind, since, 0)
 	if err != nil {
 		return res, err
 	}
@@ -484,38 +540,11 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 		return res, nil
 	}
 
-	// Only works are rated below. This batch writes its final statements
-	// directly on a transaction against arena_ratings, and an entity id is a
-	// DIFFERENT id space: rating a tag vote as a work would move some work's
-	// rating from a comparison of two tags, which is a wrong answer that looks
-	// like a working one. The entity comparisons are counted and named, so the
-	// state is visible instead of silently dropped, and the watermark is
-	// deliberately NOT advanced past them -- advancing it would discard their
-	// influence permanently, which is the same reasoning that keeps an empty
-	// period from running.
-	//
-	// The per-kind batch is the next step (the plan's E4), and until it exists the
-	// batch STALLS while any entity comparison is pending rather than doing the
-	// half it can. Stalling loses nothing: the watermark does not move, so these
-	// rows are still here next run. Rating the work rows and letting the watermark
-	// pass would process them and DISCARD the entity rows' influence permanently
-	// -- the one outcome that cannot be undone, and the reason this is a stall and
-	// not a partition.
-	pending := map[arena.EntityKind]int{}
-	for _, j := range judged {
-		if j.Kind != arena.KindWork {
-			pending[j.Kind]++
-		}
-	}
-	if len(pending) > 0 {
-		kinds := make([]string, 0, len(pending))
-		for k, n := range pending {
-			kinds = append(kinds, fmt.Sprintf("%s=%d", k, n))
-		}
-		sort.Strings(kinds)
-		res.Skipped = fmt.Sprintf("no per-kind batch yet: %s pending", strings.Join(kinds, ", "))
-		return res, nil
-	}
+	// No fence is needed here: the rows arriving are already this kind's
+	// (JudgedAfterKind), each kind has its own watermark, and each kind writes to
+	// its own tables. The fence that used to live here was the interim while the
+	// per-kind period did not exist -- it stalled the whole batch rather than let
+	// an entity id be rated as a work.
 
 	// Collect every work involved, then take ONE pre-period snapshot. This
 	// is what makes the batch order-independent.
@@ -529,7 +558,7 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 			}
 		}
 	}
-	pre, err := a.Store.RatingFor(ctx, ids)
+	pre, err := a.kindRatingsFor(ctx, kind, ids)
 	if err != nil {
 		return res, err
 	}
@@ -586,7 +615,7 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 	// The period NUMBER is a counter, and is unrelated to the watermark
 	// time above. Reading one as the other is the bug that made every
 	// batch re-fold the whole history.
-	period, err := a.Store.MetaInt(ctx, "arena_period")
+	period, err := a.Store.MetaInt(ctx, kindMeta(kind, "arena_period"))
 	if err != nil {
 		return res, err
 	}
@@ -624,18 +653,22 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 		// prepared -- and it failed the whole batch, every run, with a
 		// 500 that no test hit because the tests exercised the arithmetic
 		// rather than the write.
-		if _, err := tx.ExecContext(ctx, arenaUpsertRating,
-			next.WorkID, next.Rating.Mu, next.Rating.Phi, next.Rating.Sigma,
-			next.Comparisons, next.Wins, next.Losses, next.Draws, next.Period,
-		); err != nil {
+		if kind != arena.KindWork && !finiteRow(next) {
+			// The store refuses a non-finite rating for an entity, because a
+			// NaN poisons every later comparison of that entity and SQLite
+			// stores it happily. The batch writes its own SQL, so it applies
+			// the same rule rather than trusting the store to have done it.
 			tx.Rollback()
-			return res, fmt.Errorf("arena batch write %d: %w", id, err)
+			return res, fmt.Errorf("%s batch: non-finite rating for %d", kind, id)
 		}
-		if _, err := tx.ExecContext(ctx, arenaUpsertHistory,
-			next.WorkID, next.Period, next.Rating.Mu, next.Rating.Phi, next.Rating.Sigma,
-		); err != nil {
+		ratingStmt, historyStmt := kindUpsert(kind)
+		if _, err := tx.ExecContext(ctx, ratingStmt, kindArgs(kind, next)...); err != nil {
 			tx.Rollback()
-			return res, fmt.Errorf("arena batch history %d: %w", id, err)
+			return res, fmt.Errorf("%s batch write %d: %w", kind, id, err)
+		}
+		if _, err := tx.ExecContext(ctx, historyStmt, kindHistoryArgs(kind, next)...); err != nil {
+			tx.Rollback()
+			return res, fmt.Errorf("%s batch history %d: %w", kind, id, err)
 		}
 		res.Updated++
 	}
@@ -652,14 +685,14 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 	// during the run, and that is the lesser error, because Glicko's own
 	// guidance is that a repeated game costs a little accuracy while a
 	// dropped one silently biases a rating upward.
-	if _, err := tx.ExecContext(ctx, arenaSetMeta, "arena_period", fmt.Sprint(period)); err != nil {
+	if _, err := tx.ExecContext(ctx, arenaSetMeta, kindMeta(kind, "arena_period"), fmt.Sprint(period)); err != nil {
 		tx.Rollback()
-		return res, fmt.Errorf("arena batch period: %w", err)
+		return res, fmt.Errorf("%s batch period: %w", kind, err)
 	}
-	if _, err := tx.ExecContext(ctx, arenaSetMeta, "arena_last_run",
+	if _, err := tx.ExecContext(ctx, arenaSetMeta, kindMeta(kind, "arena_last_run"),
 		fmt.Sprint(time.Now().UTC().Unix())); err != nil {
 		tx.Rollback()
-		return res, fmt.Errorf("arena batch watermark: %w", err)
+		return res, fmt.Errorf("%s batch watermark: %w", kind, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return res, fmt.Errorf("arena batch commit: %w", err)
@@ -668,11 +701,85 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 	res.Period = int64(period)
 	res.Comparisons = len(judged)
 	if a.Log != nil {
-		a.Log.Info("arena batch", "period", period, "comparisons", len(judged),
-			"works", res.Updated)
+		a.Log.Info("arena batch", "kind", string(kind), "period", period,
+			"comparisons", len(judged), "entities", res.Updated)
 	}
 	return res, nil
 }
+
+// kindMeta names the key a kind stores a watermark under. Works keep the bare
+// keys they have always used; an entity kind gets its own, so the two never read
+// each other's position.
+func kindMeta(kind arena.EntityKind, key string) string {
+	if kind == arena.KindWork {
+		return key
+	}
+	return key + ":" + string(kind)
+}
+
+// kindRatingsFor reads a period's pre-ratings from the right table.
+func (a *ArenaService) kindRatingsFor(ctx context.Context, kind arena.EntityKind, ids []int64) (map[int64]store.RatingRow, error) {
+	if kind == arena.KindWork {
+		return a.Store.RatingFor(ctx, ids)
+	}
+	return a.Store.RatingForKind(ctx, kind, ids)
+}
+
+// kindUpsert returns the upsert pair for a kind's table. The entity statements are
+// the same two the store uses in SaveRatingKind, and a test pins that a batch row
+// reads back through RatingForKind -- the column list has to be the same list, and
+// only reading it back can say so.
+func kindUpsert(kind arena.EntityKind) (rating, history string) {
+	if kind == arena.KindWork {
+		return arenaUpsertRating, arenaUpsertHistory
+	}
+	return arenaUpsertEntityRating, arenaUpsertEntityHistory
+}
+
+// kindArgs lists one row's positional arguments in its statement's order.
+// Positional, not a struct: database/sql cannot marshal a struct, and a single
+// struct argument is rejected by the driver before the statement is prepared.
+func kindArgs(kind arena.EntityKind, r store.RatingRow) []any {
+	if kind == arena.KindWork {
+		return []any{r.WorkID, r.Rating.Mu, r.Rating.Phi, r.Rating.Sigma,
+			r.Comparisons, r.Wins, r.Losses, r.Draws, r.Period}
+	}
+	return []any{string(kind), r.WorkID, r.Rating.Mu, r.Rating.Phi, r.Rating.Sigma,
+		r.Comparisons, r.Wins, r.Losses, r.Draws, r.Period}
+}
+
+// kindHistoryArgs is kindArgs for the history statement, which carries no counts.
+func kindHistoryArgs(kind arena.EntityKind, r store.RatingRow) []any {
+	if kind == arena.KindWork {
+		return []any{r.WorkID, r.Period, r.Rating.Mu, r.Rating.Phi, r.Rating.Sigma}
+	}
+	return []any{string(kind), r.WorkID, r.Period, r.Rating.Mu, r.Rating.Phi, r.Rating.Sigma}
+}
+
+// finiteRow reports whether a row can be stored without poisoning an entity's
+// later comparisons.
+func finiteRow(r store.RatingRow) bool {
+	for _, v := range []float64{r.Rating.Mu, r.Rating.Phi, r.Rating.Sigma} {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return false
+		}
+	}
+	return true
+}
+
+const arenaUpsertEntityRating = `
+INSERT INTO arena_entities
+  (kind, entity_id, mu, phi, sigma, comparisons, wins, losses, draws, period, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+ON CONFLICT(kind, entity_id) DO UPDATE SET
+  mu = excluded.mu, phi = excluded.phi, sigma = excluded.sigma,
+  comparisons = excluded.comparisons, wins = excluded.wins,
+  losses = excluded.losses, draws = excluded.draws,
+  period = excluded.period, updated_at = excluded.updated_at`
+
+const arenaUpsertEntityHistory = `
+INSERT OR REPLACE INTO arena_entity_history (kind, entity_id, period, mu, phi, sigma)
+VALUES (?, ?, ?, ?, ?, ?)`
 
 // BatchResult reports what a batch run did.
 type BatchResult struct {
@@ -680,6 +787,9 @@ type BatchResult struct {
 	Comparisons int
 	Updated     int
 	Skipped     string
+	// ByKind reports the period each arena advanced to. One Period cannot
+	// describe a run that advanced several: they are independent counters.
+	ByKind map[string]int64
 }
 
 const arenaSetMeta = `

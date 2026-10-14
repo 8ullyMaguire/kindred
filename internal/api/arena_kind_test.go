@@ -64,76 +64,152 @@ func TestArenaKindResolvesAndRefuses(t *testing.T) {
 	}
 }
 
-func TestRunBatchLeavesEntityComparisonsAloneAndSaysSo(t *testing.T) {
+func TestRunBatchNeverRatesAnEntityAsAWork(t *testing.T) {
 	ctx := context.Background()
-	s, err := store.OpenMemory(ctx)
+	st, err := store.OpenMemory(ctx)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	defer s.Close()
-	if _, err := s.TouchSession(ctx, "sess", "owner"); err != nil {
+	defer st.Close()
+	if _, err := st.TouchSession(ctx, "sess", "owner"); err != nil {
 		t.Fatalf("touch: %v", err)
 	}
-	// One entity comparison, judged.
-	if _, err := s.RecordPresentation(ctx, store.Comparison{
+	// A tag comparison judged, and nothing else.
+	if _, err := st.RecordPresentation(ctx, store.Comparison{
 		Kind: arena.KindTag, WorkA: 900, WorkB: 901,
 		SessionKey: "sess", OwnerKey: "owner", Strategy: "maxinfo",
 	}); err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	if err := s.RecordJudgementKind(ctx, "sess", "a", arena.KindTag); err != nil {
+	if err := st.RecordJudgementKind(ctx, "sess", "a", arena.KindTag); err != nil {
+		t.Fatalf("judge: %v", err)
+	}
+
+	svc := NewArenaService(st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if _, err := svc.RunBatch(ctx); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+
+	// The load-bearing property, and the only one: a tag's id must never be
+	// rated in the work table. An entity id and a work id are both bare
+	// integers, so a batch that rated every judged row as a work would move some
+	// WORK's rating from a comparison of two tags -- a wrong answer that looks
+	// like a working one, and that no assertion about the work path would catch.
+	if rows, err := st.RatingFor(ctx, []int64{900, 901}); err != nil {
+		t.Fatalf("ratings: %v", err)
+	} else if len(rows) != 0 {
+		t.Fatalf("the tag ids were rated as works: %+v", rows)
+	}
+	// And the work arena's watermark did not move: the period had nothing in it,
+	// and advancing the watermark over an empty period is what discards rows.
+	if last, err := st.MetaInt(ctx, "arena_last_run"); err != nil {
+		t.Fatalf("watermark: %v", err)
+	} else if last != 0 {
+		t.Fatalf("the work watermark advanced to %d over an empty work period", last)
+	}
+}
+
+// The point of the per-kind batch: a comparison in a tag arena moves a TAG's
+// rating, through its own tables, its own period and its own watermark, while the
+// work arena keeps the bare keys it has always used.
+func TestRunBatchRunsOnePeriodPerKind(t *testing.T) {
+	ts, st := newTestServerFull(t)
+	defer ts.Close()
+	ctx := context.Background()
+
+	if _, err := st.ReplaceEntityCandidates(ctx, arena.KindTag, []arena.EntityCandidate{
+		{ID: 501, Name: "slow burn", Weight: 40},
+		{ID: 502, Name: "time travel", Weight: 30},
+	}); err != nil {
+		t.Fatalf("candidates: %v", err)
+	}
+	if _, err := st.TouchSession(ctx, "sess", "owner"); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+	// Two arenas judged in the same period.
+	if _, err := st.RecordPresentation(ctx, store.Comparison{
+		Kind: arena.KindTag, WorkA: 501, WorkB: 502,
+		SessionKey: "sess", OwnerKey: "owner", Strategy: "maxinfo",
+	}); err != nil {
+		t.Fatalf("record tag: %v", err)
+	}
+	if err := st.RecordJudgementKind(ctx, "sess", "a", arena.KindTag); err != nil {
 		t.Fatalf("judge tag: %v", err)
 	}
-	// AND a work comparison judged in the same period. Without it the stall is
-	// unobservable: a fixture containing only entity rows takes the same path
-	// whether the batch stalls or partitions, which is how the first version of
-	// this test passed on a fence that would have discarded these rows.
-	if _, err := s.RecordPresentation(ctx, store.Comparison{
+	if _, err := st.RecordPresentation(ctx, store.Comparison{
 		Kind: arena.KindWork, WorkA: 4001, WorkB: 4002,
 		SessionKey: "sess", OwnerKey: "owner", Strategy: "maxinfo",
 	}); err != nil {
 		t.Fatalf("record work: %v", err)
 	}
-	if err := s.RecordJudgementKind(ctx, "sess", "b", arena.KindWork); err != nil {
+	if err := st.RecordJudgementKind(ctx, "sess", "b", arena.KindWork); err != nil {
 		t.Fatalf("judge work: %v", err)
 	}
+	// Agreement is what decides influence and no endpoint sets it, so a test of
+	// the batch has to reach the column. 1.0 is full influence.
+	if _, err := st.DB.ExecContext(ctx, `UPDATE arena_comparisons SET agreement = 1.0`); err != nil {
+		t.Fatalf("agreement: %v", err)
+	}
 
-	svc := NewArenaService(s, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := NewArenaService(st, nil)
 	res, err := svc.RunBatch(ctx)
 	if err != nil {
 		t.Fatalf("batch: %v", err)
 	}
-	if !strings.Contains(res.Skipped, "ao3_tag=1") {
-		t.Fatalf("Skipped = %q, want it to name the pending entity comparisons", res.Skipped)
+	if res.Updated != 4 {
+		t.Fatalf("updated %d rows (%+v), skipped %q -- want 4: two tags and two works",
+			res.Updated, res.ByKind, res.Skipped)
+	}
+	if res.Period == 0 {
+		t.Fatal("the work period did not advance")
+	}
+	if res.ByKind[string(arena.KindTag)] == 0 {
+		t.Fatalf("the tag arena has no period: %+v", res.ByKind)
 	}
 
-	// The tag's id must not have been rated as a work...
-	if rows, err := s.RatingFor(ctx, []int64{900, 901}); err != nil {
-		t.Fatalf("ratings: %v", err)
-	} else if len(rows) != 0 {
-		t.Fatalf("the tag ids were rated as works: %+v", rows)
+	// The tag's rating moved, and reads back through the store's own reader --
+	// which is what pins the batch's column list to SaveRatingKind's.
+	tags, err := st.RatingForKind(ctx, arena.KindTag, []int64{501, 502})
+	if err != nil {
+		t.Fatalf("tag ratings: %v", err)
 	}
-	// ...nor may the work row have been rated: processing it would let the
-	// watermark pass this period and discard the tag comparison's influence.
-	if rows, err := s.RatingFor(ctx, []int64{4001, 4002}); err != nil {
+	win, ok := tags[501]
+	if !ok {
+		t.Fatalf("tag 501 has no rating after the batch: %+v", tags)
+	}
+	if win.Rating.Mu == arena.MU_INIT {
+		t.Fatalf("tag 501 is still at the initial rating: %+v", win)
+	}
+	if win.Comparisons != 1 || win.Wins != 1 {
+		t.Fatalf("tag 501 counted %d comparisons and %d wins, want 1 and 1", win.Comparisons, win.Wins)
+	}
+	if h, err := st.RatingHistoryKind(ctx, arena.KindTag, 501, 10); err != nil {
+		t.Fatalf("history: %v", err)
+	} else if len(h) != 1 {
+		t.Fatalf("tag 501 has %d history rows, want 1", len(h))
+	}
+
+	// The work's rating moved through the work tables, and the work arena is
+	// still at the bare watermark key -- an install that has been running must
+	// not re-fold its history against a key that did not exist before.
+	works, err := st.RatingFor(ctx, []int64{4001, 4002})
+	if err != nil {
 		t.Fatalf("work ratings: %v", err)
-	} else if len(rows) != 0 {
-		t.Fatalf("the batch processed the work row while a tag comparison was pending: %+v", rows)
 	}
-	// ...and the watermark must not have moved past rows nothing processed,
-	// or their influence is discarded permanently when the per-kind batch
-	// arrives.
-	if last, err := s.MetaInt(ctx, "arena_last_run"); err != nil {
-		t.Fatalf("watermark: %v", err)
-	} else if last != 0 {
-		t.Fatalf("the watermark advanced to %d over unprocessed entity comparisons", last)
+	if w, ok := works[4001]; !ok || w.Comparisons != 1 {
+		t.Fatalf("work 4001 was not rated: %+v", works)
+	}
+	if v, err := st.MetaInt(ctx, "arena_last_run"); err != nil || v == 0 {
+		t.Fatalf("work watermark = %d, err %v; want the bare key set", v, err)
+	}
+	if _, err := st.MetaInt(ctx, "arena_last_run:ao3_tag"); err != nil {
+		t.Fatalf("tag watermark missing: %v", err)
 	}
 }
 
 // The standings of an entity arena. The rows are seeded directly through the
-// store: the per-kind batch does not exist yet, so nothing else can produce a
-// rated entity — and this endpoint has to be right before it does, or the page
-// that reads it would be the first place a mistake showed.
+// store: the per-kind batch gives a tag period a rating, and this endpoint has to
+// be right in the same shape whether the rows came from a batch or from a fixture.
 func TestLeaderboardForAnEntityKind(t *testing.T) {
 	ts, st := newTestServerFull(t)
 	defer ts.Close()
@@ -190,7 +266,6 @@ func TestLeaderboardForAnEntityKind(t *testing.T) {
 		t.Fatal("median is unset: the note tells a reader what 1500 means, so it has to be a number")
 	}
 
-	// The work arena answers through the same endpoint and is unchanged.
 	res2, err := ts.Client().Get(ts.URL + "/api/v1/arena/leaderboard")
 	if err != nil {
 		t.Fatalf("work get: %v", err)
@@ -200,7 +275,6 @@ func TestLeaderboardForAnEntityKind(t *testing.T) {
 		t.Fatalf("work leaderboard status %d", res2.StatusCode)
 	}
 
-	// An unknown kind is refused here too, not only on /pair.
 	res3, err := ts.Client().Get(ts.URL + "/api/v1/arena/leaderboard?kind=ao3_nope")
 	if err != nil {
 		t.Fatalf("bad kind get: %v", err)

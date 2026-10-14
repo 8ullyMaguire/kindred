@@ -506,3 +506,26 @@ func placeholders(n int) string {
 	}
 	return string(b)
 }
+
+// JudgedAfterKind is JudgedAfter for one arena.
+//
+// The rows are filtered here rather than in SQL: the batch runs off a watermark
+// and there are three kinds, so this is a handful of rows per run, and one
+// definition of the row mapping is worth more than three that can drift.
+func (s *Store) JudgedAfterKind(ctx context.Context, kind arena.EntityKind, since time.Time, limit int) ([]JudgedComparison, error) {
+	rows, err := s.JudgedAfter(ctx, since, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]JudgedComparison, 0, len(rows))
+	for _, r := range rows {
+		if r.Kind != kind {
+			continue
+		}
+		out = append(out, r)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
