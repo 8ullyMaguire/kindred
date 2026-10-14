@@ -1309,6 +1309,17 @@ func (d Deps) arenaSession(ctx context.Context, w http.ResponseWriter, r *http.R
 	if err != nil {
 		return "", "", err
 	}
+	// Mint the session row HERE, where the session is resolved, rather than in
+	// one of the flows that use it. It used to happen only in the work pair
+	// path, so an entity arena presented a pair with no session row behind it
+	// and the judge POST failed with "get session owner_key: sql: no rows in
+	// result set" -- a 500 on the reader's first judgement, from a page that
+	// looked completely healthy. The other call site is now redundant; it is
+	// left alone because an upsert here and there costs nothing next to the
+	// risk of changing the work path while fixing the entity one.
+	if _, err := d.Engine.Store.TouchSession(ctx, sessionKey, ownerKey); err != nil {
+		return "", "", err
+	}
 	return sessionKey, ownerKey, nil
 }
 

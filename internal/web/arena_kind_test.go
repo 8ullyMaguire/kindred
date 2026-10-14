@@ -10,12 +10,15 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
+	"git.polarisocial.xyz/kindred/kindred/internal/testcorpus"
 )
 
 func judgeDeps(t *testing.T) (Deps, *store.Store) {
@@ -150,5 +153,95 @@ func TestAnUnknownKindLandsOnTheWorkArenaRatherThanFailing(t *testing.T) {
 	if nonsense != bare {
 		t.Fatal("?kind=not-a-kind rendered something other than the work arena: " +
 			"ParseKind is supposed to send anything unknown to works")
+	}
+}
+
+// entityArenaDeps builds a deployment with a real mirror behind it: the entity
+// kinds draw candidates and names from the corpus, and the loaders refuse a tag
+// with fewer than three works, so a fixture with no tag rows cannot reach the
+// pair path at all.
+func entityArenaDeps(t *testing.T) (Deps, *store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	dir := t.TempDir()
+	corpusPath, err := testcorpus.New(120).Write(filepath.Join(dir, "corpus.db"))
+	if err != nil {
+		t.Fatalf("fixture corpus: %v", err)
+	}
+	st, err := store.Open(ctx, filepath.Join(dir, "state.db"), corpusPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return Deps{Version: "test", Engine: &engine.Engine{Store: st}}, st
+}
+
+func TestAnEntityArenaRendersTwoNamedEntities(t *testing.T) {
+	d, _ := entityArenaDeps(t)
+	code, body := arenaBody(t, d, "/arena?kind=ao3_tag")
+	if code != http.StatusOK {
+		t.Fatalf("GET /arena?kind=ao3_tag = %d", code)
+	}
+	if n := strings.Count(body, "arena-card"); n != 2 {
+		t.Fatalf("rendered %d entity cards, want 2: %s", n, body)
+	}
+	if !strings.Contains(body, "/tag/") {
+		t.Error("an entity card does not link to the entity's own page")
+	}
+	for _, msg := range []string{"too few", "No tag pair"} {
+		if strings.Contains(body, msg) {
+			t.Fatalf("the pair path did not produce a pair (%q in the page): %s", msg, body)
+		}
+	}
+	// A card that fell back to "tag 4711" would still render two cards, so the
+	// assertion that matters is that a NAME came through the candidate table.
+	if strings.Contains(body, `>tag `) {
+		t.Error("a card is showing an id instead of a name")
+	}
+}
+
+// The plan's own acceptance test for Step E: judge one entity pair through the
+// FORM path, and check it landed in the entity's arena and not in the works'.
+func TestJudgingAnEntityPairFromTheFormRecordsItInThatArena(t *testing.T) {
+	ctx := context.Background()
+	d, st := entityArenaDeps(t)
+
+	rec := httptest.NewRecorder()
+	d.route(rec, httptest.NewRequest(http.MethodGet, "/arena?kind=ao3_tag", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /arena?kind=ao3_tag = %d: %s", rec.Code, rec.Body.String())
+	}
+	var session string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == ArenaCookieName {
+			session = c.Value
+		}
+	}
+	if session == "" {
+		t.Fatal("the arena page set no session cookie")
+	}
+	if _, ok, err := st.UnjudgedInSessionKind(ctx, session, arena.KindTag); err != nil || !ok {
+		t.Fatalf("the page presented no tag pair to judge (ok=%v err=%v)", ok, err)
+	}
+
+	form := url.Values{"session": {session}, "kind": {"ao3_tag"}, "choice": {"a"}}
+	post := httptest.NewRequest(http.MethodPost, "/arena/judge", strings.NewReader(form.Encode()))
+	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	post.AddCookie(&http.Cookie{Name: ArenaCookieName, Value: session})
+	prec := httptest.NewRecorder()
+	d.route(prec, post)
+	if prec.Code != http.StatusSeeOther && prec.Code != http.StatusOK {
+		t.Fatalf("POST /arena/judge = %d: %s", prec.Code, prec.Body.String())
+	}
+
+	comp, ok, err := st.LastJudgedInSessionKind(ctx, session, arena.KindTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || comp.Choice != "a" {
+		t.Fatalf("the tag judgement was not recorded (ok=%v choice=%q)", ok, comp.Choice)
+	}
+	if _, ok, err := st.LastJudgedInSessionKind(ctx, session, arena.KindWork); err != nil || ok {
+		t.Fatalf("the tag judgement also landed in the work arena (ok=%v err=%v)", ok, err)
 	}
 }
