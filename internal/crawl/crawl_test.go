@@ -174,6 +174,12 @@ func TestParseWorkRejectsANonWorkPage(t *testing.T) {
 		// A consent/interstitial page: it has the site's chrome but no work
 		// heading, which is exactly what the marker must catch.
 		"interstitial": `<html><body><div id="main"><h2 class="heading">This work could have adult content.</h2><a href="?view_adult=true">Proceed</a></div></body></html>`,
+		// TAGS BUT NO TITLE: the zero-tags check would not catch this one, so it
+		// is the case that pins the title guard itself. Without the guard this
+		// page parses as a work with an empty title, which is precisely the
+		// poisoned row the guard exists to prevent.
+		"tag rows, no heading": `<html><body><dl class="stats"><dt class="words">Words:</dt><dd class="words">1,000</dd></dl>` +
+			`<dd class="freeform tags"><ul class="commas"><li><a class="tag" href="/tags/Angst/works">Angst</a></li></ul></dd></body></html>`,
 	} {
 		if _, err := ParseWork([]byte(page), "https://archiveofourown.org/works/9"); err == nil {
 			t.Errorf("%s: ParseWork succeeded, want an error", name)
