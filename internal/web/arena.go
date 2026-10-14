@@ -1004,6 +1004,17 @@ func (d Deps) judge(ctx context.Context, sessionKey, choice string) error {
 	if err != nil || !ok {
 		return err
 	}
+	if comp.Kind != arena.KindWork {
+		// Tag learning happens only for work choices (the plan's D4): a
+		// tag-vs-tag vote feeding the same weights that select works would be
+		// circular. The API's JudgeKind has always returned here; this path has
+		// no kind of its own yet, and LastJudgedInSession is WORK-ONLY, so a
+		// non-work presentation would otherwise resolve to the last WORK
+		// comparison in the session and teach tag weights from a judgement the
+		// reader never made. Guarding here means the web cannot inherit that
+		// bug on the day it gains a kind switcher.
+		return nil
+	}
 	winner, loser := comp.WorkA, comp.WorkB
 	if choice == "b" {
 		winner, loser = comp.WorkB, comp.WorkA
