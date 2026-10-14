@@ -342,6 +342,34 @@ Commit D: `engine: owner_taste — the owner cohort's taste as a global prior (K
 
 ## Step E — arenas for every entity kind
 
+**LANDED, E1-E3** 2026-10-14 (`5889266`). Deviations from the text below, recorded
+rather than taken silently, since this plan is the owner's own:
+
+- the loaders return `[]arena.EntityCandidate` (id + name + weight) instead of bare
+  ids, and there is **no `entity_names` table** — the name comes from the same query
+  that produced the id, and a table of names the corpus already holds would need the
+  corpus (a second database file) at render time anyway, which is the thing being
+  avoided;
+- the store's kind-taking methods are **additive** (`UnjudgedInSession` and
+  `SeenPairs` still mean works; `UnjudgedInSessionKind`/`SeenPairsKind` are the
+  general forms). Every pre-existing caller is therefore bit-identical, which is
+  worth more than the shorter signature;
+- the leaderboard is a new `LeaderboardForKind(ctx, kind, limit, minComparisons)`
+  rather than a `kind` parameter on `Leaderboard`, so the work leaderboard's query
+  is untouched;
+- the tag loader orders by evidence (`ORDER BY n DESC, tag_id`) rather than
+  `ORDER BY RANDOM()`: the candidate table is a materialised head of the
+  distribution, and a random `LIMIT` would keep an arbitrary slice of it;
+- the relationship kind is spelled `KindRelationship`, not `KindShip`;
+- `EntityKind` carries `Label()` and the ordered `Kinds` slice, and candidates are
+  cached per kind with a refresh marker written even for an empty result (a kind
+  the mirror has almost none of must not re-run its 2.2s grouping query per page
+  view);
+- `EffectiveRatings` stays works-only, as this plan itself requires.
+
+**E4 and E5 below remain open**, and they are the user-facing half: the service
+pair/judge flow and the `?kind=` surfaces.
+
 E1. **Kinds and id spaces** (one allowlist, defined once in
 `internal/arena/kinds.go`):
 
