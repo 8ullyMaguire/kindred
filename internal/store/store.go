@@ -370,6 +370,11 @@ CREATE TABLE IF NOT EXISTS build_log (
 -- to make an arena feel broken.
 CREATE TABLE IF NOT EXISTS arena_comparisons (
 	id          INTEGER PRIMARY KEY,
+	-- The id space work_a/work_b are read in (arena.EntityKind). Works keep the
+	-- field names they had when they were the only kind; this column is what
+	-- makes the arena generic. Defaulted here AND named by every writer, so a
+	-- row can never hold an empty kind.
+	kind        TEXT NOT NULL DEFAULT 'ao3_work',
 	work_a      INTEGER NOT NULL,
 	work_b      INTEGER NOT NULL,
 	choice      TEXT,              -- 'a', 'b', or NULL when unrated
@@ -395,8 +400,47 @@ CREATE TABLE IF NOT EXISTS arena_comparisons (
 -- and reading the whole row to check the choice is what makes it slow.
 CREATE INDEX IF NOT EXISTS idx_arena_pairs
 	ON arena_comparisons(owner_key, work_a, work_b);
+-- idx_arena_pairs_kind (the no-repeat query for one kind) is created by the
+-- migration instead of here: this block runs BEFORE the migration, so an index
+-- on the kind column would fail -- "no such column: kind" -- on every database
+-- written before that column existed.
 CREATE INDEX IF NOT EXISTS idx_arena_pending
 	ON arena_comparisons(session_key) WHERE judged_at IS NULL;
+
+-- Materialised arena candidates, one row per (kind, entity).
+--
+-- Why a table rather than a query: the corpus-side loaders are slow by nature.
+-- Grouping the mirror's 3,890,504 tag rows measured 2.2s on 2026-10-14, and an
+-- arena page cannot pay that. The loaders run on a refresh; this is what a page
+-- reads, and a random sample from here is instant.
+--
+-- It is deliberately the HEAD of the distribution rather than a uniform sample
+-- (most-carried tags, most-seen bylines): a ranking of tags nobody uses is not a
+-- ranking anyone wants, and the head is also what fits in a table.
+CREATE TABLE IF NOT EXISTS entity_candidates (
+    kind         TEXT    NOT NULL,
+    entity_id    INTEGER NOT NULL,
+    name         TEXT    NOT NULL,
+    -- The evidence behind the candidate: how many works carry the tag, how
+    -- often the byline appeared in the sample. A sampled count is labelled as
+    -- one by the loader rather than presented as a total.
+    weight       INTEGER NOT NULL DEFAULT 0,
+    refreshed_at TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (kind, entity_id)
+);
+
+-- One row per kind that has been loaded, including kinds that came back EMPTY.
+--
+-- Without this, "no candidates" and "never loaded" are the same state and a
+-- kind the mirror has almost none of ('characters' held 304 tag rows when this
+-- was written) would re-run its 2.2s query on every page view forever. The row
+-- also carries the count, so a switcher can offer the kinds the corpus can
+-- actually serve -- a measurement, not a promise.
+CREATE TABLE IF NOT EXISTS entity_candidate_refreshes (
+    kind         TEXT PRIMARY KEY,
+    candidates   INTEGER NOT NULL DEFAULT 0,
+    refreshed_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
 
 -- Current Glicko-2 rating per entity of any kind. One row per (kind, entity_id),
 -- updated in batch. kind='ao3_work' maps to the legacy arena_ratings rows
@@ -748,6 +792,60 @@ func (s *Store) migrate(ctx context.Context) error {
 			COMMIT;`); err != nil {
 			return fmt.Errorf("migrate arena_comparisons.agreement: %w", err)
 		}
+	}
+
+	// arena_comparisons gained a `kind`: every kind's arena writes through this
+	// one table (see arena.EntityKind), and a row without a kind cannot say
+	// which id space its pair is in. The column is NOT NULL with a default, so
+	// the copy below is what gives historical rows their kind -- they were all
+	// works, which is exactly what the default says.
+	has, err = s.columnExists(ctx, "arena_comparisons", "kind")
+	if err != nil {
+		return err
+	}
+	if !has {
+		// The indexes are recreated here for the same reason the agreement
+		// migration recreates them: dropping the table drops them, and the
+		// pairs-kind index is only declared in the schema block, which has
+		// already run by now.
+		if _, err := s.DB.ExecContext(ctx, `
+			BEGIN;
+			CREATE TABLE arena_comparisons_new (
+			  id           INTEGER PRIMARY KEY,
+			  kind         TEXT NOT NULL DEFAULT 'ao3_work',
+			  work_a       INTEGER NOT NULL,
+			  work_b       INTEGER NOT NULL,
+			  choice       TEXT,
+			  session_key  TEXT NOT NULL,
+			  owner_key    TEXT NOT NULL,
+			  strategy     TEXT NOT NULL,
+			  presented_at TEXT NOT NULL DEFAULT (datetime('now')),
+			  judged_at    TEXT,
+			  agreement    REAL NOT NULL DEFAULT 1.0,
+			  CHECK (work_a < work_b),
+			  CHECK (choice IS NULL OR choice IN ('a', 'b', 'neither'))
+			);
+			INSERT INTO arena_comparisons_new
+			  (id, kind, work_a, work_b, choice, session_key, owner_key, strategy, presented_at, judged_at, agreement)
+			  SELECT id, 'ao3_work', work_a, work_b, choice, session_key, owner_key, strategy, presented_at, judged_at, agreement
+			  FROM arena_comparisons;
+			DROP TABLE arena_comparisons;
+			ALTER TABLE arena_comparisons_new RENAME TO arena_comparisons;
+			CREATE INDEX IF NOT EXISTS idx_arena_pairs
+			  ON arena_comparisons(owner_key, work_a, work_b);
+			CREATE INDEX IF NOT EXISTS idx_arena_pending
+			  ON arena_comparisons(session_key) WHERE judged_at IS NULL;
+			COMMIT;`); err != nil {
+			return fmt.Errorf("migrate arena_comparisons.kind: %w", err)
+		}
+	}
+	// Created after the column check, for both a migrated and a fresh database:
+	// the schema block above runs first and cannot name a column that a
+	// pre-kind database does not have yet.
+	if _, err := s.DB.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_arena_pairs_kind
+		   ON arena_comparisons(owner_key, kind, work_a, work_b)`); err != nil {
+		return fmt.Errorf("create idx_arena_pairs_kind: %w", err)
 	}
 	return nil
 }

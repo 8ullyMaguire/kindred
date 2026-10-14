@@ -257,7 +257,12 @@ func (s *Store) SaveRating(ctx context.Context, r RatingRow) error {
 
 // Comparison is one presented pair and, once judged, its outcome.
 type Comparison struct {
-	ID          int64
+	ID int64
+	// Kind is the id space WorkA/WorkB are read in. The fields keep the
+	// names they had when works were the only kind: the JSON API and the
+	// state database both hold them, and renaming a column that is
+	// already in a deployed database buys nothing but a migration.
+	Kind        arena.EntityKind
 	WorkA       int64 // always the LOWER id; see the schema CHECK
 	WorkB       int64
 	Choice      string // "a", "b", or "" while unrated
@@ -292,11 +297,18 @@ func (s *Store) RecordPresentation(ctx context.Context, c Comparison) (int64, er
 			c.Choice = "a"
 		}
 	}
+	// An unset kind means a caller that predates kinds. Defaulting it here
+	// rather than refusing keeps every existing call site working, and the
+	// write is explicit so a row can never have a NULL kind.
+	kind := c.Kind
+	if !kind.Valid() {
+		kind = arena.KindWork
+	}
 	res, err := s.DB.ExecContext(ctx,
 		`INSERT INTO arena_comparisons
-		   (work_a, work_b, choice, session_key, owner_key, strategy)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		c.WorkA, c.WorkB, nullString(c.Choice), c.SessionKey, c.OwnerKey, c.Strategy)
+		   (kind, work_a, work_b, choice, session_key, owner_key, strategy)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		string(kind), c.WorkA, c.WorkB, nullString(c.Choice), c.SessionKey, c.OwnerKey, c.Strategy)
 	if err != nil {
 		return 0, fmt.Errorf("record presentation: %w", err)
 	}
@@ -417,12 +429,25 @@ func (s *Store) RecordJudgement(ctx context.Context, sessionKey string, choice s
 // is O(1); a slice would make the selector quadratic against a user with
 // any history at all.
 func (s *Store) SeenPairs(ctx context.Context, ownerKey string, limit int) (map[[2]int64]bool, error) {
+	return s.SeenPairsKind(ctx, ownerKey, arena.KindWork, limit)
+}
+
+// SeenPairsKind is SeenPairs for one kind.
+//
+// The kind is part of the question rather than a filter on the answer: a pair
+// seen in the tag arena says nothing about a pair of works, and treating the two
+// as one no-repeat set would suppress candidates in one arena because they were
+// shown in the other.
+func (s *Store) SeenPairsKind(ctx context.Context, ownerKey string, kind arena.EntityKind, limit int) (map[[2]int64]bool, error) {
 	if limit <= 0 {
 		limit = 4000
 	}
+	if !kind.Valid() {
+		kind = arena.KindWork
+	}
 	rows, err := s.DB.QueryContext(ctx,
 		`SELECT work_a, work_b FROM arena_comparisons
-		 WHERE owner_key = ? ORDER BY id DESC LIMIT ?`, ownerKey, limit)
+		 WHERE owner_key = ? AND kind = ? ORDER BY id DESC LIMIT ?`, ownerKey, string(kind), limit)
 	if err != nil {
 		return nil, fmt.Errorf("seen pairs: %w", err)
 	}
@@ -442,6 +467,17 @@ func (s *Store) SeenPairs(ctx context.Context, ownerKey string, limit int) (map[
 // UnjudgedInSession returns the most recent pair shown to a session that
 // has not been judged, so a page reload resumes rather than reshuffles.
 func (s *Store) UnjudgedInSession(ctx context.Context, sessionKey string) (Comparison, bool, error) {
+	return s.UnjudgedInSessionKind(ctx, sessionKey, arena.KindWork)
+}
+
+// UnjudgedInSessionKind resumes a presentation within one kind.
+//
+// Resuming across kinds would hand a tag arena a work pair: the session key is
+// shared, so the kind has to be part of the lookup, not a check afterwards.
+func (s *Store) UnjudgedInSessionKind(ctx context.Context, sessionKey string, kind arena.EntityKind) (Comparison, bool, error) {
+	if !kind.Valid() {
+		kind = arena.KindWork
+	}
 	var c Comparison
 	var choice sql.NullString
 	// presented_at and judged_at are TEXT columns, so they are read through
@@ -450,12 +486,13 @@ func (s *Store) UnjudgedInSession(ctx context.Context, sessionKey string) (Compa
 	// error, which is why it shipped.
 	var presented timeValue
 	var judged nullTime
+	var kindCol string
 	err := s.DB.QueryRowContext(ctx,
-		`SELECT id, work_a, work_b, choice, session_key, owner_key, strategy, presented_at, judged_at
+		`SELECT id, kind, work_a, work_b, choice, session_key, owner_key, strategy, presented_at, judged_at
 		 FROM arena_comparisons
-		 WHERE session_key = ? AND judged_at IS NULL
-		 ORDER BY id DESC LIMIT 1`, sessionKey).
-		Scan(&c.ID, &c.WorkA, &c.WorkB, &choice, &c.SessionKey, &c.OwnerKey,
+		 WHERE session_key = ? AND kind = ? AND judged_at IS NULL
+		 ORDER BY id DESC LIMIT 1`, sessionKey, string(kind)).
+		Scan(&c.ID, &kindCol, &c.WorkA, &c.WorkB, &choice, &c.SessionKey, &c.OwnerKey,
 			&c.Strategy, &presented, &judged)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, false, nil
@@ -466,6 +503,7 @@ func (s *Store) UnjudgedInSession(ctx context.Context, sessionKey string) (Compa
 	c.PresentedAt = presented.Time
 	c.JudgedAt = sql.NullTime{Time: judged.Time, Valid: judged.Valid}
 	c.Choice = choice.String
+	c.Kind = arena.ParseKind(kindCol)
 	return c, true, nil
 }
 
@@ -488,7 +526,7 @@ func (s *Store) JudgedAfter(ctx context.Context, since time.Time, limit int) ([]
 		limit = 20000
 	}
 	rows, err := s.DB.QueryContext(ctx,
-		`SELECT work_a, work_b, choice, agreement FROM arena_comparisons
+		`SELECT work_a, work_b, choice, agreement, kind FROM arena_comparisons
 		 WHERE judged_at IS NOT NULL AND judged_at > ?
 		 ORDER BY id LIMIT ?`, since.UTC().Format("2006-01-02 15:04:05"), limit)
 	if err != nil {
@@ -500,7 +538,8 @@ func (s *Store) JudgedAfter(ctx context.Context, since time.Time, limit int) ([]
 	for rows.Next() {
 		var j JudgedComparison
 		var choice string
-		if err := rows.Scan(&j.WorkA, &j.WorkB, &choice, &j.Agreement); err != nil {
+		var kindCol string
+		if err := rows.Scan(&j.WorkA, &j.WorkB, &choice, &j.Agreement, &kindCol); err != nil {
 			return nil, fmt.Errorf("judged scan: %w", err)
 		}
 		switch choice {
@@ -518,6 +557,10 @@ func (s *Store) JudgedAfter(ctx context.Context, since time.Time, limit int) ([]
 		default:
 			continue
 		}
+		// Read through the allowlist rather than trusting the column: a row
+		// written by a newer build with a kind this one cannot serve must
+		// fall back to works, which is the kind whose batch path is safe.
+		j.Kind = arena.ParseKind(kindCol)
 		out = append(out, j)
 	}
 	return out, rows.Err()
@@ -526,6 +569,9 @@ func (s *Store) JudgedAfter(ctx context.Context, since time.Time, limit int) ([]
 // JudgedComparison is one comparison resolved into a winner and a loser.
 // A draw uses WorkA as the nominal winner; the Score carries the meaning.
 type JudgedComparison struct {
+	// Kind is the id space the ids are read in. RunBatch routes on it, which
+	// is the only reason it is on this struct rather than looked up again.
+	Kind         arena.EntityKind
 	WorkA, WorkB int64
 	Winner       int64
 	Loser        int64
@@ -542,6 +588,9 @@ type JudgedComparison struct {
 
 // LeaderboardEntry is one row of the arena standings.
 type LeaderboardEntry struct {
+	// Kind is the id space WorkID is read in. The field keeps its work-era
+	// name because the JSON API's consumers hold it; see Comparison.Kind.
+	Kind        arena.EntityKind
 	WorkID      int64
 	Title       string
 	Authors     string

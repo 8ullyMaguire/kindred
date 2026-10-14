@@ -5,12 +5,18 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
+
+	"git.polarisocial.xyz/kindred/kindred/internal/arena"
 )
 
 // AO3Kind is the kind name for AO3 works.
-const AO3Kind = "ao3_work"
+//
+// It is arena.KindWork's value rather than a literal, so the corpus's kind and
+// the arena's kind cannot drift apart the way two copies of a constant do.
+const AO3Kind = string(arena.KindWork)
 
 // AO3 reads AO3 works from a read-only mirror.
 //
@@ -22,8 +28,12 @@ const AO3Kind = "ao3_work"
 //     It is scanned
 //     into a *int64 and a has_bookmarks stat is written, so a later sort
 //     cannot mistake NULL for zero and rank the emptiest works highest.
-//   - work_tags.tag_type is 'freeforms' for 3,890,504 of 3,891,300 rows.
-//     Nothing branches on tag type; it is carried as a label.
+//   - work_tags.tag_type is 'freeforms' for 3,890,504 of 3,891,300 rows,
+//     'characters' for 304, 'relationships' for 175 and 'fandoms' for 104
+//     (measured 2026-10-14). `EntityCandidates` branches on it, which is why
+//     the tag-type-specific arenas exist at all and why the web switcher offers
+//     the kinds the corpus can actually serve rather than every kind the arena
+//     can name.
 type AO3 struct {
 	DB *sql.DB
 }
@@ -442,4 +452,227 @@ func makePlaceholders(n int) string {
 		return "NULL"
 	}
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// ── entity arenas: candidates for kinds other than works ─────────────────────
+
+// minWorksPerTag is the arena's evidence floor. A tag carried by two works
+// cannot be meaningfully ranked against one carried by two thousand, and the
+// floor is also what keeps the candidate table a head rather than a tail: of
+// 634,231 tags in the mirror, 91,084 clear it (measured 2026-10-14).
+const minWorksPerTag = 3
+
+// authorSampleRows bounds the author loader's scan. The mirror has no author
+// table — only `works.authors`, a comma-space list of bylines — so authors can
+// only be counted by sampling works. SQLite cannot GROUP BY the Go-side
+// normaliser, which is why the dedupe happens in Go and why the scan is bounded
+// rather than complete: a sampled head of the distribution is what an arena
+// wants, and a full scan of every work would cost far more than it tells us.
+const authorSampleRows = 4000
+
+// EntityCandidates loads one kind's arena candidates from the mirror.
+//
+// This is the slow half of the arena's candidate machinery, and it is meant to
+// be called on a refresh rather than on a page view: the freeform query groups
+// 3,890,504 rows and measured 2.2s against the live mirror. The state store
+// keeps the materialised result (see store.EnsureEntityCandidates); nothing on a
+// request path calls this directly except to fill that table.
+//
+// Works are refused rather than served empty: a work arena's candidates come
+// from a tag (`Store.CandidateWorkIDs`) and from the session's own history, and
+// an empty list here would look like "no works matched" instead of "wrong
+// loader".
+func (a *AO3) EntityCandidates(ctx context.Context, kind arena.EntityKind, limit int) ([]arena.EntityCandidate, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	switch {
+	case kind == arena.KindWork:
+		return nil, fmt.Errorf("corpus: the %s arena's candidates come from a tag, not from this loader", kind)
+	case kind.IsTag():
+		tagType, _ := kind.TagType()
+		return a.tagCandidates(ctx, tagType, limit)
+	case kind == arena.KindAuthor:
+		return a.authorCandidates(ctx, limit)
+	default:
+		return nil, fmt.Errorf("corpus: no candidate loader for kind %q", kind)
+	}
+}
+
+// tagCandidates returns the `limit` most-carried tags of one type.
+//
+// The head of the distribution on purpose. A uniform sample of 634,231 tags
+// would be mostly tags used once, and a ranking of tags nobody uses is not a
+// ranking anyone wants; the arena's job is to order the tags in play. Names come
+// from the corpus's `tags` table in a second query rather than a join, because a
+// join against a GROUP BY of this size is the slow shape this function exists to
+// keep off the request path.
+func (a *AO3) tagCandidates(ctx context.Context, tagType string, limit int) ([]arena.EntityCandidate, error) {
+	rows, err := a.DB.QueryContext(ctx, `
+		SELECT tag_id, COUNT(*) AS n
+		FROM work_tags
+		WHERE tag_type = ?
+		GROUP BY tag_id
+		HAVING n >= ?
+		ORDER BY n DESC, tag_id
+		LIMIT ?`, tagType, minWorksPerTag, limit)
+	if err != nil {
+		return nil, fmt.Errorf("corpus: tag candidates (%s): %w", tagType, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	cands := make([]arena.EntityCandidate, 0, limit)
+	for rows.Next() {
+		var c arena.EntityCandidate
+		if err := rows.Scan(&c.ID, &c.Weight); err != nil {
+			return nil, fmt.Errorf("corpus: scan tag candidate: %w", err)
+		}
+		cands = append(cands, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("corpus: tag candidates: %w", err)
+	}
+	if len(cands) == 0 {
+		// A kind whose tag type the mirror has almost nothing of is a
+		// normal state, not a fault: 'characters' held 304 rows when this
+		// was written. The caller decides whether to offer it.
+		return nil, nil
+	}
+
+	names, err := a.tagNames(ctx, idsOf(cands))
+	if err != nil {
+		return nil, err
+	}
+	kept := cands[:0]
+	for _, c := range cands {
+		name, ok := names[c.ID]
+		if !ok {
+			// A tag id in work_tags with no row in tags is a corpus that
+			// disagrees with itself. Dropping it is the honest option:
+			// an arena cannot present a candidate it cannot name.
+			continue
+		}
+		c.Name = name
+		kept = append(kept, c)
+	}
+	return kept, nil
+}
+
+// tagNames resolves tag ids to names, in one query per batch.
+func (a *AO3) tagNames(ctx context.Context, ids []int64) (map[int64]string, error) {
+	out := make(map[int64]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := a.DB.QueryContext(ctx,
+		`SELECT id, name FROM tags WHERE id IN (`+makePlaceholders(len(ids))+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("corpus: tag names: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("corpus: scan tag name: %w", err)
+		}
+		out[id] = name
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("corpus: tag names: %w", err)
+	}
+	return out, nil
+}
+
+// authorCandidates samples works.authors and returns distinct bylines.
+//
+// Two authors who share a byline are one entity here (see arena.AuthorEntityID);
+// the weight is how often the byline appeared in the sample, which is a sampled
+// count and is documented as one rather than presented as a true total.
+func (a *AO3) authorCandidates(ctx context.Context, limit int) ([]arena.EntityCandidate, error) {
+	rows, err := a.DB.QueryContext(ctx,
+		`SELECT authors FROM works WHERE authors <> '' ORDER BY RANDOM() LIMIT ?`, authorSampleRows)
+	if err != nil {
+		return nil, fmt.Errorf("corpus: author candidates: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	type entry struct {
+		name  string
+		count int
+	}
+	byID := make(map[int64]*entry)
+	for rows.Next() {
+		var authors string
+		if err := rows.Scan(&authors); err != nil {
+			return nil, fmt.Errorf("corpus: scan authors: %w", err)
+		}
+		for _, byline := range arena.SplitAuthors(authors) {
+			id := arena.AuthorEntityID(byline)
+			name := strings.TrimSpace(byline)
+			if e, ok := byID[id]; ok {
+				e.count++
+				// The sample is read in RANDOM order, so the display name
+				// cannot be "whichever spelling came first": that made the
+				// name change between runs for an entity whose id did
+				// not. Prefer the most informative byline (longest), then
+				// the lexicographically smallest, so the choice is a
+				// function of the data rather than of the scan order.
+				if betterAuthorName(name, e.name) {
+					e.name = name
+				}
+				continue
+			}
+			byID[id] = &entry{name: name, count: 1}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("corpus: author candidates: %w", err)
+	}
+
+	cands := make([]arena.EntityCandidate, 0, len(byID))
+	for id, e := range byID {
+		cands = append(cands, arena.EntityCandidate{ID: id, Name: e.name, Weight: e.count})
+	}
+	// Most-seen first, id as the tie-break so the table is reproducible: a
+	// sample that reorders equal candidates on every refresh would make the
+	// candidate table's diff unreadable for no gain.
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].Weight != cands[j].Weight {
+			return cands[i].Weight > cands[j].Weight
+		}
+		return cands[i].ID < cands[j].ID
+	})
+	if len(cands) > limit {
+		cands = cands[:limit]
+	}
+	return cands, nil
+}
+
+// idsOf is the id column of a candidate slice, for the name lookup.
+func idsOf(cands []arena.EntityCandidate) []int64 {
+	ids := make([]int64, 0, len(cands))
+	for _, c := range cands {
+		ids = append(ids, c.ID)
+	}
+	return ids
+}
+
+// betterAuthorName reports whether candidate is a better display name than
+// current for the same author id.
+//
+// Deterministic on purpose. The candidate loader samples works in random order,
+// and taking the first spelling it saw made the name depend on that order: the
+// same author could be "alpha" on one run and "Alpha (alpha_user)" on the next,
+// with the same id and the same rating. A name that changes between runs is
+// worse than either choice.
+func betterAuthorName(candidate, current string) bool {
+	if len(candidate) != len(current) {
+		return len(candidate) > len(current)
+	}
+	return candidate < current
 }
