@@ -1117,6 +1117,15 @@ type RankPage struct {
 	// sparkline and for "why is this where it is".
 	History []RankPoint
 	WorkURL string
+	// Kind and KindLabel name the arena an entity standing belongs to. Empty
+	// for a work, whose page is the same in every other respect.
+	Kind      string
+	KindLabel string
+	// Rank is this entity's position among its kind, RankOf how many of that
+	// kind carry a rating at all. Both zero for a work: the work page does not
+	// make that claim, and a zero would render as "ranked 0 of 0" if it did.
+	Rank   int
+	RankOf int
 }
 
 // RankPoint is one period's rating.
@@ -1127,6 +1136,35 @@ type RankPoint struct {
 }
 
 // renderRank shows one work's rating and how it got there.
+// renderRankPath serves both standings: /rank/{id} for a work, and
+// /rank/{kind}/{id} for any entity kind.
+//
+// The kind segment is matched against the allowlist rather than assumed, so
+// /rank/17 keeps working and an id can never be mistaken for a kind.
+func (d Deps) renderRankPath(w http.ResponseWriter, r *http.Request, rest string) {
+	rest = strings.TrimSuffix(rest, "/")
+	first, id, ok := strings.Cut(rest, "/")
+	if ok && isKindName(first) {
+		if kind := arena.ParseKind(first); kind != arena.KindWork {
+			d.renderEntityRank(w, r, kind, id)
+			return
+		}
+		d.renderRank(w, r, id)
+		return
+	}
+	d.renderRank(w, r, rest)
+}
+
+// isKindName reports whether s names an arena kind.
+func isKindName(s string) bool {
+	for _, k := range arena.Kinds {
+		if string(k) == s {
+			return true
+		}
+	}
+	return false
+}
+
 func (d Deps) renderRank(w http.ResponseWriter, r *http.Request, idStr string) {
 	ctx := r.Context()
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -1568,4 +1606,75 @@ func (d Deps) renderArenaKind(w http.ResponseWriter, r *http.Request, page Arena
 		page.Message = ""
 	}
 	d.page(w, "arena.html", page, http.StatusOK)
+}
+
+// renderEntityRank is one entity's standing: what it is, how it is rated, where
+// it sits among its kind, and how it got there.
+//
+// It reuses rank.html unchanged -- the same title/byline/rating/record/history
+// shape serves an author or a tag exactly as well as a work. A second template
+// would be a second place for the two to drift apart.
+func (d Deps) renderEntityRank(w http.ResponseWriter, r *http.Request, kind arena.EntityKind, idStr string) {
+	ctx := r.Context()
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		d.notFound(w, r)
+		return
+	}
+	st := d.Engine.Store
+	page := RankPage{Base: d.baseOf(r, "Rank", "Arena rating"),
+		WorkID: id, Kind: string(kind), KindLabel: kind.Label()}
+
+	name, ok, err := st.EntityName(ctx, kind, id)
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	if !ok || name == "" {
+		// An entity that was never a candidate has no name here. Say that
+		// rather than showing a bare id as if it were one.
+		name = kind.Label() + " " + strconv.FormatInt(id, 10) + " (not in the candidate set)"
+	}
+	page.Title = name
+	page.Author = kind.Label()
+	page.WorkURL = entityURL(kind, id, name)
+	page.Rating, page.RD = arena.MU_INIT, arena.PHI_INIT
+
+	rows, err := st.RatingForKind(ctx, kind, []int64{id})
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	if row, ok := rows[id]; ok {
+		page.Rating, page.RD, page.Sigma = round1(row.Rating.Mu), round1(row.Rating.Phi), row.Rating.Sigma
+		page.Comparisons = row.Comparisons
+		page.Wins, page.Losses, page.Draws = row.Wins, row.Losses, row.Draws
+		page.Rated = row.Comparisons > 0
+	}
+	if !page.Rated {
+		page.Note = "This " + kind.Label() + " has not been compared yet, so it carries " +
+			"the starting rating rather than a measured one."
+	}
+
+	// Standing among the kind. The leaderboard is ordered, so the position is
+	// the answer; an entity outside the fetched head is honestly unranked
+	// rather than "ranked last".
+	const head = 2000
+	if board, err := st.LeaderboardForKind(ctx, kind, head, 0); err == nil {
+		for i, e := range board {
+			if e.WorkID == id {
+				page.Rank, page.RankOf = i+1, len(board)
+				break
+			}
+		}
+	}
+
+	if hist, err := st.RatingHistoryKind(ctx, kind, id, 40); err == nil {
+		for _, h := range hist {
+			page.History = append(page.History, RankPoint{
+				Period: h.Period, Rating: round1(h.Rating.Mu), RD: round1(h.Rating.Phi),
+			})
+		}
+	}
+	d.page(w, "rank.html", page, http.StatusOK)
 }

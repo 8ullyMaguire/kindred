@@ -12,10 +12,12 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
+	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 	"git.polarisocial.xyz/kindred/kindred/internal/testcorpus"
@@ -28,7 +30,12 @@ func judgeDeps(t *testing.T) (Deps, *store.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	return Deps{Version: "test", Engine: &engine.Engine{Store: st}}, st
+	// The ENGINE needs the corpus too, not just the store: the arena's own
+	// pages read tags through it, and a fixture that wires only the store
+	// panics on the first page that asks the engine for the mirror.
+	return Deps{Version: "test", Engine: &engine.Engine{
+		Store: st, Corpus: corpus.NewAO3(st.Corpus),
+	}}, st
 }
 
 func present(t *testing.T, st *store.Store, kind arena.EntityKind, a, b int64) {
@@ -173,7 +180,12 @@ func entityArenaDeps(t *testing.T) (Deps, *store.Store) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	return Deps{Version: "test", Engine: &engine.Engine{Store: st}}, st
+	// The ENGINE needs the corpus too, not just the store: the arena's own pages
+	// read tags through it, and a fixture that wires only the store panics on
+	// the first page that asks the engine for the mirror.
+	return Deps{Version: "test", Engine: &engine.Engine{
+		Store: st, Corpus: corpus.NewAO3(st.Corpus),
+	}}, st
 }
 
 func TestAnEntityArenaRendersTwoNamedEntities(t *testing.T) {
@@ -243,5 +255,68 @@ func TestJudgingAnEntityPairFromTheFormRecordsItInThatArena(t *testing.T) {
 	}
 	if _, ok, err := st.LastJudgedInSessionKind(ctx, session, arena.KindWork); err != nil || ok {
 		t.Fatalf("the tag judgement also landed in the work arena (ok=%v err=%v)", ok, err)
+	}
+}
+
+// An entity's standing, and the route that keeps works working.
+func TestAnEntityStandingPageRenders(t *testing.T) {
+	ctx := context.Background()
+	d, st := entityArenaDeps(t)
+
+	// Take an entity id from the arena itself, so the page is asked about
+	// something the deployment actually presented.
+	rec := httptest.NewRecorder()
+	d.route(rec, httptest.NewRequest(http.MethodGet, "/arena?kind=ao3_tag", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /arena?kind=ao3_tag = %d", rec.Code)
+	}
+	var session string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == ArenaCookieName {
+			session = c.Value
+		}
+	}
+	pair, ok, err := st.UnjudgedInSessionKind(ctx, session, arena.KindTag)
+	if err != nil || !ok {
+		t.Fatalf("no tag pair presented (ok=%v err=%v)", ok, err)
+	}
+	name, ok, err := st.EntityName(ctx, arena.KindTag, pair.WorkA)
+	if err != nil || !ok {
+		t.Fatalf("the presented tag has no name (ok=%v err=%v)", ok, err)
+	}
+
+	code, body := arenaBody(t, d, "/rank/ao3_tag/"+strconv.FormatInt(pair.WorkA, 10))
+	if code != http.StatusOK {
+		t.Fatalf("GET the entity standing = %d: %s", code, body)
+	}
+	if !strings.Contains(body, name) {
+		t.Errorf("the standing page does not name the tag %q", name)
+	}
+	if !strings.Contains(body, "tag") {
+		t.Error("the standing page does not say which arena the entity belongs to")
+	}
+	// An entity nobody has judged yet must carry the starting rating WITH the
+	// caveat, or the page is claiming a measured score it does not have.
+	if !strings.Contains(body, "has not been compared yet") {
+		t.Error("an unrated entity's page does not say its rating is the starting one")
+	}
+}
+
+func TestTheRankRouteStillServesWorksAndRefusesRubbish(t *testing.T) {
+	d, _ := entityArenaDeps(t)
+	// /rank/{id} is a work, as it has always been. A work that is not in the
+	// corpus still renders: the rating is the point, the title is a courtesy.
+	if code, body := arenaBody(t, d, "/rank/1"); code != http.StatusOK {
+		t.Fatalf("GET /rank/1 = %d: %s", code, body)
+	}
+	if code, _ := arenaBody(t, d, "/rank/ao3_tag/not-a-number"); code != http.StatusNotFound {
+		t.Errorf("a non-numeric entity id gave %d, want 404", code)
+	}
+	if code, _ := arenaBody(t, d, "/rank/not-a-kind/7"); code != http.StatusNotFound {
+		t.Errorf("an unknown kind segment gave %d, want 404", code)
+	}
+	// A work named explicitly as a work is still a work, not a 404.
+	if code, body := arenaBody(t, d, "/rank/ao3_work/1"); code != http.StatusOK {
+		t.Fatalf("GET /rank/ao3_work/1 = %d: %s", code, body)
 	}
 }

@@ -396,7 +396,7 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 	case p == "/mirror":
 		d.renderMirror(w, r)
 	case strings.HasPrefix(p, "/rank/"):
-		d.renderRank(w, r, strings.TrimPrefix(p, "/rank/"))
+		d.renderRankPath(w, r, strings.TrimPrefix(p, "/rank/"))
 	default:
 		d.notFound(w, r)
 	}
