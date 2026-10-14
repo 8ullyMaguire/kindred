@@ -26,12 +26,12 @@ const { test, expect } = require('@playwright/test');
 
 /** Every page a reader can reach, and the nav label that gets them there. */
 const PAGES = [
-  // heading is whether the page renders an <h1>. The home page passes an empty
-  // heading on purpose (d.base("kindred", "") -- the brand is already in the
-  // header, and an <h1> repeating it would be noise for a screen reader), so
-  // the assertion cannot be blanket "every page has an h1". The TITLE element
-  // is the invariant instead: the layout always writes it.
-  { path: '/', link: '/', name: 'home', title: /kindred/i, heading: false },
+  // heading is whether the page renders an <h1>. The home page does now: the UI
+  // overhaul found it passing an empty heading (d.base("kindred", "")) and gave
+  // it a real one, so the old expectation (heading: false) was pinning the
+  // defect rather than the intended page. The TITLE element stays the invariant
+  // instead: the layout always writes it.
+  { path: '/', link: '/', name: 'home', title: /kindred/i, heading: true },
   { path: '/recommend', link: '/recommend', name: 'recommend', title: /kindred/i, heading: true },
   { path: '/fandoms', link: '/fandoms', name: 'fandoms', title: /Fandoms/i, heading: true },
   { path: '/underrated', link: '/underrated', name: 'underrated', title: /Underrated/i, heading: true },
@@ -45,6 +45,12 @@ const PAGES = [
   { path: '/leaderboard', link: '/leaderboard', name: 'leaderboard', title: /leaderboard|rankings/i, heading: true },
   { path: '/my-ranking', link: '/my-ranking', name: 'my-ranking', title: /ranking/i, heading: true },
   { path: '/block', link: '/block', name: 'block', title: /block/i, heading: true },
+  // The mirror family: both are in the nav, and neither was requested by
+  // anything in this suite. goal-check.py's page-coverage clause is the only
+  // check that sees a registered-but-never-visited route, and it failed on
+  // both -- a route nothing visits cannot be broken by a change nobody makes.
+  { path: '/mirror', link: '/mirror', name: 'mirror', title: /mirror/i, heading: true },
+  { path: '/crawl', link: '/crawl', name: 'crawl', title: /crawl queue/i, heading: true },
 ];
 
 test.describe('every reader page renders', () => {

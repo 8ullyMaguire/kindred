@@ -292,13 +292,21 @@ a.tag:hover {
    * had been there the whole time. Search for `@media` and read them. */
   #header, #main, #footer { padding: 1em 1.25em; }
 
-  /* A search box narrower than its own container on a phone. */
+  /* A search box narrower than its own container on a phone.
+   *
+   * box-sizing: border-box is load-bearing, not tidiness. The stylesheet sets
+   * no box-sizing anywhere, so these inputs are content-box: width: 100% plus
+   * padding (0.4em 0.6em) plus a 1px border measured 349.2px inside a 328px
+   * content box at a 360px viewport, putting the right edge at 365.2px -- a 5px
+   * page overflow on EVERY route, because the box is in the header. Measured
+   * with the element's own rect, not inferred. */
   .search-form input[type="text"],
   .controls input[type="text"],
   .controls input[type="search"] {
     width: 100%;
     max-width: 100%;
     min-width: 0;
+    box-sizing: border-box;
   }
 
   /* Card metadata is a run of "12,345 words - en - complete" spans that wrap
@@ -694,7 +702,11 @@ code {
 
 .nav-group a {
   display: block;
-  padding: 0.15rem 0.5rem;
+  /* 0.3rem, not 0.15rem. The generic `a { padding: 0.4em 0.2em }` in the
+     narrow-screen block cannot reach these links: `.nav-group a` outranks a
+     bare `a` on specificity, so the nav stayed 23px tall -- 1px under the 24px
+     minimum stylesheet.spec.js asserts, measured, not guessed. */
+  padding: 0.3rem 0.5rem;
   margin-left: -0.5rem;
   border-radius: 2px;
   text-decoration: none;

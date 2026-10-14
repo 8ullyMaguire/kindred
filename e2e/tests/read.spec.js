@@ -25,7 +25,10 @@ test.describe('public read surface', () => {
     await expect(box).toHaveAttribute('name', 'q');
 
     // The nav is on every page; if it breaks, every page is unreachable.
-    for (const href of ['/arena', '/leaderboard', '/stats']) {
+    // /stats is no longer a nav entry: it returns application/json, so the nav
+    // offering it as a page delivered a wall of JSON. /mirror is the page a
+    // reader was asking for, and /api/v1/stats keeps its contract.
+    for (const href of ['/arena', '/leaderboard', '/mirror']) {
       await expect(page.locator(`a[href="${href}"]`).first()).toBeVisible();
     }
   });
