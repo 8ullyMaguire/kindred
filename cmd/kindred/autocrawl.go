@@ -56,6 +56,18 @@ var workURLRe = regexp.MustCompile(`/works/(\d{1,12})`)
 // background improvement loop, and a crawler that takes serve down because
 // a database was locked would be worse than no crawler.
 func runAutoCrawl(ctx context.Context, s *store.Store, c *config.Config, log *slog.Logger) {
+	runAutoCrawlMax(ctx, s, c, log, 0)
+}
+
+// runAutoCrawlMax is runAutoCrawl with a bound on how many jobs it processes
+// before returning. Zero means unlimited, which is what `serve` wants (it runs
+// until the process stops).
+//
+// The bound exists because the same drain is also driven from a timer (see
+// cmd/kindred/autocrawlcmd.go), and a timer whose run can last four hours is
+// not a timer. A bounded run leaves the remaining rows undoned, so the next
+// tick picks up exactly where it stopped.
+func runAutoCrawlMax(ctx context.Context, s *store.Store, c *config.Config, log *slog.Logger, max int) {
 	if s == nil {
 		return
 	}
@@ -97,24 +109,51 @@ func runAutoCrawl(ctx context.Context, s *store.Store, c *config.Config, log *sl
 
 	cr := crawl.New(client)
 	sink := crawl.NewSQLSink(mirror)
+	done := drainQueue(ctx, s, max, log, func(job store.CrawlJob) {
+		processAutoCrawlJob(ctx, s, mirror, sink, cr, job, log)
+	})
+	log.Info("auto-crawl: run finished", "processed", done)
+}
+
+// drainQueue pulls jobs and hands each to process until either the run's bound
+// is reached (max > 0) or ctx ends (max == 0, which is what serve wants).
+//
+// The processing is a parameter so the bound itself can be tested without a
+// network: what is being pinned here is how many jobs a run takes and when it
+// stops, not what a fetch does. It returns the number processed.
+func drainQueue(ctx context.Context, s *store.Store, max int, log *slog.Logger, process func(store.CrawlJob)) int {
 	ticker := time.NewTicker(autoCrawlPoll)
 	defer ticker.Stop()
 
+	done := 0
 	for {
+		// A bounded run stops as soon as it has done its share. Checked before
+		// the queue read so a timer's run ends on the count, not on the poll.
+		if max > 0 && done >= max {
+			log.Info("auto-crawl: reached this run's bound", "processed", done)
+			return done
+		}
 		job, ok, err := s.NextCrawlJob(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
-				return
+				return done
 			}
 			log.Warn("auto-crawl: queue read failed", "err", err)
 		}
 		if ok {
-			processAutoCrawlJob(ctx, s, mirror, sink, cr, job, log)
+			process(job)
+			done++
 			continue
+		}
+		// Unlimited (serve): wait for new work. Bounded (a timer): the queue is
+		// empty, so there is nothing left to do and the run is over.
+		if max > 0 {
+			log.Info("auto-crawl: queue drained", "processed", done)
+			return done
 		}
 		select {
 		case <-ctx.Done():
-			return
+			return done
 		case <-ticker.C:
 		}
 	}

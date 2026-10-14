@@ -1,0 +1,64 @@
+[Unit]
+Description=Drain kindred's crawl queue (the auto-crawler, off the web unit)
+Documentation=https://github.com/polarisocial/kindred
+
+# WHY THIS IS A SEPARATE UNIT AND NOT PART OF kindred.service
+#
+# `serve` drains the crawl queue itself, and on this deployment that could never
+# work: the web unit is sandboxed with `IPAddressDeny=any` /
+# `IPAddressAllow=localhost` — correct for a read-only mirror, fatal for a
+# crawler. Measured on the live instance 2026-10-14: 520 of 521 queue rows parked
+# after five attempts, every `last_error` an `i/o timeout` on the dial. The
+# feature existed, queued work honestly, and never fetched anything.
+#
+# There were two ways out. Loosen the web unit's sandbox so it can reach AO3,
+# giving up a guarantee its own comment states ("should not be reaching the
+# network"); or leave the web unit untouched and drain the queue from a unit
+# whose job IS to reach out. This is the second. serve still drains the queue
+# when it can (`--no-crawl` turns that off); this unit covers the deployment
+# where it cannot.
+#
+# The queue lives in the state database, and that is the whole of the state: a
+# run that stops at its bound leaves the remaining rows undoned, so nothing is
+# lost between ticks and there is no resume file to go stale.
+
+[Service]
+Type=oneshot
+User=kindre
+Environment=STATE=/var/lib/kindred
+Environment=CORPUS=/srv/ao3/ao3_metadata.db
+
+# NOTE ON PATHS: the executable path is written out literally on purpose.
+# systemd does not expand Environment= in the executable position -- it execs
+# the literal string, fails to find it, and reports 203/EXEC, which looks like a
+# permissions problem and is not. The flags below still use the variables.
+#
+# --max 25 bounds the run. At the 30s crawl delay robots.txt asks for, that is
+# about twelve minutes; the timer fires every fifteen. Unbounded would be a run
+# measured in hours, which is not a timer.
+ExecStart=/usr/local/bin/kindred autocrawl \
+  --corpus ${CORPUS} \
+  --db ${STATE}/kindred.db \
+  --max 25
+
+# A failure here is a failure. A crawler that reports success while fetching
+# nothing is the bug this unit was written to fix, and it went unnoticed for
+# weeks precisely because nothing failed loudly.
+SuccessExitStatus=0
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+# The state database and the corpus are both written, and nothing else is.
+ReadWritePaths=/var/lib/kindred /srv/ao3
+
+# NETWORK IS THE POINT. Unlike the web unit this one is allowed to dial out,
+# which is the entire reason it exists. It is still restricted to TCP/UDP over
+# AF_INET/AF_INET6/AF_UNIX so it cannot be turned into a UNIX-socket client for
+# something local.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

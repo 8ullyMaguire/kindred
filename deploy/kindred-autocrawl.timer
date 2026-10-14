@@ -1,0 +1,33 @@
+[Unit]
+Description=Run kindred's auto-crawler on a fixed cadence
+Documentation=https://github.com/polarisocial/kindred
+
+[Timer]
+Unit=kindred-autocrawl.service
+
+# Every 15 minutes, starting 5 minutes after boot.
+#
+# THE ARITHMETIC, because this number is chosen rather than felt: robots.txt at
+# AO3 asks for a 30s crawl delay, and the crawler honours it, so 25 works is
+# about 12.5 minutes of work. A 15-minute tick therefore leaves a small gap
+# between runs and never overlaps itself; the service is Type=oneshot, so an
+# overlapping tick would simply be skipped rather than run twice.
+#
+# Fifteen minutes is a compromise between two wrong answers. A one-minute tick
+# would queue up runs that cannot finish and make the log a wall of "reached
+# this run's bound" with no progress. A nightly tick would leave a reader's
+# 404-queued work missing from the mirror for up to a day, which defeats the
+# point of queueing it in the first place.
+#
+# Raising --max in the service without raising this interval does not make the
+# crawler faster; it makes runs longer than the gap between them. Change both,
+# or neither.
+OnBootSec=5min
+OnUnitActiveSec=15min
+
+# A crawl is not a deadline, so jitter and a generous accuracy window are free.
+AccuracySec=1min
+RandomizedDelaySec=90
+
+[Install]
+WantedBy=timers.target

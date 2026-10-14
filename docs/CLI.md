@@ -128,6 +128,38 @@ kindred crawl --corpus ~/kindling-data/ao3_metadata.db \
 `--offline` exists so the parser can be tested against real pages without making
 requests. It is the flag that makes this command safe to exercise in CI.
 
+## `autocrawl` — drain the crawl queue, bounded, and exit
+
+The same drain `serve` runs in a goroutine, as a one-shot command, so it can be
+driven by a systemd timer on a deployment where `serve` cannot reach the network.
+
+```bash
+kindred autocrawl --corpus /srv/ao3/ao3_metadata.db \
+                  --db /var/lib/kindred/kindred.db \
+                  --max 25
+```
+
+| flag | default | meaning |
+|---|---|---|
+| `--max` | `25` | stop after this many works; `0` drains until the queue is empty |
+
+The queue (`crawl_queue` in the state database) *is* the state: rows are marked
+done per work, so a run that stops at `--max` leaves the rest undoned and the next
+tick continues where it stopped. There is no resume file and nothing to lose
+between runs.
+
+Why it exists separately from `serve`: the web unit is sandboxed with
+`IPAddressDeny=any` — right for a read-only mirror, fatal for a crawler. Measured
+on the deployed instance, 520 of 521 queue rows were parked with an `i/o timeout`
+on the dial, so the feature was live, honest and inert. `deploy/kindred-autocrawl.
+{service,timer}` runs this command from a unit that is allowed to dial out; the
+web unit keeps its guarantee. `make autocrawl-timer` prints the install steps.
+
+A crawled work enters the **corpus** immediately. The tag graph the recommender
+scores against is built by `ingest`, so a new work starts influencing rankings at
+the next ingest — crawling faster than you re-index does not make the mirror more
+useful.
+
 ## `profile` — taste profiles
 
 ```bash

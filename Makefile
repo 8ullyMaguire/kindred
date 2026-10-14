@@ -124,6 +124,19 @@ arena-timer:
 	@echo "sudo systemctl enable --now kindred-arena-batch.timer"
 	@echo "systemctl list-timers kindred-arena-batch.timer"
 
+# The auto-crawler timer. Separate from kindred.service on purpose: that unit is
+# sandboxed away from the network, so its own crawler goroutine can never fetch
+# anything. See the unit's header for the measurement.
+.PHONY: autocrawl-timer
+autocrawl-timer:
+	@echo "sudo install -m644 deploy/kindred-autocrawl.service /etc/systemd/system/"
+	@echo "sudo install -m644 deploy/kindred-autocrawl.timer   /etc/systemd/system/"
+	@echo "sudo systemctl daemon-reload"
+	@echo "sudo systemctl enable --now kindred-autocrawl.timer"
+	@echo "systemctl list-timers kindred-autocrawl.timer"
+	@echo
+	@echo "then watch a run: journalctl -u kindred-autocrawl -n 40"
+
 .PHONY: clean
 clean:
 	rm -rf bin
