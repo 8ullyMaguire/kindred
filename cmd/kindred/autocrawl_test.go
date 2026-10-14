@@ -19,21 +19,27 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// autoCrawlPage is a minimal AO3 work page ParseWork accepts: the shape the
-// skip rule and the sink both key on (id from URL, summary from the block).
-const autoCrawlPage = `<!DOCTYPE html><html><head>
-<meta name="works:title" content="Fetched Work"/>
-<meta name="works:author" content="someauthor"/>
-<meta name="works:words" content="1,200"/>
-<meta name="works:kudos" content="34"/>
-<meta name="works:hits" content="500"/>
-</head><body>
-<span class="status">Completed</span>
-<div class="language">English</div>
-<div class="summary"><blockquote>A summary the crawler brought home.</blockquote></div>
-<ul class="tags">
-<li class="freeforms"><a class="tag" href="/tags/dark">dark</a></li>
-</ul>
+// autoCrawlPage is a minimal AO3 work page in the shape a live page has — the
+// shape the skip rule and the sink both key on (id from URL, summary from the
+// blockquote, title from the heading).
+//
+// The elements are real; the numbers are small and the page is short. The
+// verbatim quote of a live page is in internal/crawl/testdata/ao3_work_page.html,
+// and the parser that reads it is pinned by TestParseWorkReadsTheRealPageShapes.
+const autoCrawlPage = `<!DOCTYPE html><html><body>
+<h2 class="title heading">Fetched Work</h2>
+<div class="byline"><a rel="author" href="/users/someauthor/pseuds/someauthor">someauthor</a></div>
+<dl class="stats">
+  <dt class="words">Words:</dt><dd class="words">1,200</dd>
+  <dt class="chapters">Chapters:</dt><dd class="chapters">1/1</dd>
+  <dt class="kudos">Kudos:</dt><dd class="kudos">34</dd>
+  <dt class="hits">Hits:</dt><dd class="hits">500</dd>
+  <dt class="status">Updated:</dt><dd class="status">2026-07-27</dd>
+</dl>
+<div class="summary module"><h3 class="heading">Summary:</h3>
+<blockquote class="userstuff"><p>A summary the crawler brought home.</p></blockquote></div>
+<dd class="rating tags"><ul class="commas"><li><a class="tag" href="/tags/Teen%20And%20Up%20Audiences/works">Teen And Up Audiences</a></li></ul></dd>
+<dd class="freeform tags"><ul class="commas"><li><a class="tag" href="/tags/Angst/works">Angst</a></li></ul></dd>
 </body></html>`
 
 // stubClient counts fetches so a test can prove the SKIP path skipped.

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,73 +17,120 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const sampleWorkPage = `<!DOCTYPE html><html><head>
-<meta name="works:title" content="The Test Work"/>
-<meta name="works:author" content="someauthor"/>
-<meta name="works:words" content="45,120"/>
-<meta name="works:kudos" content="1,203"/>
-<meta name="works:hits" content="88,000"/>
-<meta name="works:bookmarks" content="412"/>
-<meta name="works:chapters" content="12/?"/>
-</head><body>
-<span class="status">Completed</span>
-<div class="language">English</div>
-<div class="summary">
-<blockquote>A summary that is
-   multiple   lines and has <em>markup</em> in it.</blockquote>
-</div>
-<ul class="tags">
-<li class="freeforms"><a class="tag" href="/tags/dark">dark</a></li>
-<li class="freeforms"><a class="tag" href="/tags/villain">villain</a></li>
-<li class="relationships"><a class="tag" href="/tags/a%20b/a%20b">a/b</a></li>
-<li class="characters"><a class="tag" href="/tags/hermione">Hermione</a></li>
-<li class="fandoms"><a class="tag" href="/tags/Harry%20Potter">Harry Potter</a></li>
-</ul>
-</body></html>`
+// realWorkPage is the live AO3 page excerpt in testdata/ao3_work_page.html.
+//
+// It is read from disk because the whole point of the fixture is that AO3
+// *sent* it. The inline fixture this replaced invented
+// `<meta name="works:title">` and `<li class="freeforms">`; AO3 sends neither,
+// so ParseWork refused every real work page while these tests stayed green.
+// TestParseWorkReadsTheRealPageShapes fails if the invented tags come back.
+func realWorkPage(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("testdata/ao3_work_page.html")
+	if err != nil {
+		t.Fatalf("read the live-page fixture: %v", err)
+	}
+	return string(b)
+}
 
+// The expected values are the live page's own, from work 82026196 fetched
+// 2026-10-14 — not values picked to make the parser look right.
 func TestParseWorkExtractsEveryField(t *testing.T) {
-	w, err := ParseWork([]byte(sampleWorkPage), "https://archiveofourown.org/works/12345")
+	w, err := ParseWork([]byte(realWorkPage(t)), "https://archiveofourown.org/works/82026196")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w.ID != 12345 {
-		t.Errorf("ID = %d, want 12345", w.ID)
+	if w.ID != 82026196 {
+		t.Errorf("ID = %d, want 82026196", w.ID)
 	}
-	if w.Title != "The Test Work" {
+	if w.Title != "Highschool DxD : I'm Motohama with Gacha System" {
 		t.Errorf("Title = %q", w.Title)
 	}
-	if w.Authors != "someauthor" {
+	if w.Authors != "Opeler" {
 		t.Errorf("Authors = %q", w.Authors)
 	}
 	// Comma grouping must be stripped, not parsed as a prefix.
-	if w.WordCount != 45120 {
-		t.Errorf("WordCount = %d, want 45120", w.WordCount)
+	if w.WordCount != 155360 {
+		t.Errorf("WordCount = %d, want 155360", w.WordCount)
 	}
-	if w.Kudos != 1203 {
-		t.Errorf("Kudos = %d, want 1203", w.Kudos)
+	if w.Kudos != 308 {
+		t.Errorf("Kudos = %d, want 308", w.Kudos)
 	}
-	if w.Hits != 88000 {
-		t.Errorf("Hits = %d, want 88000", w.Hits)
+	if w.Hits != 30546 {
+		t.Errorf("Hits = %d, want 30546", w.Hits)
 	}
-	if w.Bookmarks == nil || *w.Bookmarks != 412 {
-		t.Errorf("Bookmarks = %v, want 412", w.Bookmarks)
+	// The bookmarks row wraps its number in an anchor on the real page, so this
+	// also pins that the count is read from inside markup rather than assumed
+	// to be bare text.
+	if w.Bookmarks == nil || *w.Bookmarks != 122 {
+		t.Errorf("Bookmarks = %v, want 122", w.Bookmarks)
 	}
-	if !w.Complete {
-		t.Error("Complete = false, want true")
+	if w.Chapters != "55/?" {
+		t.Errorf("Chapters = %q, want 55/?", w.Chapters)
 	}
-	if !strings.Contains(w.Summary, "multiple lines") {
-		t.Errorf("Summary did not get whitespace-collapsed and unescaped: %q", w.Summary)
+	if w.Complete {
+		t.Error("Complete = true for a 55/? work; an unknown total must not read as finished")
 	}
-	if !strings.Contains(w.Summary, "markup") {
-		t.Errorf("Summary lost its text content: %q", w.Summary)
+	if w.Language != "English" {
+		t.Errorf("Language = %q", w.Language)
+	}
+	if w.UpdateDate != "2026-07-27" {
+		t.Errorf("UpdateDate = %q, want 2026-07-27", w.UpdateDate)
+	}
+	if w.Rating != "Mature" {
+		t.Errorf("Rating = %q, want Mature", w.Rating)
+	}
+	if !strings.Contains(w.Summary, "bored of his mundane life") {
+		t.Errorf("Summary did not come off the page: %q", w.Summary)
+	}
+}
+
+// The regression pin for the bug this parser had for its whole life: it asked
+// AO3 for markup AO3 does not send, and its fixture supplied that markup.
+//
+// Both halves matter. The first proves the fixture is honest; the second proves
+// the parser now refuses the page the old fixture described, so a future
+// "fix the test by editing the fixture" cannot quietly restore the fiction.
+func TestParseWorkReadsTheRealPageShapes(t *testing.T) {
+	// Comments are stripped first: the fixture's own header explains which tags
+	// the old parser invented, and a naive scan would match that explanation
+	// instead of the markup. It is the *markup* that must be honest.
+	page := regexp.MustCompile(`(?s)<!--.*?-->`).ReplaceAllString(realWorkPage(t), "")
+	for _, invented := range []string{
+		`name="works:title"`, `name="works:words"`, `name="works:kudos"`,
+		`name="works:hits"`, `name="works:bookmarks"`, `name="works:chapters"`,
+		`<li class="freeforms"`, `class="care-actions"`,
+	} {
+		if strings.Contains(page, invented) {
+			t.Errorf("the fixture carries %q, which a live AO3 page does not send — "+
+				"either the fetch is wrong or someone edited the fixture to suit the parser", invented)
+		}
+	}
+
+	// Exactly the old fixture's shape, and not a work page.
+	oldFixtureShape := `<html><head>` +
+		`<meta name="works:title" content="The Test Work"/>` +
+		`<meta name="works:words" content="45,120"/>` +
+		`</head><body><span class="status">Completed</span>` +
+		`<ul class="tags"><li class="freeforms"><a class="tag" href="/tags/dark">dark</a></li></ul>` +
+		`</body></html>`
+	if w, err := ParseWork([]byte(oldFixtureShape), "https://archiveofourown.org/works/12345"); err == nil {
+		t.Fatalf("the invented-meta-tag page parsed as a work (%q): the fixture shape is back", w.Title)
+	}
+
+	// And a real title heading with no tag rows is still a parse failure, not a
+	// work with no tags.
+	if _, err := ParseWork([]byte(`<h2 class="title heading">x</h2>`), "https://archiveofourown.org/works/2"); err == nil {
+		t.Error("parsed a work page with zero tags")
 	}
 }
 
 // The tag categories are the only authoritative statement of what a tag IS, and
 // the mirror's tag_type column is NOT it (measured: 3,890,504 of 3,891,300 rows
-// are 'freeforms'). So the parser must preserve what the page said.
+// are 'freeforms'). So the parser must preserve what the page said, in the
+// vocabulary this codebase stores.
 func TestParseWorkPreservesTagCategories(t *testing.T) {
-	w, err := ParseWork([]byte(sampleWorkPage), "https://archiveofourown.org/works/1")
+	w, err := ParseWork([]byte(realWorkPage(t)), "https://archiveofourown.org/works/82026196")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,20 +139,26 @@ func TestParseWorkPreservesTagCategories(t *testing.T) {
 		byName[tg.Name] = tg.Type
 	}
 	for name, wantType := range map[string]string{
-		"dark":         "freeforms",
-		"a/b":          "relationships",
-		"Hermione":     "characters",
-		"Harry Potter": "fandoms",
+		"Mature":                         "ratings",
+		"Graphic Depictions Of Violence": "warnings",
+		"F/M":                            "categories",
+		"Highschool DxD (Anime)":         "fandoms",
+		"Himejima Akeno/Original Male Character(s)": "relationships",
+		"Rias Gremory's Peerage":                    "characters",
+		"Action":                                    "freeforms",
 	} {
 		if got := byName[name]; got != wantType {
 			t.Errorf("tag %q type = %q, want %q", name, got, wantType)
 		}
 	}
-	if !TagTypeIsFandom(byName["Harry Potter"]) {
-		t.Error("Harry Potter not recognised as a fandom")
+	if !TagTypeIsFandom(byName["Highschool DxD (Anime)"]) {
+		t.Error("a fandom was not recognised as one")
 	}
-	if TagTypeIsFandom(byName["dark"]) {
-		t.Error("'dark' misread as a fandom")
+	if TagTypeIsFandom(byName["Action"]) {
+		t.Error("a freeform was misread as a fandom")
+	}
+	if len(w.Tags) == 0 {
+		t.Fatal("no tags parsed")
 	}
 }
 
@@ -117,6 +171,9 @@ func TestParseWorkRejectsANonWorkPage(t *testing.T) {
 		"login wall": `<html><body><form action="/users/log_in">Sign in</form></body></html>`,
 		"empty":      ``,
 		"tag page":   `<html><body><h1>Tags</h1></body></html>`,
+		// A consent/interstitial page: it has the site's chrome but no work
+		// heading, which is exactly what the marker must catch.
+		"interstitial": `<html><body><div id="main"><h2 class="heading">This work could have adult content.</h2><a href="?view_adult=true">Proceed</a></div></body></html>`,
 	} {
 		if _, err := ParseWork([]byte(page), "https://archiveofourown.org/works/9"); err == nil {
 			t.Errorf("%s: ParseWork succeeded, want an error", name)
@@ -124,27 +181,61 @@ func TestParseWorkRejectsANonWorkPage(t *testing.T) {
 	}
 }
 
-func TestParseWorkRejectsAWorkPageWithNoTags(t *testing.T) {
-	// A work page with the meta tags but no tag list is a parse failure, not a
-	// work with no tags: it means the page shape changed.
-	page := `<html><head><meta name="works:title" content="x"/></head><body></body></html>`
-	if _, err := ParseWork([]byte(page), "https://archiveofourown.org/works/2"); err == nil {
-		t.Error("parsed a work page with zero tags")
-	}
-}
-
-// Bookmarks must stay a pointer: a page that omits the meta tag means
-// "unknown", and collapsing that to 0 makes an unknown work rank as the
-// least-bookmarked work in the corpus.
+// Bookmarks must stay a pointer: a page that omits the row means "unknown", and
+// collapsing that to 0 makes an unknown work rank as the least-bookmarked work
+// in the corpus.
 func TestParseWorkLeavesBookmarksNilWhenAbsent(t *testing.T) {
-	page := strings.Replace(sampleWorkPage,
-		`<meta name="works:bookmarks" content="412"/>`, "", 1)
-	w, err := ParseWork([]byte(page), "https://archiveofourown.org/works/3")
+	full := realWorkPage(t)
+	// Remove the real row, anchored on the real markup rather than on a tag the
+	// fixture invented.
+	page := regexp.MustCompile(`(?s)<dt class="bookmarks">.*?</dd>`).ReplaceAllString(full, "")
+	if page == full {
+		t.Fatal("the bookmarks row was not found in the fixture; this test is now vacuous")
+	}
+	w, err := ParseWork([]byte(page), "https://archiveofourown.org/works/82026196")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if w.Bookmarks != nil {
-		t.Errorf("Bookmarks = %v, want nil when the page omits the meta tag", *w.Bookmarks)
+		t.Errorf("Bookmarks = %v, want nil when the page omits the row", *w.Bookmarks)
+	}
+}
+
+// statValues must keep the FIRST occurrence of a class. The work's own stats
+// block comes before the chapter list, which repeats several of the same classes
+// for per-chapter counts; last-wins would report a chapter's word count as the
+// work's, and nothing on the page would look wrong.
+func TestStatValuesKeepsTheWorkStatsNotTheChapterList(t *testing.T) {
+	// Composed from the observed shape and deliberately ambiguous: which value a
+	// reader gets must be decided by position, never by iteration order.
+	page := `<dl class="stats"><dt class="words">Words:</dt><dd class="words">155,360</dd></dl>` +
+		`<div class="chapter"><dl class="stats"><dt class="words">Words:</dt><dd class="words">2,500</dd></dl></div>`
+	got := statValues([]byte(page))
+	if got["words"] != "155,360" {
+		t.Errorf("statValues(words) = %q; the work-level block must win", got["words"])
+	}
+}
+
+// The completion rule reads AO3's chapter fraction, where "?" is an unknown
+// total. It must fail closed: a mirror that marks a work in progress complete
+// stops re-checking it.
+func TestChaptersAreComplete(t *testing.T) {
+	for _, tc := range []struct {
+		fraction string
+		want     bool
+	}{
+		{"55/?", false}, // a work in progress: the total is unknown
+		{"?/?", false},  // both unknown
+		{"12/", false},  // malformed, and not complete
+		{"", false},     // the row was absent entirely
+		{"a/b", false},  // not numbers
+		{"1/1", true},   // the single-chapter case
+		{"12/12", true}, // the finished multi-chapter case
+		{"6/12", false}, // MID-work: posted < total is not complete either
+	} {
+		if got := chaptersAreComplete(tc.fraction); got != tc.want {
+			t.Errorf("chaptersAreComplete(%q) = %v, want %v", tc.fraction, got, tc.want)
+		}
 	}
 }
 
@@ -344,10 +435,21 @@ func (f *fakeClient) Fetch(_ context.Context, u string) ([]byte, error) {
 func (f *fakeClient) Delay() time.Duration { return f.delay }
 func (f *fakeClient) Close() error         { return nil }
 
+// page is a work page in the real markup shape, parameterised by id so the
+// crawl-loop tests can tell one work from another. The elements are the live
+// ones (see testdata/ao3_work_page.html); the numbers are small on purpose.
 func page(id int64) string {
-	return fmt.Sprintf(`<html><head><meta name="works:title" content="W%d"/>
-	</head><body><ul class="tags"><li class="freeforms">
-	<a class="tag" href="/tags/dark">dark</a></li></ul></body></html>`, id)
+	return fmt.Sprintf(`<html><body>
+<h2 class="title heading">W%d</h2>
+<div class="byline"><a rel="author" href="/users/u/pseuds/u">u</a></div>
+<dl class="stats">
+  <dt class="words">Words:</dt><dd class="words">1,000</dd>
+  <dt class="chapters">Chapters:</dt><dd class="chapters">1/1</dd>
+  <dt class="status">Updated:</dt><dd class="status">2026-07-27</dd>
+</dl>
+<div class="summary module"><blockquote class="userstuff"><p>A summary for W%d.</p></blockquote></div>
+<dd class="freeform tags"><ul class="commas"><li><a class="tag" href="/tags/Angst/works">Angst</a></li></ul></dd>
+</body></html>`, id, id)
 }
 
 func TestCrawlerFetchesAndCounts(t *testing.T) {
@@ -697,7 +799,7 @@ func TestHTTPClientClassifiesStatusCodes(t *testing.T) {
 }
 
 func TestIsInterstitialDoesNotFlagRealContent(t *testing.T) {
-	if IsInterstitial([]byte(sampleWorkPage)) {
+	if IsInterstitial([]byte(realWorkPage(t))) {
 		t.Error("a real work page flagged as an interstitial")
 	}
 	if !IsInterstitial([]byte("... cf-error-details ...")) {

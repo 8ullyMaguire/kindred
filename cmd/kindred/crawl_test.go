@@ -11,16 +11,30 @@ import (
 	"testing"
 )
 
-const crawlFixturePage = `<!DOCTYPE html><html><head>
-<meta name="works:title" content="Crawled Work"/>
-<meta name="works:author" content="crawler_author"/>
-<meta name="works:words" content="12,000"/>
-<meta name="works:kudos" content="50"/>
-</head><body><span class="status">Completed</span>
-<ul class="tags">
-<li class="freeforms"><a class="tag" href="/tags/dark">dark</a></li>
-<li class="fandoms"><a class="tag" href="/tags/Harry%20Potter">Harry Potter</a></li>
-</ul></body></html>`
+// crawlFixturePage is an AO3 work page in the shape a live page has.
+//
+// The ELEMENTS are the real ones — `<h2 class="title heading">`, byline anchors
+// with `rel="author"`, `<dt>/<dd>` stat pairs, `<dd class="… tags">` tag rows —
+// because the parser reads exactly those. The NUMBERS are small and the page is
+// short, which is the only thing that is not real: this fixture exists so a
+// crawl can run without the network, not to describe a particular work. The
+// verbatim fixture lives in internal/crawl/testdata/ao3_work_page.html.
+const crawlFixturePage = `<!DOCTYPE html><html><body>
+<h2 class="title heading">Crawled Work</h2>
+<div class="byline"><a rel="author" href="/users/crawler_author/pseuds/crawler_author">crawler_author</a></div>
+<dl class="stats">
+  <dt class="words">Words:</dt><dd class="words">12,000</dd>
+  <dt class="chapters">Chapters:</dt><dd class="chapters">1/1</dd>
+  <dt class="kudos">Kudos:</dt><dd class="kudos">50</dd>
+  <dt class="hits">Hits:</dt><dd class="hits">900</dd>
+  <dt class="status">Updated:</dt><dd class="status">2026-07-27</dd>
+</dl>
+<div class="summary module"><h3 class="heading">Summary:</h3>
+<blockquote class="userstuff"><p>A summary the crawler brought home.</p></blockquote></div>
+<dd class="rating tags"><ul class="commas"><li><a class="tag" href="/tags/Teen%20And%20Up%20Audiences/works">Teen And Up Audiences</a></li></ul></dd>
+<dd class="fandom tags"><ul class="commas"><li><a class="tag" href="/tags/Harry%20Potter/works">Harry Potter - J. K. Rowling</a></li></ul></dd>
+<dd class="freeform tags"><ul class="commas"><li><a class="tag" href="/tags/Angst/works">Angst</a></li></ul></dd>
+</body></html>`
 
 // fixtureServer stands in for AO3: serves one work page, a robots.txt with a
 // crawl-delay, and 404 for anything else.

@@ -44,88 +44,180 @@ type ParsedTag struct {
 	Type string
 }
 
+// Every pattern in this block was written from a **live** AO3 page, fetched
+// 2026-10-14: `?view_full_work=true` returns 1,036,147 bytes for the work page
+// and a bare `/works/<id>` returns a 302 to `/works/<id>/chapters/<cid>` and
+// 44,920 bytes there. The chapter page — which is what a crawl of `/works/<id>`
+// actually receives, because Go follows the redirect — carries every field
+// below, so nothing here needs the 1 MB view.
+//
+// The revision before this one read `<meta name="works:title">`,
+// `<meta name="works:words">`, `<div class="language">`, `<span class="status">`
+// and `<li class="freeforms">`. **AO3 sends none of those**, on the work page or
+// the chapter page: the meta block carries only viewport/subject/language/
+// keywords/format-detection/distribution/description/csrf-*/classification/
+// chrome/author, the counts live in `<dt>/<dd>` pairs, and the tag rows are
+// `<dd>`s. So every real page was refused as "not a work page", and the tests
+// stayed green because their fixture invented the tags this parser was asking
+// for. A pattern nothing has ever matched is a claim, not a parser.
 var (
-	// The blurb meta block AO3 puts on every work page.
-	metaTitleRe  = regexp.MustCompile(`(?is)<meta\s+name="works:title"\s+content="([^"]*)"`)
-	metaAuthorRe = regexp.MustCompile(`(?is)<meta\s+name="works:author"\s+content="([^"]*)"`)
-	metaWordsRe  = regexp.MustCompile(`(?is)<meta\s+name="works:words"\s+content="([\d,]+)"`)
-	metaKudosRe  = regexp.MustCompile(`(?is)<meta\s+name="works:kudos"\s+content="([\d,]+)"`)
-	metaHitsRe   = regexp.MustCompile(`(?is)<meta\s+name="works:hits"\s+content="([\d,]+)"`)
-	metaBkmkRe   = regexp.MustCompile(`(?is)<meta\s+name="works:bookmarks"\s+content="([\d,]+)"`)
-	metaChapRe   = regexp.MustCompile(`(?is)<meta\s+name="works:chapters"\s+content="([^"]*)"`)
-	metaLangRe   = regexp.MustCompile(`(?is)<div class="language">\s*([^<]*)`)
-	metaStatusRe = regexp.MustCompile(`(?is)<span[^>]*class="status"\s*>([^<]*)</span>`)
+	// Title: <h2 class="title heading"> Name </h2>
+	workTitleRe = regexp.MustCompile(`(?is)<h2[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>(.*?)</h2>`)
 
-	// The blurb block is quoted in prose and can contain any character, so the
-	// summary is read from the blockquote rather than a meta tag.
-	summaryRe = regexp.MustCompile(`(?is)<div class="summary[^\"]*"[^>]*>\s*<blockquote[^>]*>(.*?)</blockquote>`)
+	// Authors: one <a rel="author" href="/users/U/pseuds/P">P</a> per author.
+	// The rel attribute is the site's own; the byline also appears in
+	// `name="author"` as a comma-joined string, but that collapses the
+	// user/pseud pair the author page needs.
+	authorNameRe = regexp.MustCompile(`(?is)<a\s+rel="author"[^>]*>(.*?)</a>`)
 
-	// Tag rows. AO3 wraps each in <li class="freeforms"> / <li class="relationships">
-	// / <li class="characters"> and links the name in <a class="tag">.
-	tagRowRe  = regexp.MustCompile(`(?is)<li\s+class="([a-z]+)">(.*?)</li>`)
-	tagNameRe = regexp.MustCompile(`(?is)<a\s+class="tag"[^>]*>(.*?)</a>`)
+	// Metrics. AO3 renders each as a definition pair —
+	//   <dt class="words">Words:</dt><dd class="words">155,360</dd>
+	// — and every class below appears exactly once on the page, so reading the
+	// `<dd>` by class is unambiguous. A metric the work lacks (kudos on a new
+	// work, bookmarks on one nobody bookmarked) is ABSENT rather than zero,
+	// which is why bookmarks keeps the nil-vs-0 distinction in ParsedWork.
+	ddClassRe = regexp.MustCompile(`(?is)<dd[^>]*class="([^"]*)"[^>]*>(.*?)</dd>`)
+
+	// Summary: <div class="summary module"> … <blockquote class="userstuff">
+	// The blockquote is the content; the div also holds an <h3>Summary:</h3>.
+	summaryRe = regexp.MustCompile(`(?is)<div[^>]*class="[^"]*\bsummary\b[^"]*"[^>]*>.*?<blockquote[^>]*>(.*?)</blockquote>`)
+
+	// Tag rows. AO3 wraps each category in its own <dd>, and the plural in the
+	// class is the site's classification:
+	//   <dd class="fandom tags"><ul class="commas"><li><a class="tag" …>
+	// The seven classes are rating, warning, category, fandom, relationship,
+	// character, freeform. This is the authoritative tag_type — see
+	// ParsedTag's doc comment for why the mirror's column is not.
+	tagRowRe  = regexp.MustCompile(`(?is)<dd[^>]*class="([a-z]+)\s+tags?"[^>]*>(.*?)</dd>`)
+	tagNameRe = regexp.MustCompile(`(?is)<a[^>]*class="tag"[^>]*>(.*?)</a>`)
 )
+
+// tagTypePlural maps the class AO3 uses to the vocabulary this codebase stores,
+// which is plural throughout ('freeforms' in work_tags, 'fandoms' in the
+// engine's fandom filter, and both spellings accepted by TagTypeIsFandom).
+// A singular that is not in the table is passed through unchanged rather than
+// guessed at, so an unanticipated row shows up as itself.
+var tagTypePlural = map[string]string{
+	"rating":       "ratings",
+	"warning":      "warnings",
+	"category":     "categories",
+	"fandom":       "fandoms",
+	"relationship": "relationships",
+	"character":    "characters",
+	"freeform":     "freeforms",
+}
 
 // ParseWork extracts a work from an AO3 work page.
 //
-// It returns an error when the page has no title meta tag, because that is the
-// signal that the fetch did not get a work page at all — a login wall, a 404
-// rendered as HTML, or a Cloudflare page that slipped past IsInterstitial.
-// Writing a zero-valued work for one of those poisons the mirror with a row
-// that has no id and no title, and nothing downstream can tell it apart from a
-// real sparse work.
+// It returns an error when the page carries no title heading, because that is
+// the signal the fetch did not get a work page at all — a login wall, a 404
+// rendered as HTML, the adult-content gate, or a Cloudflare page that slipped
+// past IsInterstitial. `<h2 class="title heading">` is the marker because a
+// real work page always has exactly one and none of those do. Writing a
+// zero-valued work for one of them poisons the mirror with a row that has no id
+// and no title, and nothing downstream can tell it apart from a real sparse
+// work.
+//
+// The marker used to be `<meta name="works:title">`, which AO3 does not send —
+// see the block comment on the patterns above.
 func ParseWork(body []byte, url string) (*ParsedWork, error) {
 	w := &ParsedWork{URL: url, Language: "English"}
-
-	m := metaTitleRe.FindSubmatch(body)
-	if m == nil {
-		return nil, fmt.Errorf("crawl: no works:title meta tag; not a work page (%s)", url)
-	}
-	w.Title = html.UnescapeString(string(m[1]))
 	w.ID = WorkIDFromURL(url)
 
-	if m := metaAuthorRe.FindSubmatch(body); m != nil {
-		w.Authors = html.UnescapeString(string(m[1]))
+	m := workTitleRe.FindSubmatch(body)
+	if m == nil {
+		return nil, fmt.Errorf("crawl: no title heading; not a work page (%s)", url)
 	}
-	if m := metaWordsRe.FindSubmatch(body); m != nil {
-		w.WordCount = parseCount(string(m[1]))
-	}
-	if m := metaKudosRe.FindSubmatch(body); m != nil {
-		w.Kudos = parseCount(string(m[1]))
-	}
-	if m := metaHitsRe.FindSubmatch(body); m != nil {
-		w.Hits = parseCount(string(m[1]))
-	}
-	// Bookmarks are a POINTER for the same reason the corpus column is NULLable:
-	// AO3 omits the meta tag entirely when a work has none, and 0 is a real
-	// value with a different meaning.
-	if m := metaBkmkRe.FindSubmatch(body); m != nil {
-		v := parseCount(string(m[1]))
-		w.Bookmarks = &v
-	}
-	if m := metaChapRe.FindSubmatch(body); m != nil {
-		w.Chapters = html.UnescapeString(string(m[1]))
-	}
-	if m := metaLangRe.FindSubmatch(body); m != nil {
-		if l := strings.TrimSpace(html.UnescapeString(string(m[1]))); l != "" {
-			w.Language = l
+	w.Title = cleanText(string(m[1]))
+
+	// Authors, in page order. A work with several authors has one byline link
+	// each; joined with ", " to match the corpus, which stores the byline as
+	// text.
+	var authors []string
+	for _, a := range authorNameRe.FindAllSubmatch(body, -1) {
+		if name := cleanText(string(a[1])); name != "" {
+			authors = append(authors, name)
 		}
 	}
-	if m := metaStatusRe.FindSubmatch(body); m != nil {
-		st := strings.ToLower(strings.TrimSpace(string(m[1])))
-		w.Complete = strings.Contains(st, "completed")
+	w.Authors = strings.Join(authors, ", ")
+
+	stats := statValues(body)
+	// Every value goes through cleanText first: AO3 links some of them
+	// (`<dd class="bookmarks"><a href="/works/896/bookmarks">122</a></dd>`), so a
+	// raw parseCount on those reads 0 — which is a *real* value for bookmarks and
+	// therefore indistinguishable from "nobody bookmarked it".
+	w.WordCount = parseCount(cleanText(stats["words"]))
+	w.Kudos = parseCount(cleanText(stats["kudos"]))
+	w.Hits = parseCount(cleanText(stats["hits"]))
+	w.Chapters = cleanText(stats["chapters"])
+	// Bookmarks are a POINTER for the same reason the corpus column is NULLable:
+	// AO3 omits the row entirely when a work has none, and 0 is a real value
+	// with a different meaning.
+	if raw, ok := stats["bookmarks"]; ok {
+		v := parseCount(cleanText(raw))
+		w.Bookmarks = &v
 	}
+	if lang := cleanText(stats["language"]); lang != "" {
+		w.Language = lang
+	}
+	if upd := cleanText(stats["status"]); upd != "" {
+		w.UpdateDate = upd
+	}
+	w.Complete = chaptersAreComplete(w.Chapters)
+
 	if m := summaryRe.FindSubmatch(body); m != nil {
 		w.Summary = cleanText(string(m[1]))
 	}
+
 	w.Tags = parseTags(body)
 	if len(w.Tags) == 0 {
 		return nil, fmt.Errorf("crawl: work page parsed with zero tags (%s)", url)
 	}
+	for _, t := range w.Tags {
+		if t.Type == "ratings" {
+			w.Rating = t.Name
+			break
+		}
+	}
 	return w, nil
 }
 
+// statValues reads the page's definition pairs into class → inner HTML.
+//
+// First occurrence wins: the work's stats block is the first thing on the page
+// that uses these classes, and the chapter list below it repeats some of them
+// for its own per-chapter counts.
+func statValues(body []byte) map[string]string {
+	out := map[string]string{}
+	for _, m := range ddClassRe.FindAllSubmatch(body, -1) {
+		cls := strings.TrimSpace(string(m[1]))
+		if _, seen := out[cls]; seen {
+			continue
+		}
+		out[cls] = string(m[2])
+	}
+	return out
+}
+
+// chaptersAreComplete reads AO3's chapter fraction: "55/?" is a work in
+// progress and "1/1" is complete. Both halves must be numbers and equal, so an
+// unknown total ("?/?") is reported as NOT complete — the safe direction, since
+// a mirror that marks a work in progress complete stops re-checking it.
+func chaptersAreComplete(fraction string) bool {
+	parts := strings.Split(strings.TrimSpace(fraction), "/")
+	if len(parts) != 2 {
+		return false
+	}
+	posted, errPosted := strconv.Atoi(strings.TrimSpace(parts[0]))
+	total, errTotal := strconv.Atoi(strings.TrimSpace(parts[1]))
+	return errPosted == nil && errTotal == nil && posted == total
+}
+
 // parseTags reads the tag list with AO3's categories preserved.
+//
+// The class singular is mapped to this codebase's plural vocabulary (see
+// tagTypePlural); an unmapped singular is kept as-is rather than dropped, so a
+// category AO3 adds later surfaces as itself instead of vanishing.
 func parseTags(body []byte) []ParsedTag {
 	var out []ParsedTag
 	seen := map[string]bool{}
@@ -133,6 +225,9 @@ func parseTags(body []byte) []ParsedTag {
 		typ := strings.ToLower(strings.TrimSpace(string(row[1])))
 		if typ == "" {
 			continue
+		}
+		if plural, ok := tagTypePlural[typ]; ok {
+			typ = plural
 		}
 		for _, nm := range tagNameRe.FindAllSubmatch(row[2], -1) {
 			name := cleanText(string(nm[1]))
@@ -201,6 +296,19 @@ type Options struct {
 	OnProgress func(done, total int, lastURL string)
 	// ProgressEvery throttles OnProgress.
 	ProgressEvery time.Duration
+
+	// OnWork, when set, is called with every successfully parsed work.
+	//
+	// It exists because `--parse-only` has always promised "fetch and parse,
+	// print a summary" and had no way to print one: the report carries counts,
+	// so an operator asking "does this parser work on a real page?" got
+	// `fetched=1` and nothing about the work fetched. That question is the
+	// reason the flag exists, and it went unanswered while the parser was
+	// rejecting every real AO3 page.
+	//
+	// Called from the fetch goroutine, so an implementation that touches shared
+	// state must synchronise.
+	OnWork func(*ParsedWork)
 
 	// Sink receives every successfully parsed work.
 	//
@@ -378,6 +486,9 @@ func (c *Crawler) Run(ctx context.Context, opts Options) (*Report, error) {
 				}
 				results <- result{url: rawURL, err: err}
 				return
+			}
+			if opts.OnWork != nil {
+				opts.OnWork(w)
 			}
 			if opts.State != nil {
 				opts.State.Mark(rawURL, w.ID)

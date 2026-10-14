@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -130,8 +131,33 @@ func runCrawl(ctx context.Context, args []string) error {
 
 	var lastBeat time.Time
 	cr := crawl.New(client)
+	// `--parse-only` promises a summary; this is what prints one. Without it the
+	// flag reported `fetched=1` and nothing else, which cannot distinguish "the
+	// parser read the page" from "the parser read something and guessed" — the
+	// question the flag exists to answer.
+	var onWork func(*crawl.ParsedWork)
+	if *parseOnly {
+		onWork = func(w *crawl.ParsedWork) {
+			fmt.Printf("  work %d: %q by %s\n", w.ID, w.Title, w.Authors)
+			fmt.Printf("    words=%d kudos=%d hits=%d bookmarks=%v chapters=%s complete=%v lang=%s rating=%s updated=%s\n",
+				w.WordCount, w.Kudos, w.Hits, bookmarksString(w.Bookmarks), w.Chapters, w.Complete, w.Language, w.Rating, w.UpdateDate)
+			fmt.Printf("    %d tags:", len(w.Tags))
+			for _, t := range w.Tags {
+				fmt.Printf(" %s(%s)", t.Name, t.Type)
+			}
+			fmt.Println()
+			if w.Summary != "" {
+				s := w.Summary
+				if len(s) > 120 {
+					s = s[:120] + "…"
+				}
+				fmt.Printf("    summary: %s\n", s)
+			}
+		}
+	}
 	rep, err := cr.Run(ctx, crawl.Options{
 		URLs:           urls,
+		OnWork:         onWork,
 		State:          st,
 		StatePath:      *statePath,
 		CheckpointURLs: *checkpoint,
@@ -173,6 +199,16 @@ func runCrawl(ctx context.Context, args []string) error {
 		return nil
 	}
 	return writeCrawlReport(ctx, c, rep)
+}
+
+// bookmarksString renders a bookmark count for the operator, keeping the
+// distinction the mirror keeps: nil means the page carried no bookmarks row at
+// all, which is not the same fact as zero.
+func bookmarksString(b *int64) string {
+	if b == nil {
+		return "unknown"
+	}
+	return strconv.FormatInt(*b, 10)
 }
 
 // collectCrawlURLs gathers seed and file URLs, deduplicated and in order.
