@@ -17,6 +17,9 @@ import (
 	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
+	"sort"
+	"strings"
+
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
@@ -491,21 +494,28 @@ func (a *ArenaService) RunBatch(ctx context.Context) (BatchResult, error) {
 	// influence permanently, which is the same reasoning that keeps an empty
 	// period from running.
 	//
-	// The per-kind batch is the next step (the plan's E4).
-	workRows := make([]store.JudgedComparison, 0, len(judged))
+	// The per-kind batch is the next step (the plan's E4), and until it exists the
+	// batch STALLS while any entity comparison is pending rather than doing the
+	// half it can. Stalling loses nothing: the watermark does not move, so these
+	// rows are still here next run. Rating the work rows and letting the watermark
+	// pass would process them and DISCARD the entity rows' influence permanently
+	// -- the one outcome that cannot be undone, and the reason this is a stall and
+	// not a partition.
 	pending := map[arena.EntityKind]int{}
 	for _, j := range judged {
-		if j.Kind == arena.KindWork {
-			workRows = append(workRows, j)
-			continue
+		if j.Kind != arena.KindWork {
+			pending[j.Kind]++
 		}
-		pending[j.Kind]++
 	}
-	if len(workRows) == 0 {
-		res.Skipped = fmt.Sprintf("no work comparisons; %d entity comparisons await the per-kind batch", len(judged))
+	if len(pending) > 0 {
+		kinds := make([]string, 0, len(pending))
+		for k, n := range pending {
+			kinds = append(kinds, fmt.Sprintf("%s=%d", k, n))
+		}
+		sort.Strings(kinds)
+		res.Skipped = fmt.Sprintf("no per-kind batch yet: %s pending", strings.Join(kinds, ", "))
 		return res, nil
 	}
-	judged = workRows
 
 	// Collect every work involved, then take ONE pre-period snapshot. This
 	// is what makes the batch order-independent.

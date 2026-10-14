@@ -80,7 +80,20 @@ func TestRunBatchLeavesEntityComparisonsAloneAndSaysSo(t *testing.T) {
 		t.Fatalf("record: %v", err)
 	}
 	if err := s.RecordJudgementKind(ctx, "sess", "a", arena.KindTag); err != nil {
-		t.Fatalf("judge: %v", err)
+		t.Fatalf("judge tag: %v", err)
+	}
+	// AND a work comparison judged in the same period. Without it the stall is
+	// unobservable: a fixture containing only entity rows takes the same path
+	// whether the batch stalls or partitions, which is how the first version of
+	// this test passed on a fence that would have discarded these rows.
+	if _, err := s.RecordPresentation(ctx, store.Comparison{
+		Kind: arena.KindWork, WorkA: 4001, WorkB: 4002,
+		SessionKey: "sess", OwnerKey: "owner", Strategy: "maxinfo",
+	}); err != nil {
+		t.Fatalf("record work: %v", err)
+	}
+	if err := s.RecordJudgementKind(ctx, "sess", "b", arena.KindWork); err != nil {
+		t.Fatalf("judge work: %v", err)
 	}
 
 	svc := NewArenaService(s, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -88,8 +101,8 @@ func TestRunBatchLeavesEntityComparisonsAloneAndSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("batch: %v", err)
 	}
-	if !strings.Contains(res.Skipped, "entity comparisons") {
-		t.Fatalf("Skipped = %q, want it to name the entity comparisons waiting", res.Skipped)
+	if !strings.Contains(res.Skipped, "ao3_tag=1") {
+		t.Fatalf("Skipped = %q, want it to name the pending entity comparisons", res.Skipped)
 	}
 
 	// The tag's id must not have been rated as a work...
@@ -97,6 +110,13 @@ func TestRunBatchLeavesEntityComparisonsAloneAndSaysSo(t *testing.T) {
 		t.Fatalf("ratings: %v", err)
 	} else if len(rows) != 0 {
 		t.Fatalf("the tag ids were rated as works: %+v", rows)
+	}
+	// ...nor may the work row have been rated: processing it would let the
+	// watermark pass this period and discard the tag comparison's influence.
+	if rows, err := s.RatingFor(ctx, []int64{4001, 4002}); err != nil {
+		t.Fatalf("work ratings: %v", err)
+	} else if len(rows) != 0 {
+		t.Fatalf("the batch processed the work row while a tag comparison was pending: %+v", rows)
 	}
 	// ...and the watermark must not have moved past rows nothing processed,
 	// or their influence is discarded permanently when the per-kind batch
