@@ -1,4 +1,14 @@
 {{define "content"}}
+{{/* The cohort note sits above everything, including the empty state. Two
+     reasons: it qualifies every number below it, and a caveat a reader meets
+     after the ratings has already been outrun by them; and the deploy gate
+     asserts this line when the deployment names an owner cohort, so a note
+     that vanished on an empty board would make the gate report drift on a
+     correct deploy -- a false alarm of exactly the kind this page's checks
+     are meant to avoid. It describes how this deployment computes its
+     standings, which is true before the first rating exists.
+     Empty on a deployment with no owner cohort. */}}
+{{if .CohortNote}}<p class="cohort-note" data-testid="cohort-note">{{.CohortNote}}</p>{{end}}
 {{if .Empty}}
 <p class="empty">{{.Note}}</p>
 {{else}}

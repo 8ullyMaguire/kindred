@@ -125,6 +125,15 @@ func start(ctx context.Context, dir, listen string) (string, error) {
 		// produces and above nothing, so the pick, the seed link and the redirect
 		// are all exercised for real.
 		SurpriseMinTags: 3,
+		// The owner-cohort note on the standings pages is asserted by the deploy
+		// gate in BOTH directions (present when the deployment names an owner,
+		// absent when it does not), and the "present" half cannot be verified at
+		// all if nothing in the harness can produce that state. The real server
+		// reaches it from KINDRED_OWNER_SESSION plus a profile store; this server
+		// already has the profile store, so the env var is the whole difference.
+		// Unset -- the normal case, including CI -- leaves it false and the pages
+		// stay silent.
+		OwnerCohort: os.Getenv("KINDRED_OWNER_SESSION") != "",
 	}
 
 	// The profile store is a SEPARATE handle on the state db, not a use of the

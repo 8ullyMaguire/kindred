@@ -76,6 +76,18 @@ type Server struct {
 	// It is a field rather than an env var because there is exactly one caller
 	// and a global would let a production process lower the gate by accident.
 	SurpriseMinTags int
+
+	// OwnerCohort reports that this process ranks with an owner cohort's taste
+	// agreement folded into the ratings (KINDRED_OWNER_SESSION set AND taste
+	// profiles available -- the same condition that starts the owner-vector
+	// builder in cmd/kindred).
+	//
+	// It exists so the HTML pages can SAY so. The API already names the owner
+	// dimension in meta.degraded[] when it is missing; the pages had no
+	// equivalent, so a reader saw ratings weighted partly by the operator's
+	// taste with nothing on the page to suggest it. Set by the caller that
+	// knows both facts, because the Server cannot see the config.
+	OwnerCohort bool
 }
 
 // ProfileStore is the profile surface the server needs.
@@ -185,6 +197,7 @@ func (s *Server) Routes() http.Handler {
 
 		Standing:             s.Standing,
 		DefaultBlockedTagIDs: s.DefaultBlockedTagIDs,
+		OwnerCohort:          s.OwnerCohort,
 	}
 	if s.Engine != nil && s.Engine.Corpus != nil {
 		pages.CorpusQuery = corpusquery.NewRunner(s.Engine.Corpus.DB)

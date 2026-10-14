@@ -27,6 +27,31 @@ import (
 // matching the day one of them is edited.
 const ArenaCookieName = "kindred_arena"
 
+// ownerCohortNote is what the standings pages say when this deployment ranks
+// with an owner cohort. It names the mechanism and the floor in one line,
+// because both are things a reader cannot otherwise infer from the numbers:
+// that some votes carry more weight than others, and that a reader with almost
+// no history has none.
+//
+// Words, not a tooltip. A ranking whose basis is invisible is one a reader will
+// read as "the crowd's verdict" when it is partly the operator's taste -- and
+// the fix for that is to say so on the page, not to bury it in a title
+// attribute nobody hovers.
+const ownerCohortNote = "Ranked by comparisons weighted by taste agreement with the " +
+	"owner cohort (votes from readers with ≤5 comparisons or opposing taste do not " +
+	"move these ratings)."
+
+// cohortNote is the sentence to print, or "" when this deployment has no owner
+// cohort. Returning the empty string rather than a bool keeps the decision in
+// one place: a template guards on the value, so the note cannot be rendered
+// without the condition having been consulted.
+func (d Deps) cohortNote() string {
+	if !d.OwnerCohort {
+		return ""
+	}
+	return ownerCohortNote
+}
+
 // ArenaPage is one presented comparison.
 type ArenaPage struct {
 	Base
@@ -61,6 +86,10 @@ type ArenaPage struct {
 	// Totals is the arena's size, so the page can say whether the
 	// leaderboard means anything yet.
 	TotalJudged int
+	// CohortNote names the owner-cohort weighting when this deployment has
+	// one, and is empty when it does not. Set from Deps.cohortNote so the
+	// condition is consulted exactly once.
+	CohortNote string
 }
 
 // WorkCard is one side of a comparison.
@@ -99,6 +128,10 @@ type LeaderboardPage struct {
 	Note       string
 	Empty      bool
 	MinCompare int
+	// CohortNote names the owner-cohort weighting when this deployment has
+	// one, and is empty when it does not. Printed directly under the heading,
+	// before the table, because it qualifies every number in it.
+	CohortNote string
 }
 
 // LeaderboardRow is one standing.
@@ -588,6 +621,11 @@ func (d Deps) renderArena(w http.ResponseWriter, r *http.Request) {
 	page.Kind = string(kind)
 	page.KindLabel = kind.Label()
 	page.KindLinks = kindLinks(r, kind)
+	// The note travels with the page into renderArenaKind, which takes it by
+	// value: an entity arena is ranked by the same weighted ratings as the
+	// work arena, so the caveat is the same and must not be dropped at the
+	// branch.
+	page.CohortNote = d.cohortNote()
 
 	// The session cookie is the same one the API sets, so a user who has
 	// already been comparing keeps their history and their learned
@@ -913,6 +951,7 @@ func (d Deps) renderLeaderboard(w http.ResponseWriter, r *http.Request) {
 		Note: "A work shown at 1500 has not been compared yet, and sits at " +
 			"the middle because that is where an unrated work honestly " +
 			"belongs. Read the RD before the rating.",
+		CohortNote: d.cohortNote(),
 	}
 	limit := 50
 	if v := r.URL.Query().Get("limit"); v != "" {
@@ -1126,6 +1165,10 @@ type RankPage struct {
 	// make that claim, and a zero would render as "ranked 0 of 0" if it did.
 	Rank   int
 	RankOf int
+	// CohortNote names the owner-cohort weighting when this deployment has
+	// one, and is empty when it does not. A per-kind standing is the same
+	// weighted rating as the global board, so it carries the same caveat.
+	CohortNote string
 }
 
 // RankPoint is one period's rating.
@@ -1623,7 +1666,8 @@ func (d Deps) renderEntityRank(w http.ResponseWriter, r *http.Request, kind aren
 	}
 	st := d.Engine.Store
 	page := RankPage{Base: d.baseOf(r, "Rank", "Arena rating"),
-		WorkID: id, Kind: string(kind), KindLabel: kind.Label()}
+		WorkID: id, Kind: string(kind), KindLabel: kind.Label(),
+		CohortNote: d.cohortNote()}
 
 	name, ok, err := st.EntityName(ctx, kind, id)
 	if err != nil {

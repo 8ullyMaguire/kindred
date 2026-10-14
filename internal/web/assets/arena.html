@@ -59,4 +59,11 @@
 {{else}}
 <p class="empty">{{.Message}}</p>
 {{end}}
+{{/* The same weighting caveat the leaderboard carries, because the arena's
+     ratings and the board's ratings are one set of numbers: a reader who
+     meets the note on one page and not the other would reasonably conclude
+     the arena is unweighted. Printed whether or not a pair is on screen --
+     the note is about how the standings are built, not about this pair.
+     Empty when the deployment has no owner cohort. */}}
+{{if .CohortNote}}<p class="cohort-note" data-testid="cohort-note">{{.CohortNote}}</p>{{end}}
 {{end}}

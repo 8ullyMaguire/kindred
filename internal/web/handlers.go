@@ -83,11 +83,30 @@ type Deps struct {
 	// key overrides that key only; the zero value is today's behaviour.
 	Standing engine.Filter
 
-	// DefaultBlockedTags is the deployment's site-wide block list, resolved
+	// DefaultBlockedTagIDs is the deployment's site-wide block list, resolved
 	// to tag ids at startup (KINDRED_DEFAULT_BLOCKED_TAGS). Applied under
 	// the reader's own blocks: a reader can ADD blocks, never remove the
 	// site's, which is what "site-wide default" has to mean to be honest.
 	DefaultBlockedTagIDs map[int64]bool
+
+	// OwnerCohort says this deployment ranks with an owner cohort's taste
+	// agreement folded into the ratings.
+	//
+	// The standings pages NAME the weighting when it is true and say nothing
+	// when it is false. A rating a reader cannot account for is one they
+	// over-trust or dismiss, and "ranked by taste agreement with the owner
+	// cohort" is the whole difference between a number that means something
+	// and a number from nowhere. The claim is therefore printed only when the
+	// mechanism is actually running -- the same condition that starts the
+	// owner-vector builder in cmd/kindred, since a note about a cohort that
+	// was configured but could not be loaded would be exactly the plausible
+	// wrong answer this project keeps finding.
+	//
+	// It is a bool rather than the session string deliberately: a page needs
+	// to know THAT the cohort exists, never WHICH session is the owner's --
+	// that key is what grants one reader's votes their special weight, and it
+	// has no business on a page struct.
+	OwnerCohort bool
 }
 
 // CorpusQuerier is the corpus-analysis surface the pages need.

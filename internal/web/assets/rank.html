@@ -17,6 +17,11 @@
 
 {{if .Rank}}<p class="muted">Ranked {{.Rank}} of {{.RankOf}} rated {{.KindLabel}}s.</p>{{end}}
 
+{{/* The per-kind standing is the same weighted rating as the global board,
+     so it carries the same caveat. Empty when the deployment has no owner
+     cohort. */}}
+{{if .CohortNote}}<p class="cohort-note" data-testid="cohort-note">{{.CohortNote}}</p>{{end}}
+
 {{if .Note}}<p class="empty">{{.Note}}</p>{{end}}
 
 <ul class="record">

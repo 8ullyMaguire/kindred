@@ -261,6 +261,24 @@ func runServe(ctx context.Context, args []string) error {
 	// reader must not lose recommendations because the owner's profile
 	// could not be read.
 	if c.OwnerSession != "" && srv.Profiles != nil {
+		// The pages print the owner-cohort weighting from here -- the wiring
+		// point -- and not from the env var alone. A deployment with
+		// KINDRED_OWNER_SESSION set but no profile store never builds a
+		// vector, and a note claiming a weighting that is not running is
+		// precisely the plausible wrong answer the rest of this codebase
+		// spends its comments avoiding.
+		//
+		// What this asserts is that an owner cohort is CONFIGURED and WIRED,
+		// which is deliberately a weaker claim than "the vector built": a
+		// deployment may name an owner before that owner has ever voted, and
+		// the first build failing (no sessions row yet) must not be treated
+		// as a misconfiguration. The per-request truth is already reported
+		// where it belongs -- owner_taste names itself in meta.degraded[] on
+		// the API response whenever the vector is empty -- and the deploy gate
+		// checks this same wiring condition, so the page and the gate cannot
+		// disagree about which case they are in.
+		srv.OwnerCohort = true
+
 		buildOwnerVector := func() error {
 			ownerKey, err := s.OwnerKey(ctx, c.OwnerSession)
 			if err != nil {

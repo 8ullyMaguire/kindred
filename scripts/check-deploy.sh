@@ -512,6 +512,74 @@ check "search by a URL for a missing work says so" \
   "$TARGET/search?q=https%3A%2F%2Farchiveofourown.org%2Fworks%2F999999999" \
   'data-testid="exact-missing"'
 
+# --- 8. the standings name their weighting ------------------------------
+#
+# A ranking that is partly the operator's taste, shown as the crowd's verdict,
+# is a claim the reader cannot check. The pages name the weighting when an
+# owner cohort is running and stay silent when it is not, and BOTH directions
+# are checked because each is a different wrong answer: a note on a deployment
+# with no cohort is a false claim about the numbers, and no note on a
+# deployment with one is a hidden one.
+#
+# Which case applies is read from the SERVICE's env file, not from the gate's
+# own environment. The gate runs without KINDRED_OWNER_SESSION by design (the
+# key is a secret), so inferring "no owner here" from the gate's env would
+# report drift on a correctly configured deployment -- the exact mistake this
+# gate exists to catch, inverted.
+echo
+echo "standings name the owner-cohort weighting"
+owner_env_file="${KINDRED_DEPLOY_ENV:-/etc/default/kindred-restrictions}"
+owner_session=""
+owner_known="no"
+if [ -r "$owner_env_file" ]; then
+  owner_known="yes"
+  owner_session=$(sed -n 's/^KINDRED_OWNER_SESSION=//p' "$owner_env_file" | tail -1)
+fi
+if [ -z "$owner_session" ] && [ -n "${KINDRED_OWNER_SESSION:-}" ]; then
+  owner_session="${KINDRED_OWNER_SESSION}"
+  owner_known="yes"
+fi
+
+board=$(curl -fsS --max-time 20 "$TARGET/leaderboard" 2>/dev/null || true)
+arena_page=$(curl -fsS --max-time 20 "$TARGET/arena" 2>/dev/null || true)
+if [ -z "$board" ] || [ -z "$arena_page" ]; then
+  unreachable=$((unreachable+1))
+  echo "  UNREACHABLE  /leaderboard or /arena"
+else
+  # Count the subject first: a grep for an ABSENT note matches nothing on a
+  # body that failed to render either, and would read as "correctly silent".
+  if grep -qE 'class="ratings"|class="empty"|data-testid="cohort-note"' <<<"$board"; then
+    ok "leaderboard rendered its own content"
+  else
+    bad "leaderboard rendered neither a standings table nor an empty state"
+  fi
+  case "$owner_known:$owner_session" in
+  yes:)
+    # Readable env file that names no owner: silence is the correct answer.
+    if grep -q 'data-testid="cohort-note"' <<<"$board"; then
+      bad "/leaderboard names a cohort weighting but $owner_env_file sets no KINDRED_OWNER_SESSION"
+    else
+      ok "leaderboard is silent about weighting with no owner session"
+    fi
+    ;;
+  *:?*)
+    if grep -q 'data-testid="cohort-note"' <<<"$board"; then
+      ok "leaderboard names the cohort weighting"
+    else
+      bad "an owner session is configured but /leaderboard does not name the cohort weighting"
+    fi
+    if grep -q 'data-testid="cohort-note"' <<<"$arena_page"; then
+      ok "arena carries the same caveat"
+    else
+      bad "/arena does not carry the cohort note /leaderboard carries"
+    fi
+    ;;
+  *)
+    note "skipped (no owner session in gate env)"
+    ;;
+  esac
+fi
+
 # --- verdict ------------------------------------------------------------
 echo
 echo "-----------------------------------------------------------"

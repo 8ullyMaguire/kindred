@@ -608,3 +608,77 @@ originals: stale copies of the two largest files in the package, reachable in
 git history, and one edit away from being believed. Deleted.
 
 Commit `5eb30c1`.
+
+## The standings say they are owner-cohort weighted
+
+**Rejected:** leaving the weighting unsaid. Every rating on `/leaderboard`, the
+arena cards and `/rank/{kind}/{id}` comes from a batch whose influence weights
+are each voter's recorded agreement with the owner's taste. A reader who cannot
+see that reads the board as the crowd's verdict, and it is partly the
+operator's. The API always said so -- `owner_taste` names itself in
+`meta.degraded[]` -- but the HTML pages, which are what a reader actually
+looks at, said nothing at all.
+
+**Chosen:** one sentence, printed when the deployment has an owner cohort and
+absent when it does not, on `/leaderboard`, `/arena` and `/rank/{kind}/{id}`.
+
+**The condition is the wiring point, not a successful build.** `cmd/kindred`
+sets `OwnerCohort` inside `if c.OwnerSession != "" && srv.Profiles != nil` --
+the same block that starts the owner-vector builder -- and deliberately before
+the first build. A deployment may name an owner before that owner has ever
+voted, so the first build legitimately fails on a missing sessions row, and
+treating that as "no cohort" would switch the note off on a correctly
+configured deployment. What the page asserts is that an owner cohort is
+configured and wired, which is exactly what the deploy gate checks, so the page
+and the gate cannot disagree about which case they are in. The stronger claim --
+"this deployment's vector is non-empty" -- is per-request and is already
+reported where a machine can see it, in `meta.degraded[]`.
+
+**The empty board carries the note too.** The line describes how this
+deployment computes standings, which is true before the first rating exists --
+and a note that vanished when the board was empty would make the deploy gate
+report drift on a correct deployment, which is the false-alarm class this whole
+script exists to avoid.
+
+**The gate reads the SERVICE's env file, not its own environment.**
+`KINDRED_OWNER_SESSION` is a secret the gate does not carry, so inferring "no
+owner here" from the gate's own env would fail a correctly configured
+deployment. It reads `/etc/default/kindred-restrictions` (override:
+`KINDRED_DEPLOY_ENV`). File readable and naming no session: silence is asserted.
+File unreadable and no variable set: it prints
+`skipped (no owner session in gate env)` rather than passing quietly. Verified
+in all four directions against a real server: present, absent, and both drift
+cases failing with the reason on the line.
+
+## Anti-recommendation and hidden-gems stay unweighted — do not "fix" this
+
+**Rejected:** folding the owner prior into the anti-recommendation and
+hidden-gems surfaces.
+
+**Chosen:** leaving them on inverted and global scores. An anti-recommendation
+is defined as the works the owner's taste is *not* drawn to; weighting it by the
+owner's taste makes the page fight itself and converge on ordinary
+recommendations. Hidden gems are the same argument: their value is that nobody
+has weighted them yet.
+
+**Cost:** those pages do not reflect the cohort, so a reader comparing them with
+`/leaderboard` sees two different notions of "good" on one site. That is the
+intended behaviour, and this entry is what stops it being rediscovered as a bug.
+
+## Plan-vs-reality, as the plan asked to have recorded
+
+- Step F says "Same on the per-kind leaderboards". No per-kind leaderboard
+  PAGE exists -- `?kind=` is not a route on `/leaderboard`. The per-kind
+  standings surface a reader can reach is `/rank/{kind}/{id}`, and it carries
+  the note now. The machine surface,
+  `GET /api/v1/arena/leaderboard?kind=...`, already reports the owner dimension
+  through `meta.degraded[]`; it was deliberately left alone rather than having a
+  `note` field added to its JSON contract in the same change.
+- The plan's gate wording for the with-owner case was two states
+  ("present with an owner session, absent without"). Implemented as three,
+  because "the env file is unreadable" and "the env file names no owner" are
+  different facts and only one of them is evidence.
+- `cmd/e2eserver` gained `OwnerCohort: os.Getenv("KINDRED_OWNER_SESSION") != ""`.
+  Not a product change: the "present" half of the gate check cannot be verified
+  at all if nothing in the harness can produce the state. Unset in CI, so the
+  browser suite's behaviour is unchanged.

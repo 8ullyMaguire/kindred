@@ -165,6 +165,22 @@ a.tag:hover {
 
 .muted { color: var(--muted); }
 
+/* == COHORT NOTE ==
+ * The line that names the owner-cohort weighting on the standings and arena
+ * pages. It must read as a note ABOUT the numbers, not as another number:
+ * muted and small, with a rule down its left edge so it groups with nothing
+ * and a reader who has read it once can skip it at a glance.
+ */
+
+.cohort-note {
+  color: var(--muted);
+  font-size: 0.9em;
+  border-left: 3px solid var(--border);
+  padding-left: 0.75em;
+  margin: 0.5em 0 1em;
+  max-width: 60ch;
+}
+
 /* == SEARCH == */
 
 .search-form {
