@@ -247,6 +247,24 @@ A voter below **5** recorded comparisons (`minEvidence`) has no taste vector wor
 comparing, so their agreement sits at the conservative end rather than being
 extrapolated from one or two choices.
 
+**The curve, exactly** (`internal/api/arena.go`, where a judged row becomes a
+period outcome):
+
+| agreement | influence |
+|---|---|
+| `0.00` | `0.00` |
+| `0.22` | `0.05` |
+| `0.50` | `0.25` |
+| `0.71` | `0.50` |
+| `1.00` | `1.00` |
+
+That is `w = agreement²`. Below `agreeFloor` (`0.05` of influence, i.e. agreement
+about `0.22`) the outcome is **dropped from the period entirely** — a `continue`,
+not a clamp. Dropping it is what makes "opposite taste" mean *minimal* change
+rather than a change in the other direction, and it is also the only correct
+route: `Weight` zero means UNSET in the rating maths, so a clamped zero would be
+counted at **full** influence, exactly backwards.
+
 **Influence, exactly** (`internal/arena/glicko.go`): each outcome carries a
 `Weight` in `0..1`, folded into the Glicko update's variance *and* its residual
 sum. Both sites matter: a weight applied to one and not the other moves a
@@ -267,7 +285,8 @@ stored in one comparison table separated by `kind`. `ao3_work` is the default an
 the only kind that also teaches tag weights: a tag-vs-tag vote feeding the weights
 that select works would be circular. See §2.3 for the id spaces.
 
-**Verified against the code** (not against a plan): `minEvidence = 5` at
+**Verified against the code** (not against a plan): the curve and its floor in
+`internal/api/arena.go` (`influenceOf`, `agreeFloor`); `minEvidence = 5` at
 `internal/store/agreement.go:19`; the four agreement outcomes and their
 reasoning in `AgreementWithOwner` (`internal/store/agreement.go:275`);
 `Weight`/`weightOf` and the two sites it is folded into
