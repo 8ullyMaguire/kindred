@@ -56,7 +56,7 @@ var workURLRe = regexp.MustCompile(`/works/(\d{1,12})`)
 // background improvement loop, and a crawler that takes serve down because
 // a database was locked would be worse than no crawler.
 func runAutoCrawl(ctx context.Context, s *store.Store, c *config.Config, log *slog.Logger) {
-	runAutoCrawlMax(ctx, s, c, log, 0)
+	runAutoCrawlMax(ctx, s, c, log, 0, "")
 }
 
 // runAutoCrawlMax is runAutoCrawl with a bound on how many jobs it processes
@@ -67,7 +67,14 @@ func runAutoCrawl(ctx context.Context, s *store.Store, c *config.Config, log *sl
 // cmd/kindred/autocrawlcmd.go), and a timer whose run can last four hours is
 // not a timer. A bounded run leaves the remaining rows undoned, so the next
 // tick picks up exactly where it stopped.
-func runAutoCrawlMax(ctx context.Context, s *store.Store, c *config.Config, log *slog.Logger, max int) {
+//
+// baseURL is empty in production, and it is what makes the timer's own command
+// testable. AO3 answers this network with a Cloudflare 525 (three attempts out
+// of three, re-measured 2026-10-15), so without a redirectable base URL a test
+// of a drain can only prove that it records a failure per row — never that it
+// fetches, parses and stores a work. `crawl` and `discover` already take the
+// same override for the same reason.
+func runAutoCrawlMax(ctx context.Context, s *store.Store, c *config.Config, log *slog.Logger, max int, baseURL string) {
 	if s == nil {
 		return
 	}
@@ -83,7 +90,9 @@ func runAutoCrawlMax(ctx context.Context, s *store.Store, c *config.Config, log 
 	}
 	defer mirror.Close()
 
-	client := crawl.NewHTTPClient("")
+	// baseURL is empty in production: the timer runs against the real site, and
+	// only a test redirects it (see runAutoCrawlMax's doc).
+	client := crawl.NewHTTPClient(baseURL)
 	// The delay is read from robots.txt, not assumed; the error is logged
 	// and the returned delay used regardless, because LoadRobotsDelay's
 	// contract is that failure yields the conservative default.

@@ -41,6 +41,11 @@ func runAutoCrawlCmd(ctx context.Context, args []string) error {
 	c := bindConfig(fs)
 	var (
 		max = fs.Int("max", 25, "stop after this many works (0 = drain until the queue is empty)")
+		// --base-url is the same fixture-server override `crawl` and
+		// `discover` already take, and it is here because this is the command
+		// the timer runs: redirecting the base URL is the only way to prove
+		// the drain fetches, parses and stores a work on a host AO3 refuses.
+		baseURL = fs.String("base-url", "", "override the AO3 base URL (for a fixture server)")
 	)
 	c, err := finishConfig(c, fs, args)
 	if err != nil {
@@ -60,6 +65,6 @@ func runAutoCrawlCmd(ctx context.Context, args []string) error {
 	if *max > 0 {
 		log.Info("autocrawl: starting a bounded drain", "max", *max)
 	}
-	runAutoCrawlMax(ctx, s, c, log, *max)
+	runAutoCrawlMax(ctx, s, c, log, *max, *baseURL)
 	return nil
 }

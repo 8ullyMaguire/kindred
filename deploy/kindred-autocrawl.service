@@ -28,12 +28,23 @@ Documentation=https://github.com/polarisocial/kindred
 #
 # 1. THE CORPUS MUST BE WRITABLE BY THE SERVICE USER. On thinkcentre the corpus
 #    is `-rw-r--r-- alvaro alvaro` and the state database belongs to `kindre`,
-#    so neither user can write both (`sudo -u kindre test -w` and
+#    so neither user could write both (`sudo -u kindre test -w` and
 #    `sudo -u alvaro test -w` were both false, measured). A crawler that fetches
 #    and then cannot save is worse than no crawler, because the queue looks
-#    alive. Either run this as the owner of the corpus with the state database
-#    group-writable, or grant the service user access with an ACL. That is a
-#    permission decision, so it is left to the owner rather than made here.
+#    alive.
+#
+#    RESOLVED 2026-10-15 with an ACL rather than a chown: the corpus belongs to
+#    another project and its ownership should not move for a crawler.
+#
+#      setfacl -m u:kindre:rw  /home/alvaro/kindling-data/ao3_metadata.db
+#      setfacl -m u:kindre:rwx /home/alvaro/kindling-data
+#
+#    The DIRECTORY matters as much as the file — SQLite creates its journal and
+#    its -wal/-shm files beside the database, so a crawler that can write the
+#    file but not the directory fetches and then cannot save. Verified after the
+#    change: both `test -w` calls return true for kindre, `/home/alvaro` is
+#    traversable by kindre, and a copy of this unit's own command drains the
+#    queue as that user.
 #
 # 2. THE HOST MUST BE ABLE TO REACH AO3. thinkcentre cannot: archiveofourown.org
 #    answers it with a Cloudflare **525 SSL handshake failed**, three attempts
@@ -83,8 +94,28 @@ SuccessExitStatus=0
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ProtectHome=yes
 
+# NO ProtectHome= HERE, AND THE REASON IS A MEASUREMENT.
+#
+# This unit writes one path that lives inside a home directory, and
+# `ProtectHome=yes` made that path unreachable even though it is listed in
+# `ReadWritePaths=` below:
+#
+#   kindred autocrawl: corpus /home/alvaro/kindling-data/ao3_metadata.db:
+#   unable to open database file (14)
+#
+# So ReadWritePaths= does NOT re-expose a path under /home that ProtectHome=
+# has hidden. Isolated on the host with two systemd-run probes differing in
+# that one property, under the same user (2026-10-15): with ProtectHome=yes the
+# open fails; without it, the same command drains the queue. This is the shape
+# of mistake the two preconditions above are about — a sandbox that permits the
+# fetch and forbids the save looks exactly like a working crawler until the
+# mirror stops growing.
+#
+# ProtectSystem=strict is what does the real work here: the whole filesystem is
+# read-only except the two paths below. Dropping ProtectHome= therefore costs
+# this unit nothing it needs.
+#
 # The state database and the corpus are both written, and nothing else is.
 ReadWritePaths=/var/lib/kindred /home/alvaro/kindling-data
 
