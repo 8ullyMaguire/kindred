@@ -122,6 +122,15 @@ The in-memory data structures that power the recommender. Built by
 
 - **Format**: Hash map from namespaced entity IDs (e.g., `"ao3_work:123"`) to
   internal entity records.
+- **Arena entity kinds**: `ao3_work`, `ao3_tag`, `ao3_character`,
+  `ao3_relationship`, `ao3_fandom`, `ao3_author`. The tag-shaped kinds share the
+  corpus `tags` id space (their `entity_id` is `work_tags.tag_id` for the
+  matching `tag_type`); authors are keyed by a normalised display name
+  (`fnv64a` of the lowercased name with a trailing pseud dropped), so
+  same-name-different-person collisions are accepted, as the `/author` route
+  already accepts them. Candidates are materialised per kind into
+  `entity_candidates` (with their display names) and refreshed on a TTL, because
+  grouping the mirror's tag rows takes ~2.2s and a page view must never pay it.
 - **Contents**: For each work, the fields from the `works` table plus a list
   of tag IDs (from `work_tags`).
 - **Size**: ~30 MB.
@@ -210,6 +219,59 @@ the both-halves application are live (`blockSQL`, `POST /block`,
 code — today a reader starts with an empty list. Seeding it is a config
 default, not a redesign.
 ---
+
+### 2.8 Owner-weighted consensus
+
+Ratings can be weighted by how much a voter's taste agrees with the deployment's
+owner, so a reader with diametrically opposite taste does not move the rankings
+as far as a reader who shares it. Owner features are OFF unless
+`KINDRED_OWNER_SESSION` names a session key; with no owner configured every vote
+carries full influence, which is the behaviour this feature was added around.
+
+**What is stored, and what is computed.** The judgement records the voter's
+*agreement* with the owner as a raw number at vote time
+(`arena_comparisons.agreement`). The *influence* that number carries is applied
+later, at batch time, where a period's comparisons are folded into ratings — so a
+change of policy is a re-run, not a migration.
+
+**Agreement, exactly** (`internal/store/agreement.go`, `AgreementWithOwner`):
+
+| Situation | Agreement |
+|---|---|
+| No owner configured | `1.0` — full influence. A `0` here would silently exclude every comparison in the estate. |
+| The voter **is** the owner | `1.0` — by definition, without a query. Measuring it would compare the owner's weights against a blend of those same weights and return something like `0.87`, which reads as "the owner disagrees with themself a bit". |
+| Owner configured, but no taste learned yet | `0` — deliberately conservative, and the only case where a missing taste becomes a null influence. |
+| Otherwise | The cosine similarity between the voter's blended taste vector and the owner's, cached for 10 minutes. |
+
+A voter below **5** recorded comparisons (`minEvidence`) has no taste vector worth
+comparing, so their agreement sits at the conservative end rather than being
+extrapolated from one or two choices.
+
+**Influence, exactly** (`internal/arena/glicko.go`): each outcome carries a
+`Weight` in `0..1`, folded into the Glicko update's variance *and* its residual
+sum. Both sites matter: a weight applied to one and not the other moves a
+low-agreement comparison **further**, not less far. A `Weight` of **zero means
+UNSET**, not "no influence" — `weightOf` maps it to full influence, so a caller
+that wants a comparison to count for nothing must **leave it out** of the
+opponent list. Passing `0` backwards is the mistake this field invites.
+
+**Evidence phrasing.** Weighted standings describe the *owner cohort's* taste:
+"owner cohort: …". Claims about the reader ("you would enjoy …") are only made
+where the reader's own taste produced the answer. On any surface where the owner
+prior can be withheld, `?personal=0` withholds it and names the degradation in
+`meta.degraded[]` rather than silently ranking differently.
+
+**Entity kinds.** The arena rates entities as well as works — `ao3_work`,
+`ao3_tag`, `ao3_character`, `ao3_relationship`, `ao3_fandom`, `ao3_author` —
+stored in one comparison table separated by `kind`. `ao3_work` is the default and
+the only kind that also teaches tag weights: a tag-vs-tag vote feeding the weights
+that select works would be circular. See §2.3 for the id spaces.
+
+**Verified against the code** (not against a plan): `minEvidence = 5` at
+`internal/store/agreement.go:19`; the four agreement outcomes and their
+reasoning in `AgreementWithOwner` (`internal/store/agreement.go:275`);
+`Weight`/`weightOf` and the two sites it is folded into
+(`internal/arena/glicko.go:99`, `:129`, `:182`, `:203`).
 
 ## 3. API
 
@@ -383,21 +445,30 @@ These endpoints serve the anonymous peer-ranking arena (see
 `internal/arena`).
 
 - `GET /api/v1/arena/pair`
-  - Returns a pair of works for the user to compare.
-  - Query parameters: none.
+  - Returns a pair of entities for the user to compare.
+  - Query parameters: `kind` (one of the §2.3 arena kinds, default `ao3_work`),
+    and `tag_id` to scope the work arena to a fandom.
+  - An unknown `kind` is a **400** naming the allowlist, not a silent fallback:
+    the JSON API can tell a caller what it accepts.
   - Response:
-    - `kind`: `ao3_work`.
+    - `kind`: the kind actually paired.
     - `items`: array of two works, each with the same fields as
       `/api/v1/ao3/works/{id}`.
 
 - `POST /api/v1/arena/compare`
-  - Records the user's judgment of which work in a pair is better.
+  - Records the user's judgment of which entity in a pair is better. The
+    judgement belongs to the arena that presented the pair, so it is recorded
+    against that `kind` and cannot consume a pair from another one.
+  - Query parameters: `kind`, with the same validation as `/pair`.
   - Request body: JSON with `winner` and `loser` (namespaced entity IDs).
   - Response: empty JSON object on success.
 
 - `GET /api/v1/arena/leaderboard`
-  - Returns the arena leaderboard (top works by Glicko-2 rating).
-  - Query parameters:
+  - Returns the arena leaderboard (top entities of one kind by Glicko-2 rating).
+  - Query parameters: `kind` (same validation as `/pair`), plus `limit` and
+    `min_comparisons`. When the owner cohort is running, the owner dimension is
+    reported in `meta.degraded[]`; `?personal=0` withholds the owner prior and
+    says so there.
     - `limit` (optional, default 10): number of works to return.
     - `offset` (optional, default 0): pagination offset.
   - Response:
