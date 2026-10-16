@@ -33,7 +33,10 @@ REMOTE_BIN=${REMOTE_BIN:-/usr/local/bin/kindred}
 REMOTE_DIR=$(dirname "$REMOTE_BIN")
 UNIT=${UNIT:-kindred}
 PORT=${PORT:-8010}
-LOCAL_PORT=${LOCAL_PORT:-8010}
+# LOCAL_PORT is deliberately NOT defaulted here: it is read from the deployed
+# unit's own --listen in step 4 (see the comment there). A default is the thing
+# that broke, because the unit's port and this file's copy of it can disagree.
+LOCAL_PORT=${LOCAL_PORT:-}
 
 cd "$REPO"
 
@@ -79,10 +82,42 @@ ssh "$DEPLOY_HOST" "sudo systemctl restart $UNIT"
 echo "  restarted $UNIT"
 
 say "4. waiting for health"
+# The port comes from the UNIT, not from a default in this file.
+#
+# LOCAL_PORT used to default to 8010 here while the deployed unit's ExecStart
+# says --listen 127.0.0.1:8019. The health wait therefore polled a port nothing
+# served, failed after its 30 attempts, and exited 2 -- so steps 5 and 6, the
+# provenance and behaviour gates, had not run for as long as that drift lasted.
+# The failure mode is the one this whole script is written against: a deploy that
+# reports nothing looks exactly like a deploy that passed. Measured on
+# 2026-10-16: :8010 refuses, :8019 answers {"budget_ok":true,...}.
+#
+# A second hard-coded copy of the port would drift again, so the port is read
+# from the running unit, and if it cannot be read this refuses to continue
+# rather than guessing -- a guess here is a silent no-op gate.
+if [ -z "${LOCAL_PORT:-}" ]; then
+  LOCAL_PORT=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$DEPLOY_HOST" \
+    "systemctl show -p ExecStart --value $UNIT" 2>/dev/null |
+    grep -oE -- '-+listen[= ]*[^ ]*' | head -1 | sed -E 's/.*:([0-9]+)$/\1/') || true
+fi
+if ! printf '%s' "${LOCAL_PORT:-}" | grep -qE '^[0-9]+$'; then
+  echo "  FAIL: could not read the listening port from $UNIT's ExecStart (got '${LOCAL_PORT:-}')"
+  echo "        not guessing: a wrong port makes this wait poll nothing, and the"
+  echo "        provenance and behaviour gates below would never run."
+  exit 2
+fi
+echo "  $UNIT listens on 127.0.0.1:$LOCAL_PORT (read from the unit)"
+
 # Readiness by observation, not by a fixed sleep: the gate must not run against a
 # half-started process and report something about that instead.
+#
+# 90 attempts, not 30. The last measured cold start loaded 634,232 nodes and
+# 7,774,334 edges in ~26s (2026-10-16), and the corpus grows; a window that
+# expires a second before the service binds refuses a deploy that worked. The
+# loop still leaves as soon as /healthz answers, so the bound costs nothing when
+# the service is fast.
 READY=0
-for i in $(seq 1 30); do
+for i in $(seq 1 90); do
   if ssh -o BatchMode=yes -o ConnectTimeout=5 "$DEPLOY_HOST" \
        "curl -fsS --max-time 5 http://127.0.0.1:$LOCAL_PORT/healthz" >/dev/null 2>&1; then
     READY=1
@@ -92,7 +127,7 @@ for i in $(seq 1 30); do
   sleep 1
 done
 if [ "$READY" -ne 1 ]; then
-  echo "  FAIL: /healthz did not answer within 30s"
+  echo "  FAIL: /healthz on 127.0.0.1:$LOCAL_PORT did not answer within 90s"
   ssh "$DEPLOY_HOST" "sudo journalctl -u $UNIT -n 30 --no-pager" || true
   exit 2
 fi
