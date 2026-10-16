@@ -508,3 +508,10 @@ If the goal check passes, the implementation is complete and ready for
 use.
 
 ---
+
+## Guest access, trust levels and self-governance (adopted 2026-10-16)
+
+The owner's 2026-10-16 request is specified per site in `docs/ROADMAP-guest-trust-governance.md`, against the estate standard
+`secondbrain/10-Projects/2026-10-16-guest-access-trust-and-self-governance.md` (items GS-1…GS-5, each configurable). This repo's deltas, firewalls and order of work are
+in that file; it is the place to start, not this pointer.
+
