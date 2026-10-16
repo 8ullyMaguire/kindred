@@ -35,7 +35,7 @@
   </table>
   {{if .Truncated}}<p class="hint">Truncated.</p>{{end}}
 {{else}}
-  <p class="count" data-testid="empty">
+  <p class="count" data-testid="empty" data-empty="true">
     {{if .Tag}}
       Nothing to show for &ldquo;{{.Tag}}&rdquo;.
     {{else}}

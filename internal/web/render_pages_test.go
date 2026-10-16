@@ -164,6 +164,13 @@ type pageRenderCase struct {
 	// wantContains alone: an absent word_count rendered as "0 words"
 	// satisfies every other assertion in the case.
 	wantNotContains []string
+	// hasEmptyList declares that this case renders at least one of the page's
+	// lists with no rows, so an empty-state marker is expected in its output.
+	// The complement -- a case with rows must NOT carry one -- is asserted for
+	// every case that leaves this false, which is what makes a marker that
+	// drifts onto a populated element a test failure rather than a lie a
+	// reader has to catch.
+	hasEmptyList bool
 }
 
 // sweepBase is the shared Base every case starts from. Package-level because
@@ -232,8 +239,9 @@ var pageRenderCases = []pageRenderCase{
 			"58 tags", "/recommend?seed=ao3_work%3a42"},
 	},
 	{
-		tpl:  "surprise.html",
-		name: "surprise.html with nothing to pick from",
+		tpl:          "surprise.html",
+		name:         "surprise.html with nothing to pick from",
+		hasEmptyList: true,
 		data: SurprisePage{
 			Base:  sweepBase,
 			Notes: []string{"no work in this corpus has 10 or more tags"},
@@ -261,9 +269,10 @@ var pageRenderCases = []pageRenderCase{
 			"Ask for 1000 instead"},
 	},
 	{
-		tpl:  "neighbours.html",
-		name: "neighbours.html with no tag",
-		data: NeighboursPage{Base: sweepBase},
+		tpl:          "neighbours.html",
+		name:         "neighbours.html with no tag",
+		hasEmptyList: true,
+		data:         NeighboursPage{Base: sweepBase},
 		// The empty state must SAY something. A blank page here reads as a
 		// broken deployment rather than an untouched form.
 		wantContains: []string{"Name a tag"},
@@ -282,17 +291,19 @@ var pageRenderCases = []pageRenderCase{
 		wantContains: []string{"me &amp; you", "1, 2"},
 	},
 	{
-		tpl:  "profiles.html",
-		name: "profiles.html empty",
-		data: ProfilesPage{Base: sweepBase},
+		tpl:          "profiles.html",
+		name:         "profiles.html empty",
+		hasEmptyList: true,
+		data:         ProfilesPage{Base: sweepBase},
 		// An empty profile list must offer the CLI equivalent, or the
 		// reader is told nothing is there and left guessing.
 		wantContains: []string{"No profiles yet"},
 	},
 	{
-		tpl:  "profiles.html",
-		name: "profiles.html with an error",
-		data: ProfilesPage{Base: sweepBase, Err: "work 999 is not in this corpus"},
+		tpl:          "profiles.html",
+		name:         "profiles.html with an error",
+		hasEmptyList: true,
+		data:         ProfilesPage{Base: sweepBase, Err: "work 999 is not in this corpus"},
 		// The error must be VISIBLE. A swallowed error here is the
 		// accepted-and-ignored shape this repo has been fighting all along.
 		wantContains: []string{"work 999 is not in this corpus"},
@@ -319,12 +330,14 @@ var pageRenderCases = []pageRenderCase{
 	{
 		tpl:          "profile.html",
 		name:         "profile.html empty",
+		hasEmptyList: true,
 		data:         ProfilePage{Base: sweepBase},
 		wantContains: []string{"This profile is empty"},
 	},
 	{
 		tpl:          "profile.html",
 		name:         "profile.html with an error",
+		hasEmptyList: true,
 		data:         ProfilePage{Base: sweepBase, Err: "no profile &quot;ghost&quot;"},
 		wantContains: []string{"ghost"},
 	},
@@ -354,20 +367,32 @@ var pageRenderCases = []pageRenderCase{
 		},
 	},
 	{
-		tpl:  "recommend.html",
-		name: "recommend.html empty seeds",
+		tpl:          "recommend.html",
+		name:         "recommend.html empty seeds",
+		hasEmptyList: true,
 		data: RecommendPage{
 			Base: sweepBase, MaxSeeds: 5,
 		},
 		// An untouched form must render the form, not a 404 or a blank
-		// page: this is what /recommend with no seeds serves.
-		wantContains: []string{"Seeds", "Rank"},
+		// page: this is what /recommend with no seeds serves. It must also NOT
+		// claim a search ran: "Nothing scored above zero for these seeds" is a
+		// statement about seeds this page never had, and it reads to a reader
+		// as "I searched and found nothing".
+		wantContains:    []string{"Seeds", "Rank", "Nothing is ranked yet"},
+		wantNotContains: []string{"Nothing scored above zero"},
 	},
 	{
-		tpl:  "recommend.html",
-		name: "recommend.html empty results",
+		tpl:          "recommend.html",
+		name:         "recommend.html empty results",
+		hasEmptyList: true,
+		// Seeds are set because this case tests "seeds given, nothing scored
+		// above zero" -- and the template tells that state apart from an
+		// untouched form by exactly this field. Without them the case was
+		// exercising the no-seeds branch while asserting the message only the
+		// searched branch may print.
 		data: RecommendPage{
 			Base: sweepBase, MaxSeeds: 5, N: 20, MaxPerFandom: 3,
+			Seeds: []SeedRef{{Kind: "ao3_work", ID: 1, Raw: "ao3_work:1"}},
 		},
 		// The empty state must explain WHY it is empty, and must point at
 		// the cap as a candidate cause. "No results" with no explanation is
@@ -375,8 +400,9 @@ var pageRenderCases = []pageRenderCase{
 		wantContains: []string{"Nothing scored above zero", "diversity cap"},
 	},
 	{
-		name: "recommend.html seed limit",
-		tpl:  "recommend.html",
+		name:         "recommend.html seed limit",
+		hasEmptyList: true,
+		tpl:          "recommend.html",
 		data: RecommendPage{
 			Base:         sweepBase,
 			MaxSeeds:     5,
@@ -429,8 +455,9 @@ var pageRenderCases = []pageRenderCase{
 		// must SAY SO per half. A page that rendered neither message would
 		// leave the reader unable to tell "no matches" from "the search
 		// did not run".
-		name: "search.html no matches in either half",
-		tpl:  "search.html",
+		name:         "search.html no matches in either half",
+		hasEmptyList: true,
+		tpl:          "search.html",
 		data: SearchPage{
 			Base: Base{Title: "T", Heading: "H", Query: "zzzznothing"},
 		},
@@ -477,8 +504,9 @@ var pageRenderCases = []pageRenderCase{
 		// without inventing values. The corpus has NULL in all of these
 		// columns, and scanning NULL into a string is what took out the
 		// tag page one column at a time.
-		name: "search.html a work with every optional field empty",
-		tpl:  "search.html",
+		name:         "search.html a work with every optional field empty",
+		hasEmptyList: true,
+		tpl:          "search.html",
 		data: SearchPage{
 			Base:      Base{Title: "T", Heading: "H", Query: "untitled"},
 			Works:     []WorkHit{{ID: 5, Title: "Untitled Fic"}},
@@ -489,9 +517,10 @@ var pageRenderCases = []pageRenderCase{
 		wantNotContains: []string{"0 words", "on AO3"},
 	},
 	{
-		name: "search.html empty",
-		tpl:  "search.html",
-		data: SearchPage{Base: sweepBase},
+		name:         "search.html empty",
+		hasEmptyList: true,
+		tpl:          "search.html",
+		data:         SearchPage{Base: sweepBase},
 		// The empty state must render, and must not be an error page.
 		wantContains: []string{""},
 	},
@@ -559,8 +588,9 @@ var pageRenderCases = []pageRenderCase{
 		// page saying "most recently updated" over a kudos listing is a
 		// sentence a reader believes for ten seconds, and this is the
 		// one place the two could drift apart.
-		name: "tag.html sorted by recency",
-		tpl:  "tag.html",
+		name:         "tag.html sorted by recency",
+		hasEmptyList: true,
+		tpl:          "tag.html",
 		data: TagPage{
 			Base: sweepBase,
 			Tag:  TagInfo{ID: 7, Name: "dark", WorkCount: 40},
@@ -580,8 +610,9 @@ var pageRenderCases = []pageRenderCase{
 	{
 		// A length filter that matched nothing says so, and names the
 		// filter as the reason rather than claiming the tag is empty.
-		name: "tag.html a length filter that matched nothing",
-		tpl:  "tag.html",
+		name:         "tag.html a length filter that matched nothing",
+		hasEmptyList: true,
+		tpl:          "tag.html",
 		data: TagPage{
 			Base:        sweepBase,
 			Tag:         TagInfo{ID: 7, Name: "dark", WorkCount: 1234},
@@ -603,8 +634,9 @@ var pageRenderCases = []pageRenderCase{
 		// is unfiltered. Showing an unfiltered list silently under a
 		// filter the reader set is the failure this whole change exists
 		// to remove.
-		name: "tag.html an unparseable length filter",
-		tpl:  "tag.html",
+		name:         "tag.html an unparseable length filter",
+		hasEmptyList: true,
+		tpl:          "tag.html",
 		data: TagPage{
 			Base:        sweepBase,
 			Tag:         TagInfo{ID: 7, Name: "dark", WorkCount: 40},
@@ -648,8 +680,9 @@ var pageRenderCases = []pageRenderCase{
 		wantContains: []string{"sess-1", "glicko", "Card A", "Card B"},
 	},
 	{
-		name: "arena.html with no pair",
-		tpl:  "arena.html",
+		name:         "arena.html with no pair",
+		hasEmptyList: true,
+		tpl:          "arena.html",
 		data: ArenaPage{
 			Base:    sweepBase,
 			Message: "the arena pool is exhausted; restart to judge more",
@@ -679,6 +712,7 @@ var pageRenderCases = []pageRenderCase{
 	},
 	{
 		name:         "leaderboard.html empty",
+		hasEmptyList: true,
 		tpl:          "leaderboard.html",
 		data:         LeaderboardPage{Base: sweepBase, Empty: true, MinCompare: 3},
 		wantContains: []string{""},
@@ -736,6 +770,7 @@ var pageRenderCases = []pageRenderCase{
 	},
 	{
 		name:         "block.html empty",
+		hasEmptyList: true,
 		tpl:          "block.html",
 		data:         BlockPage{Base: sweepBase, Empty: true, Judged: 1, MinimumForView: 5},
 		wantContains: []string{""},
@@ -772,12 +807,14 @@ var pageRenderCases = []pageRenderCase{
 	{
 		tpl:          "crawl.html",
 		name:         "crawl.html with nothing queued",
+		hasEmptyList: true,
 		data:         CrawlPage{Base: sweepBase, Cap: 5},
 		wantContains: []string{"Nothing is queued", "mirror is not growing", "kindred discover"},
 	},
 	{
 		tpl:          "crawl.html",
 		name:         "crawl.html with no queue at all",
+		hasEmptyList: true,
 		data:         CrawlPage{Base: sweepBase, NoQueue: true, Cap: 5},
 		wantContains: []string{"no crawl queue"},
 	},
@@ -797,6 +834,7 @@ var pageRenderCases = []pageRenderCase{
 	{
 		tpl:          "mirror.html",
 		name:         "mirror.html with no corpus and no queue",
+		hasEmptyList: true,
 		data:         MirrorPage{Base: sweepBase, NoCorpus: true, NoQueue: true, Cap: 5},
 		wantContains: []string{"no corpus handle", "no crawl queue", "/api/v1/stats"},
 		// A labelled zero for a corpus it cannot read is the claim this page
@@ -806,6 +844,7 @@ var pageRenderCases = []pageRenderCase{
 	{
 		tpl:             "mirror.html",
 		name:            "mirror.html when the queue could not be read",
+		hasEmptyList:    true,
 		data:            MirrorPage{Base: sweepBase, HasCorpus: true, QueueErr: true, Cap: 5},
 		wantContains:    []string{"could not be read", "backlog is unknown"},
 		wantNotContains: []string{"Nothing is queued"},
@@ -880,6 +919,14 @@ func TestEveryAssetIsAPageTemplate(t *testing.T) {
 	for name := range pages {
 		registered[name] = true
 	}
+	// The registry is the list of pages, so the check runs against it rather
+	// than against the map it builds: a template that is in assets/ and in the
+	// map but not in the registry is a page no URL reaches.
+	for _, spec := range allPages() {
+		if !registered[spec.Template] {
+			t.Errorf("%s is registered but has no template set", spec.Template)
+		}
+	}
 
 	entries, err := assets.ReadDir("assets")
 	if err != nil {
@@ -890,13 +937,14 @@ func TestEveryAssetIsAPageTemplate(t *testing.T) {
 		if !strings.HasSuffix(name, ".html") {
 			continue
 		}
-		// layout.html is in every set as a fragment, not as a page.
-		if name == "layout.html" {
+		// The shell is in every set as a fragment, not as a page.
+		if name == shellTemplate {
 			continue
 		}
 		if !registered[name] {
-			t.Errorf("%s exists in assets/ but is not in the page list in "+
-				"render.go; its handler would 500 with %q", name, "no such template")
+			t.Errorf("%s exists in assets/ but is not in the page registry in "+
+				"registry.go; a file nothing routes to is a page nobody can tell is "+
+				"missing", name)
 		}
 	}
 
@@ -936,28 +984,19 @@ func truncate(s string, n int) string {
 // stating something false passes every other test in this package. The
 // sweepBase hoist above exists for this test.
 func TestEveryRegisteredPageHasASweepRow(t *testing.T) {
-	// layout.html is the shared shell, not a page: it is executed as a fragment
-	// by every case rather than having a content template of its own, and its
-	// own states (the freshness sentences) are pinned in their own tests.
-	notAPage := map[string]string{
-		"layout.html": "the shared shell, executed as a fragment by every case",
-	}
-
 	covered := make(map[string]bool, len(pageRenderCases))
 	for _, tc := range pageRenderCases {
 		covered[tc.tpl] = true
 	}
 
-	for name := range pages {
-		if why, ok := notAPage[name]; ok {
-			if covered[name] {
-				t.Errorf("%s is excluded as %q but has a case; remove one of the two", name, why)
-			}
-			continue
-		}
-		if !covered[name] {
+	// Every spec, not every key of pages: the shell is a key of pages and not
+	// a page, so it needs no exclusion here, and a page added to the registry
+	// without a case fails this by name instead of being missed because
+	// someone forgot to add it to a second list.
+	for _, spec := range allPages() {
+		if !covered[spec.Template] {
 			t.Errorf("%s is a registered page with no case in pageRenderCases, so "+
-				"nothing executes it with every field populated", name)
+				"nothing executes it with fields populated", spec.Template)
 		}
 	}
 }

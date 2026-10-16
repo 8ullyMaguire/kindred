@@ -2,7 +2,7 @@
 {{/* Below the threshold the page says WHY it is thin, rather than showing
      an empty panel that reads as "the arena thinks you have no taste". */}}
 {{if lt .Judged .MinimumForView}}
-<p class="empty">{{.Note}}</p>
+<p class="empty" data-empty="true">{{.Note}}</p>
 {{else}}
 <div class="taste">
   <div>
@@ -20,12 +20,16 @@
     {{if not .Disliked}}<p class="muted">nothing strong enough yet</p>{{end}}
   </div>
 </div>
-{{end}}
 
+{{/* The count and the caveat are INSIDE the else: below the threshold .Note
+     already carries the count ("3 of 10 needed") and the page printed it a
+     second time here, so the same sentence read as two facts. Measured before
+     the fix by TestTheEmptyStateIsSaidOnce: two occurrences, one sentence. */}}
 <p class="count">
   {{.Judged}} tag{{if ne .Judged 1}}s{{end}} learned from your comparisons &middot;
   {{.RatedWorks}} works rated in the arena &middot;
   {{.TotalJudged}} comparisons judged
 </p>
 <p class="empty">{{.Note}}</p>
+{{end}}
 {{end}}

@@ -23,7 +23,7 @@
   </dl>
 </fieldset>
 {{else}}
-<p class="count">
+<p class="count" data-empty="true">
   No tag co-occurs with this one often enough to clear the PMI floor.
   A tag on one or two works has nothing to travel with.
 </p>
@@ -150,7 +150,7 @@
        5,000 words" and would have been wrong the moment a second filter was
        applied -- a reader who set rating + length and got nothing was told
        about one of the two. */}}
-  <p class="count" data-testid="no-matches">
+  <p class="count" data-testid="no-matches" data-empty="true">
     No work on this tag matches
     {{if .Words}}the length filter &ldquo;{{.Words}}&rdquo;{{end}}
     {{if .Complete}}and {{if eq .Complete "true"}}complete{{else}}in progress{{end}}{{end}}

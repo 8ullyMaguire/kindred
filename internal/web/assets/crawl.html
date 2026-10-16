@@ -1,6 +1,6 @@
 {{define "content"}}
 {{if .NoQueue}}
-<p class="empty">
+<p class="empty" data-empty="true">
   This deployment has no crawl queue, so the mirror only ever shrinks as works
   are deleted upstream. That is the read-only configuration: the state database
   is not writable here, so nothing can be queued for fetching.
@@ -29,7 +29,7 @@
      link" and nothing else. Whichever is more urgent is not a reason to hide
      the other. */}}
 {{if not .Total}}
-<p class="crawl-verdict is-idle">
+<p class="crawl-verdict is-idle" data-empty="true">
   Nothing is queued. The mirror is not growing. If you expected new works,
   start a walk: <code>kindred discover --seed "tag:Some Tag" --enqueue</code>
 </p>

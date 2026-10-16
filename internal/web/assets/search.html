@@ -52,7 +52,7 @@
       {{end}}
     </div>
   {{else}}
-    <p class="count" data-testid="no-works">
+    <p class="count" data-testid="no-works" data-empty="true">
       {{if .Exact}}No other work&rsquo;s title or author matches &ldquo;{{.Query}}&rdquo;.
       {{else}}No work&rsquo;s title or author matches &ldquo;{{.Query}}&rdquo;.
       {{if not .ExactMissing}}An AO3 work URL or id searches too.{{end}}
@@ -76,7 +76,7 @@
       {{end}}
     </ul>
   {{else}}
-    <p class="count" data-testid="no-tags">
+    <p class="count" data-testid="no-tags" data-empty="true">
       No tag matches &ldquo;{{.Query}}&rdquo;. Tags are matched as substrings,
       so a shorter word finds more.
     </p>

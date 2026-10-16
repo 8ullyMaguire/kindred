@@ -193,8 +193,8 @@
       this, two give you what is like <em>both</em> of these.
     </p>
   </div>
-{{else}}
-  <p class="count" data-testid="empty">
+{{else if .Seeds}}
+  <p class="count" data-testid="empty" data-empty="true">
     Nothing scored above zero for these seeds. That is a real answer rather
     than a failure: PMI keeps only pairs that co-occur more often than chance
     predicts, and a seed set with no shared tags has no such pairs.
@@ -202,6 +202,16 @@
       It is also possible the diversity cap excluded everything &mdash; raise or
       remove the cap to tell those two apart.
     {{end}}
+  </p>
+{{else}}
+  {{/* No seeds at all. The page used to say "Nothing scored above zero for
+       these seeds. That is a real answer rather than a failure" here --
+       about a search that had not run, which is a claim the page cannot
+       support and reads to a reader as "I searched and found nothing". The
+       form above is the answer to this state; this line says so. */}}
+  <p class="count" data-empty="true" data-testid="no-seeds">
+    Nothing is ranked yet. Give the recommender a seed above &mdash; a work you
+    liked, or a tag &mdash; and it walks the mirror from there.
   </p>
 {{end}}
 

@@ -10,7 +10,7 @@
      Empty on a deployment with no owner cohort. */}}
 {{if .CohortNote}}<p class="cohort-note" data-testid="cohort-note">{{.CohortNote}}</p>{{end}}
 {{if .Empty}}
-<p class="empty">{{.Note}}</p>
+<p class="empty" data-empty="true">{{.Note}}</p>
 {{else}}
 <table class="ratings">
   <thead>

@@ -562,7 +562,8 @@ type ErrorPage struct {
 
 // -- template plumbing ------------------------------------------------------
 
-// pages is one template set PER PAGE.
+// pages is one template set PER PAGE, and its keys are exactly the registry's
+// templates plus the shell.
 //
 // The obvious implementation -- one set, ParseFS over assets/*.html --
 // is wrong in a way that produces 200 with an empty body and no error.
@@ -579,17 +580,15 @@ type ErrorPage struct {
 var pages = map[string]*template.Template{}
 
 func init() {
-	for _, page := range []string{
-		"layout.html", "search.html", "work.html", "tag.html",
-		"recommend.html", "notfound.html", "error.html",
-		"arena.html", "leaderboard.html", "rank.html", "myranking.html",
-		"block.html", "fandoms.html", "underrated.html", "neighbours.html",
-		"crawl.html",
-		"mirror.html",
-		"surprise.html",
-		"profiles.html", "profile.html",
-		"author.html",
-	} {
+	// Built from the registry, so the list of pages is declared once: it used
+	// to be a []string here and a switch in route(), hand-synced, with the
+	// switch unchecked.
+	seen := map[string]bool{}
+	for _, page := range append([]string{shellTemplate}, pageTemplates()...) {
+		if seen[page] {
+			continue // two URLs serving one page (/ and /search)
+		}
+		seen[page] = true
 		pages[page] = template.Must(template.New(page).
 			Funcs(funcMap).
 			ParseFS(assets,
@@ -597,6 +596,16 @@ func init() {
 				"assets/"+page,
 			))
 	}
+}
+
+// pageTemplates lists every registered page's template, in registry order.
+func pageTemplates() []string {
+	pages := allPages()
+	out := make([]string, 0, len(pages))
+	for _, spec := range pages {
+		out = append(out, spec.Template)
+	}
+	return out
 }
 
 // funcMap is the only place templates are given new vocabulary.

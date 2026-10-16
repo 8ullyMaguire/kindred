@@ -367,20 +367,38 @@ func TestRenderUnknownTemplateIsAnError(t *testing.T) {
 // adding a name to that list without adding the file, and the panic message
 // being the only feedback.
 func TestEveryPageInTheMapHasATemplate(t *testing.T) {
-	for name := range pages {
-		if pages[name] == nil {
-			t.Errorf("pages[%q] is nil", name)
+	// The map is built from the registry (render.go's init), so this is not
+	// checking two hand-written lists against each other any more: it is
+	// checking that every page the router can dispatch to has a template set
+	// to render with. A page whose file is missing used to be a panic at
+	// startup; a page whose template is missing from the map is a 500 on the
+	// first request to it, which is the runtime version of the same thing.
+	for _, spec := range allPages() {
+		tpl, ok := pages[spec.Template]
+		if !ok {
+			t.Errorf("%s is a registered page with no template set; its handler would "+
+				"answer 500 with %q", spec.Template, "no such template")
+			continue
+		}
+		if tpl == nil {
+			t.Errorf("pages[%q] is nil", spec.Template)
 		}
 	}
-	// The count is a floor, not an exact figure: it fails if someone deletes a
-	// page wholesale, which is the change this clause is watching for. 12 is
-	// layout.html plus the 11 pages listed in init() -- recounted from
-	// render.go, not assumed.
-	if len(pages) < 12 {
-		t.Errorf("pages has %d entries, want at least 12 (layout + 11 pages)", len(pages))
+
+	// The shell is not a page but is executed by every one of them, so its
+	// absence breaks every page at once.
+	if _, ok := pages[shellTemplate]; !ok {
+		t.Errorf("%s is not in pages; every page's set parses it as a fragment and "+
+			"every ExecuteTemplate call targets \"layout\"", shellTemplate)
 	}
-	if _, ok := pages["layout.html"]; !ok {
-		t.Error("layout.html is not in pages; every ExecuteTemplate call targets \"layout\"")
+
+	// A floor, not a count: the count is derived from the registry, so
+	// asserting it would assert nothing. 20 is one fewer than the site has,
+	// which catches the change worth catching -- a page list replaced,
+	// truncated or deleted wholesale -- without needing an edit per page.
+	if len(pages) < 20 {
+		t.Errorf("pages has %d entries; the site has 20 page templates plus the shell, "+
+			"so this is a page list that lost most of its pages", len(pages))
 	}
 }
 

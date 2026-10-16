@@ -156,6 +156,11 @@ type ProfileStore interface {
 // not render as "no such work".
 var errNoCorpus = errors.New("the corpus is not available on this server")
 
+// errNoStore is the same answer for the other half of the server: the pages
+// that rate, block or resolve a session cannot work without a store, and a
+// missing one is a fact about this deployment rather than about the page.
+var errNoStore = errors.New("the store is not available on this server")
+
 // hasCorpus reports whether this Deps can reach the corpus at all.
 //
 // renderFandoms, renderUnderrated and renderSurprise already answer 503 when
@@ -173,6 +178,15 @@ var errNoCorpus = errors.New("the corpus is not available on this server")
 // misconfigured server an accident of which handler was written first.
 func (d Deps) hasCorpus() bool {
 	return d.Engine != nil && d.Engine.Corpus != nil
+}
+
+// hasStore reports whether this server has a store: the database behind
+// ratings, blocks, the leaderboard and the arena session. Every page that
+// ranks anything needs one, and the ones that did not check were closing the
+// connection instead of answering -- five of them, found by the registry's
+// dispatch test, which asks every declared path for a response.
+func (d Deps) hasStore() bool {
+	return d.Engine != nil && d.Engine.Store != nil
 }
 
 // Pages returns the handler for every HTML page.
@@ -307,118 +321,54 @@ func (d Deps) guardAPI(api http.Handler, pages http.Handler) http.Handler {
 }
 
 func (d Deps) route(w http.ResponseWriter, r *http.Request) {
-	// The judge is the one POST a page accepts. It is a write, but it is
-	// the completion of a form the arena itself rendered, and a form
-	// cannot POST to a JSON API and land the user back on a page. It
-	// records exactly the same thing /api/v1/arena/compare records.
-	if r.Method == http.MethodPost && r.URL.Path == "/arena/judge" {
-		d.postJudge(w, r)
-		return
+	// The page POSTs first: each is a one-button form a page rendered, and a
+	// form cannot POST to a JSON API and land the reader back on a page. They
+	// are handled before dispatch because they answer with a redirect rather
+	// than a page, so they are not pages. The set lives in pageForms.
+	if r.Method == http.MethodPost {
+		if h, ok := pageFormHandler(r.URL.Path); ok {
+			h(d, w, r)
+			return
+		}
 	}
 
-	// Blocking is the same shape: a one-button form the /block page
-	// rendered. A page POST is completed by the browser, not typed by
-	// hand, so this does not widen the set of URLs that accept writes --
-	// the guard below still rejects a POST to any other page URL.
-	if r.Method == http.MethodPost && r.URL.Path == "/block" {
-		d.postBlock(w, r)
-		return
-	}
+	spec, arg, matched := findPage(r.URL.Path)
 
-	// Marking a work read or unread. Same shape as blocking: a one-button
-	// form the result list renders, so a page POST is completed by the
-	// browser and this does not widen the set of URLs that accept writes.
+	// Only GET and HEAD render a page. A POST to a page URL is not a page, and
+	// answering it with HTML answers a different question than the one asked.
 	//
-	// Without it, "I have read this" could only be recorded by hand-writing
-	// a POST, and the read-exclusion half of the seen list would be
-	// unreachable in practice while the shown half worked fine — a feature
-	// that exists on the API and not on the page.
-	if r.Method == http.MethodPost && r.URL.Path == "/seen" {
-		d.postSeen(w, r)
-		return
-	}
-
-	// A like or a dislike. Same shape as /seen -- a two-button form the result
-	// list renders -- and the reason it is a page POST rather than an API call
-	// is the redirect: pressing "like" has to put the reader back in the list
-	// they were reading, with the button now showing as pressed.
-	if r.Method == http.MethodPost && r.URL.Path == "/feedback" {
-		d.postFeedback(w, r)
-		return
-	}
-
-	// Only GET and HEAD otherwise render a page. A POST to a page URL is
-	// not a page, and answering it with HTML answers a different question
-	// than the one asked. Writes go to /arena/judge or the API under
-	// /api/v1/.
-	// POST is allowed on exactly two pages: /profiles and /profile, which
-	// build a taste profile and record a rating. Those are the only mutable
-	// things a reader can do here, and hiding both behind curl would make the
-	// profile feature unreachable from the site it is a profile OF.
+	// POST is allowed on exactly the pages that own a mutable form -- today
+	// /profiles and /profile, which build a taste profile and record a rating.
+	// Those are the only mutable things a reader can do here, and hiding both
+	// behind curl would make the profile feature unreachable from the site it
+	// is a profile OF.
 	//
-	// Everything else stays read-only, and the gate below says which: a 405
-	// that names the methods that do work beats a 405 that says "writes go to
-	// the API" when half of them no longer do.
-	mutable := r.URL.Path == "/profiles" || r.URL.Path == "/profile"
-
+	// Everything else stays read-only, and the gate says which: a 405 that
+	// names the pages that do take a POST beats a 405 that says "writes go to
+	// the API" when half of them no longer do. The names come from the
+	// registry, because the message used to carry them as literals and would
+	// have been wrong the first time a third page accepted one.
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 	case http.MethodPost:
-		if !mutable {
+		if !matched || !spec.AcceptsPost {
 			d.fail(w, r, http.StatusMethodNotAllowed,
-				fmt.Errorf("%s is not allowed on %s; only /profiles and /profile accept a POST",
-					r.Method, r.URL.Path))
+				fmt.Errorf("%s is not allowed on %s; only %s accept a POST",
+					r.Method, r.URL.Path, strings.Join(postPages(), " and ")))
 			return
 		}
 	default:
 		d.fail(w, r, http.StatusMethodNotAllowed,
-			fmt.Errorf("%s is not a page method; use GET, or POST for /profiles and /profile", r.Method))
+			fmt.Errorf("%s is not a page method; use GET, or POST for %s",
+				r.Method, strings.Join(postPages(), " and ")))
 		return
 	}
 
-	p := r.URL.Path
-	switch {
-	case p == "/":
-		d.renderSearch(w, r, "")
-	case p == "/search":
-		d.renderSearch(w, r, r.URL.Query().Get("q"))
-	case p == "/author":
-		d.renderAuthor(w, r)
-	case strings.HasPrefix(p, "/work/"):
-		d.renderWork(w, r, strings.TrimPrefix(p, "/work/"))
-	case strings.HasPrefix(p, "/tag/"):
-		d.renderTag(w, r, strings.TrimPrefix(p, "/tag/"))
-	case p == "/recommend":
-		d.renderRecommend(w, r)
-	case p == "/fandoms":
-		d.renderFandoms(w, r)
-	case p == "/underrated":
-		d.renderUnderrated(w, r)
-	case p == "/neighbours":
-		d.renderNeighbours(w, r)
-	case p == "/surprise":
-		d.renderSurprise(w, r)
-	case p == "/profiles":
-		d.renderProfiles(w, r)
-	case p == "/profile":
-		d.renderProfile(w, r)
-	case p == "/arena":
-		d.renderArena(w, r)
-	case p == "/leaderboard":
-		d.renderLeaderboard(w, r)
-	case p == "/my-ranking":
-		d.renderMyRanking(w, r)
-	case p == "/block":
-		d.renderBlock(w, r)
-	case p == "/crawl":
-		d.renderCrawl(w, r)
-	case p == "/mirror":
-		d.renderMirror(w, r)
-	case strings.HasPrefix(p, "/rank/"):
-		d.renderRankPath(w, r, strings.TrimPrefix(p, "/rank/"))
-	default:
+	if !matched {
 		d.notFound(w, r)
+		return
 	}
+	spec.Handler(d, w, r, arg)
 }
 
 // -- pages ------------------------------------------------------------------
@@ -1630,6 +1580,21 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 		return
 	}
 
+	if !d.hasCorpus() {
+		// Without this the page dereferenced d.Engine.Corpus.DB below and
+		// panicked, so a tag URL on a server with no corpus closed the
+		// connection instead of answering. Found by the registry's
+		// dispatch test, which asks every declared path for a response and
+		// treats the router's 404/405 as "this page never ran": /work/{id}
+		// had this guard and /tag/{slug}, its sibling, did not.
+		//
+		// The id is parsed first, so a non-numeric tag is still a 404 on a
+		// healthy server and a broken one alike -- "no such tag" is true in
+		// both cases, and the guard below is about the server, not the tag.
+		d.fail(w, r, http.StatusServiceUnavailable, errNoCorpus)
+		return
+	}
+
 	var name string
 	if err := d.Engine.Corpus.DB.QueryRowContext(ctx,
 		`SELECT name FROM tags WHERE id = ?`, id).Scan(&name); err != nil {
@@ -2683,24 +2648,8 @@ func (d Deps) baseOf(r *http.Request, title, heading string) Base {
 	return b
 }
 
-// navKey maps a request path to the nav item it belongs to.
-//
-// Only two paths need mapping, and both are cases where the URL the reader
-// arrived on is not the URL the nav names: /search is the home page's form
-// action, and /profile is one profile reached from /profiles.
-//
-// Work, tag, rank and author pages are deliberately absent. They are reachable
-// from every section, so marking one would be a claim about how the reader got
-// there rather than about where they are.
-func navKey(path string) string {
-	switch path {
-	case "/search":
-		return "/"
-	case "/profile":
-		return "/profiles"
-	}
-	return path
-}
+// navKey now lives in registry.go: the two aliases are facts about the pages
+// themselves, so they are declared with the pages rather than in a switch here.
 
 func (d Deps) base(title, heading string) Base {
 	b := Base{Title: title, Heading: heading, Version: d.Version}

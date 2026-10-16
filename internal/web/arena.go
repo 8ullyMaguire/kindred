@@ -966,6 +966,11 @@ func (d Deps) renderLeaderboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if !d.hasStore() {
+		d.fail(w, r, http.StatusServiceUnavailable, errNoStore)
+		return
+	}
+
 	entries, err := d.Engine.Store.Leaderboard(ctx, limit, page.MinCompare)
 	if err != nil {
 		d.fail(w, r, http.StatusInternalServerError, err)
@@ -1215,6 +1220,14 @@ func (d Deps) renderRank(w http.ResponseWriter, r *http.Request, idStr string) {
 		d.notFound(w, r)
 		return
 	}
+	if !d.hasStore() {
+		// After the parse, like /work/{id} and /tag/{slug}: a non-numeric id
+		// is a 404 on a healthy server and a broken one alike, and this guard
+		// is about the server.
+		d.fail(w, r, http.StatusServiceUnavailable, errNoStore)
+		return
+	}
+
 	page := RankPage{
 		Base:    d.baseOf(r, "Rank", "Arena rating"),
 		WorkID:  id,
@@ -1368,6 +1381,15 @@ func isNoPairErr(err error) bool {
 // The identifier is hashed to an owner key immediately, so nothing
 // downstream can store the cookie value itself.
 func (d Deps) arenaSession(ctx context.Context, w http.ResponseWriter, r *http.Request) (sessionKey, ownerKey string, err error) {
+	// Refused before the cookie is minted, so a server with no store does not
+	// hand out a session it cannot resolve, and so every caller gets an error
+	// to report rather than a nil dereference: this function is the single
+	// point where the store is reached for a session, which is why /arena,
+	// /my-ranking and /block were all three fixed here.
+	if !d.hasStore() {
+		return "", "", errNoStore
+	}
+
 	if c, cerr := r.Cookie(ArenaCookieName); cerr == nil && c.Value != "" {
 		sessionKey = c.Value
 	} else {

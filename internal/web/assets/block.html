@@ -1,7 +1,7 @@
 {{define "content"}}
 <p class="count">{{.Judged}} tag{{if ne .Judged 1}}s{{end}} learned from your comparisons</p>
 
-{{if .Candidates}}
+{{if not .Empty}}
 <ul class="block-list">
   {{range .Candidates}}
   <li class="block-row">
@@ -16,7 +16,7 @@
   {{end}}
 </ul>
 {{else}}
-<p class="empty">{{.Note}}</p>
+<p class="empty" data-empty="true">{{.Note}}</p>
 {{end}}
 
 {{if .Blocked}}
@@ -40,5 +40,10 @@
 </ul>
 {{end}}
 
-<p class="empty">{{.Note}}</p>
+{{/* .Empty is the handler's own statement that there is nothing to suggest,
+     and the note it prints in that state is the same one the branch above
+     printed -- so the caveat is shown only when there ARE candidates to be
+     about. Before this the empty page printed "Nothing to suggest yet" twice,
+     measured by TestTheEmptyStateIsSaidOnce. */}}
+{{if not .Empty}}<p class="empty">{{.Note}}</p>{{end}}
 {{end}}

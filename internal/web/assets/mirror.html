@@ -4,7 +4,7 @@
      with 12 tags and no edges will answer every query with the same handful of
      works, and nothing else on the site says so. */}}
 {{if .NoCorpus}}
-<p class="empty">
+<p class="empty" data-empty="true">
   This deployment has no corpus handle, so it cannot report what the mirror
   holds. That is the corpus-less configuration: the pages that need to rank
   works are unavailable here, and this one exists to say why.
@@ -52,7 +52,7 @@
   explains it.
 </p>
 {{else}}
-<p class="empty">
+<p class="empty" data-empty="true">
   No co-occurrence graph is loaded in this process, so ranking falls back to the
   corpus tables directly. That is slower and asks for no extra memory, which is
   the lite configuration.
@@ -66,7 +66,7 @@
      instance most needs to be able to state. */}}
 <h2>Still to fetch</h2>
 {{if .NoQueue}}
-<p class="empty">
+<p class="empty" data-empty="true">
   This deployment has no crawl queue, so the mirror only shrinks as works are
   deleted upstream. The state database is not writable here, so nothing can be
   queued for fetching.
@@ -90,7 +90,7 @@
   <a href="/crawl">See why.</a>
 </p>
 {{else}}
-<p class="crawl-verdict is-idle">
+<p class="crawl-verdict is-idle" data-empty="true">
   Nothing is queued. The mirror is not growing: if you expected new works, a
   discovery walk is what adds them.
   <a href="/crawl">Add to the mirror.</a>
