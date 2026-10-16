@@ -58,10 +58,19 @@ bad  () { fail=$((fail+1));   echo "  FAIL  $*"; return 0; }
 
 # check NAME URL PATTERN
 #   asserts PATTERN appears in the body of URL.
+#
+# Any HTTP status counts as reached: only curl's 000 (nothing answered at all) is
+# UNREACHABLE. `curl -f` treats a 503 as silence, and /healthz answers 503 while
+# the process is over its RSS budget -- measured 2026-10-16, the body and the
+# headers are both there on that 503, and -f turned true checks into
+# "UNREACHABLE" about a route that had answered.
 check () {
   local name="$1" url="$2" pattern="$3"
-  local body
-  if ! body=$(curl -fsS --max-time 20 "$url" 2>/dev/null); then
+  local body code
+  body=$(curl -sS --max-time 20 -w $'\n__CODE__%{http_code}' "$url" 2>/dev/null) || true
+  code=${body##*__CODE__}
+  body=${body%$'\n__CODE__'*}
+  if [ -z "$code" ] || [ "$code" = "000" ]; then
     unreachable=$((unreachable+1))
     echo "  UNREACHABLE  $name ($url)"
     return 0
@@ -70,16 +79,27 @@ check () {
 }
 
 # header NAME URL PATTERN
+#   asserts a response header matching PATTERN. Same rule as check(): a non-200
+#   is an answer, and SPEC §3.2.2 wants the staleness headers on EVERY response,
+#   so the 503 is exactly the response that must carry them.
 header () {
   local name="$1" url="$2" pattern="$3"
-  local h
-  if ! h=$(curl -fsS --max-time 20 -o /dev/null -D- "$url" 2>/dev/null); then
+  local h code
+  h=$(curl -sS --max-time 20 -o /dev/null -D- -w $'\n__CODE__%{http_code}' "$url" 2>/dev/null) || true
+  code=${h##*__CODE__}
+  if [ -z "$code" ] || [ "$code" = "000" ]; then
     unreachable=$((unreachable+1))
     echo "  UNREACHABLE  $name ($url)"
     return 0
   fi
   if grep -qiE -- "$pattern" <<<"$h"; then ok "$name"; else bad "$name — no header matching /$pattern/ at $url"; fi
 }
+
+# NOT swept in this pass: the section-level fetches below still use `curl -f`.
+# Several of them are the `x=$(curl -f … || true)` shape, where a non-200
+# currently reads as absent -- flipping those to "any status is an answer" would
+# invert them rather than fix them, so each needs its own reading. They are only
+# reached for page routes, which answer 200 on this deployment.
 
 echo "deploy-drift gate: $TARGET"
 
@@ -345,7 +365,12 @@ header "Server: kindred" "$TARGET/" '^Server:\s*kindred'
 # The index age must be a real duration or the literal "unknown". A bare "0s"
 # on an index older than an hour is the bug fixed in ed84b86 and it must not
 # come back.
-age=$(curl -fsS --max-time 20 -o /dev/null -D- "$TARGET/healthz" 2>/dev/null \
+# -f removed for the same reason as the helpers above, and one more: the exit code
+# inside a PIPELINE is the last command's, so `curl -f` failing on a 503 did not
+# stop this line at all -- it read the header off a response that the header()
+# calls two lines up had just called UNREACHABLE, in the same run. Two verdicts
+# about one response, disagreeing, and the wrong one was the loud one.
+age=$(curl -sS --max-time 20 -o /dev/null -D- "$TARGET/healthz" 2>/dev/null \
       | grep -i '^X-Kindred-Index-Age:' | tr -d '\r' | sed 's/.*: *//')
 if [ -z "$age" ]; then
   bad "index age is unparseable — header absent"
