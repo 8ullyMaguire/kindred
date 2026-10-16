@@ -83,6 +83,46 @@ header () {
 
 echo "deploy-drift gate: $TARGET"
 
+# --- is it answering, and what does it say about itself -------------------
+#
+# Unnumbered deliberately: this runs FIRST, and the numbered sections below keep
+# their numbers. It used to sit at "--- 1. is it up at all" some 200 lines down,
+# i.e. after the tag discovery it then threw away -- the cheapest precondition in
+# the script was its last check. Measured 2026-10-16: the gate spent ten minutes
+# choosing a tag to test and then exited 2 without running a single check.
+#
+# And a 503 is an ANSWER. `curl -f` reads it as silence, so the gate announced
+# "/healthz did not answer" about a service that had answered -- on this host
+# {"status":"over_budget","peak_rss_kib":265984,"rss_cap_kib":225280}, i.e. the
+# process peaked above the `full` mode's 220 MB cap while the collab index was
+# loaded (measured: 200 twenty-one seconds after a restart, 503 once warm).
+# Reachability, health and drift are three different findings, and this file's
+# own header already says two of them are not the same one.
+HEALTH=$(curl -sS --max-time 10 -o - -w ' HTTP:%{http_code}' "$TARGET/healthz" 2>/dev/null) || true
+case "$HEALTH" in
+*HTTP:200*)
+  echo
+  echo "it answers, and reports itself healthy (HTTP 200)."
+  ;;
+*HTTP:000*)
+  echo
+  echo "UNREACHABLE: $TARGET/healthz did not answer at all (no HTTP status)."
+  echo "That is a service problem, not a drift problem, and the two are not"
+  echo "the same finding. Exit 2."
+  exit 2
+  ;;
+*HTTP:*)
+  echo
+  echo "UNHEALTHY: the service answered, and this is its own verdict:"
+  printf '  %s\n' "${HEALTH}" | head -c 400
+  echo
+  echo "That is a service problem, not a drift problem, and the two are not"
+  echo "the same finding. No drift verdict is given: a service that cannot"
+  echo "report itself healthy cannot be certified against this tree. Exit 2."
+  exit 2
+  ;;
+esac
+
 # --- 0. pick a tag that actually exists ---------------------------------
 #
 # Hardcoding /tag/1 is wrong for a real deployment: tag id 1 exists only in
@@ -280,14 +320,11 @@ if [ "${TAG_WORKS:-0}" -lt 10 ] && [ "${base_count:-0}" -lt 10 ]; then
 "from an inert one -- they are NOT a pass. Point KINDRED_GATE_TAG at a larger tag."
 fi
 
-# --- 1. is it up at all -------------------------------------------------
-if ! curl -fsS --max-time 10 "$TARGET/healthz" >/dev/null 2>&1; then
-  echo
-  echo "UNREACHABLE: $TARGET/healthz did not answer."
-  echo "That is a service problem, not a drift problem, and the two are not"
-  echo "the same finding. Exit 2."
-  exit 2
-fi
+# --- SECTION RETIRED: "is it up at all" now runs at the top of the gate -----
+# It read a 503 as silence ("did not answer") and it ran after the tag
+# discovery, so the ten minutes that found a tag were discarded by the cheapest
+# check in the file. Reachability and health are reported there now, before any
+# work, and the exit contract is unchanged: 2 for a service problem.
 
 # --- 2. SPEC §3.2.2: staleness headers on EVERY response ----------------
 # Deliberately checked on three different routes, because the bug this gate
