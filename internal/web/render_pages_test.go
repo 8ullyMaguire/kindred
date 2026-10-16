@@ -179,6 +179,64 @@ type pageRenderCase struct {
 var sweepBase = Base{Title: "T", Heading: "H", Query: "q"}
 
 var pageRenderCases = []pageRenderCase{
+	// The empty render of each page whose populated render was already here.
+	//
+	// A page with only a populated case is checked for the marker's PRESENCE as
+	// text (TestEveryListPageMarksItsEmptyState reads the template) and never as
+	// a render, so a marker moved to an element that renders WITH rows survives
+	// both checks. These five are the pages that were in that state; the
+	// completeness check at the end of TestListPagesEmptyStateIsTwoSided keeps
+	// the list from going stale.
+	{
+		tpl:  "author.html",
+		name: "author.html with no matches",
+		data: AuthorPage{Base: sweepBase, Query: "zzzznobody"},
+		// The sentence has to name what was searched for and say that a
+		// shorter name finds more, or "no rows" is indistinguishable from a
+		// broken byline index.
+		hasEmptyList:    true,
+		wantContains:    []string{"no-author-works", "zzzznobody", "matched as substrings"},
+		wantNotContains: []string{"Ask for", "<tbody"},
+	},
+	{
+		tpl:          "fandoms.html",
+		name:         "fandoms.html with nothing above the floor",
+		data:         FandomsPage{Base: sweepBase, Gate: 20, Available: []string{"me", "you"}},
+		hasEmptyList: true,
+		// The claim is about the corpus at this threshold, not an error.
+		wantContains:    []string{"evidence floor", "not an error"},
+		wantNotContains: []string{"<tbody"},
+	},
+	{
+		tpl:          "rank.html",
+		name:         "rank.html for a work with no rating history",
+		data:         RankPage{Base: sweepBase, WorkID: 7, Title: "Unrated Work"},
+		hasEmptyList: true,
+		wantContains: []string{"No rating periods yet"},
+	},
+	{
+		tpl:          "underrated.html",
+		name:         "underrated.html with no work matching",
+		data:         UnderratedPage{Base: sweepBase, MinWords: 1000, Complete: true},
+		hasEmptyList: true,
+		// "no rows with no explanation" is the thing this page must not be.
+		wantContains:    []string{"No work matched", "notes below"},
+		wantNotContains: []string{"<tbody"},
+	},
+	{
+		tpl:  "work.html",
+		name: "work.html whose recommendations are empty but not failed",
+		data: WorkPage{
+			Base: sweepBase,
+			Work: corpus.Entity{ID: 42, Title: "A Work", Kind: corpus.AO3Kind},
+		},
+		// This branch is reachable only when the recommender SUCCEEDED and
+		// returned nothing (the case above has RecommendErr set), and the
+		// sentence has to say that is a real answer: an empty "more like this"
+		// that reads as a failure sends a reader to look for a bug.
+		hasEmptyList: true,
+		wantContains: []string{"Nothing scored above zero", "real answer, not a"},
+	},
 	{
 		tpl:  "fandoms.html",
 		name: "fandoms.html",

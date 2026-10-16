@@ -273,6 +273,7 @@ func TestListPagesEmptyStateIsTwoSided(t *testing.T) {
 	}
 
 	checked, emptyCases := 0, 0
+	emptySeen := map[string]bool{}
 	for _, tc := range pageRenderCases {
 		if !isList[tc.tpl] {
 			continue
@@ -293,12 +294,45 @@ func TestListPagesEmptyStateIsTwoSided(t *testing.T) {
 		}
 		if tc.hasEmptyList {
 			emptyCases++
+			emptySeen[tc.tpl] = true
 		}
 	}
 	if checked == 0 || emptyCases == 0 {
 		t.Fatalf("%d list cases checked, %d of them empty; both directions have to be "+
 			"exercised for this test to mean anything", checked, emptyCases)
 	}
+
+	// Every list page needs an empty case in this table, or the marker on it is
+	// only ever checked as text (the source scan in
+	// TestEveryListPageMarksItsEmptyState) and never as a render.
+	//
+	// That gap was real and the mutation gate found it: mirror.html has four
+	// empty states, so removing ONE marker left the page's marker count
+	// unchanged and the mutant survived -- until the two cases for mirror each
+	// left exactly one empty state on the page. The five pages this check was
+	// written for had a populated case and no empty one, which is that same
+	// hole waiting to be reopened by the next edit to their templates.
+	//
+	// emptyCoveredElsewhere names the pages whose empty render is asserted
+	// somewhere else instead, so this stays a statement about coverage rather
+	// than a demand for duplicate fixtures.
+	emptyCoveredElsewhere := map[string]string{
+		"myranking.html": "TestTheEmptyStateIsSaidOnce",
+	}
+	for tpl := range isList {
+		if emptySeen[tpl] {
+			continue
+		}
+		where, covered := emptyCoveredElsewhere[tpl]
+		if covered {
+			t.Logf("%s has no empty case here; its empty render is asserted by %s", tpl, where)
+			continue
+		}
+		t.Errorf("%s is a list page with no case that renders it empty, so a marker "+
+			"moved off its empty branch would survive this test and the source scan "+
+			"alike; add a case with hasEmptyList: true", tpl)
+	}
+
 	t.Logf("%d list cases: %d with rows, %d with an empty list", checked, checked-emptyCases, emptyCases)
 }
 
