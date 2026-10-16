@@ -842,6 +842,37 @@ var pageRenderCases = []pageRenderCase{
 		wantNotContains: []string{`<span class="stat-label">works</span>`},
 	},
 	{
+		// The mutation gate's survivor: mirror.html has four empty states
+		// (no corpus, no graph, no queue, nothing queued) and every other case
+		// had at least two of them rendering at once, so removing ONE marker
+		// left the page's marker count unchanged and survived. These two cases
+		// leave exactly one empty state on the page, which is the input that
+		// makes that marker load-bearing.
+		tpl:  "mirror.html",
+		name: "mirror.html with a corpus and no crawl queue",
+		data: MirrorPage{
+			Base: sweepBase, HasCorpus: true, Works: 12345, Tags: 678,
+			HasGraph: true, Nodes: 678, GraphEdges: 3456, GraphBytes: 26214400,
+			NoQueue: true, Cap: 5,
+		},
+		hasEmptyList: true,
+		wantContains: []string{"no crawl queue"},
+		// A labelled zero for a queue that does not exist is the claim this
+		// state must not make.
+		wantNotContains: []string{"waiting to be fetched"},
+	},
+	{
+		tpl:  "mirror.html",
+		name: "mirror.html with a corpus and an empty queue",
+		data: MirrorPage{
+			Base: sweepBase, HasCorpus: true, Works: 12345, Tags: 678,
+			HasGraph: true, Nodes: 678, GraphEdges: 3456, GraphBytes: 26214400,
+			Cap: 5,
+		},
+		hasEmptyList: true,
+		wantContains: []string{"Nothing is queued", "mirror is not growing"},
+	},
+	{
 		tpl:             "mirror.html",
 		name:            "mirror.html when the queue could not be read",
 		hasEmptyList:    true,
