@@ -43,6 +43,7 @@ var routeTable = map[string]routeAudit{
 	"GET /api/v1/ao3/tags":                 {Page: "/search"},
 	"GET /api/v1/ao3/tags/{id}":            {Page: "/tag/{id}"},
 	"GET /api/v1/ao3/tags/{id}/works":      {Page: "/tag/{id}"},
+	"GET /api/v1/browse":                   {Page: "/browse"},
 	"GET /api/v1/corpus-query/{mode}":      {Page: "/fandoms | /underrated | /neighbours | /surprise"},
 	"GET /api/v1/arena/pair":               {Page: "/arena"},
 	"POST /api/v1/arena/compare":           {Page: "/arena"},

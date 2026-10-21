@@ -1907,6 +1907,35 @@ cd ~/code-local/go/kindred && go test ./internal/api/ -run TestHandleBrowse 2>&1
 EXPECT: `status = 404, want 200` — the catch-all route (`internal/api/server.go:153`) answers
 `no route for GET /api/v1/browse` for any path not explicitly registered. Record that message.
 
+**Step 5b-pre — satisfy the repo's own route-audit gate.** `internal/api/routes_audit_test.go`
+parses `server.go` with `go/ast`, reads every `mux.HandleFunc` pattern, and requires each one to
+appear in the `routeTable` map in that file:
+
+```go
+func TestEveryAPIRouteIsAccountedFor(t *testing.T) {
+	// The direction that matters: a route nobody recorded. Adding an endpoint
+	// and forgetting this file is the whole failure mode.
+	for _, pattern := range routesInSource(t) {
+		if _, ok := routeTable[pattern]; !ok {
+			t.Errorf("route %q is registered but not accounted for: give it a page or record why it has none", pattern)
+		}
+	}
+}
+```
+
+**The plan's first draft of Task 5 did not include this step, and the gate caught it:**
+`route "GET /api/v1/browse" is registered but not accounted for`. There is a second test,
+`TestTheRouteAuditHasNoStaleEntries`, which goes the OTHER way — an entry for a route that no
+longer exists is a table describing a server that is not running — so a route cannot be left
+behind either.
+
+**Add the entry to the `routeTable` map in `internal/api/routes_audit_test.go`, in the
+"reached by a page" group** (the `/browse` page of Task 6 is the page that reaches it):
+
+```go
+	"GET /api/v1/browse":                 {Page: "/browse"},
+```
+
 **Step 5c — implement.** In `internal/api/server.go`:
 
 1. Register the route. **It must go BEFORE the catch-all `mux.HandleFunc("/", …)` at line 153** —
