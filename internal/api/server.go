@@ -32,6 +32,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
+	"git.polarisocial.xyz/kindred/kindred/internal/tagfamily"
 	"git.polarisocial.xyz/kindred/kindred/internal/web"
 )
 
@@ -689,7 +690,7 @@ func (s *Server) writeWorksCSV(
 
 	cw := csv.NewWriter(w)
 	// Comment lines above the header carry the selection metadata.
-	for _, k := range []string{"tag", "complete", "words", "rating", "lang"} {
+	for _, k := range []string{"tag", "universe", "concept", "complete", "words", "rating", "lang"} {
 		if v := q.Get(k); v != "" {
 			fmt.Fprintf(w, "# filter %s=%s\n", k, v)
 		}
@@ -882,6 +883,71 @@ func parseWorksFilters(q url.Values) ([]worksFilter, error) {
 		})
 	}
 
+	// universe and concept. A FAMILY filter.
+	//
+	// The value is a FAMILY KEY -- "worm", "isekai" -- not a tag name.
+	// It is resolved against the declared families
+	// (internal/tagfamily/families.json) into the list of spellings
+	// that make the family, and the work must carry AT LEAST ONE of
+	// them. Two families together are an intersection, which is the
+	// general "fandom x concept" question: a work has to carry
+	// something from each side.
+	//
+	// A family key rather than a raw tag list, because every surface
+	// of this feature speaks one vocabulary: the works API, the
+	// /api/v1/browse endpoint, the `kindred browse` CLI and the /browse
+	// page all take "worm" and "isekai". A raw ad-hoc tag is what the
+	// EXISTING `tag` filter is for, and it still works; `universe` and
+	// `concept` are the declared, named families.
+	//
+	// The clause is an EXISTS subquery rather than a JOIN because the
+	// works table is joined to work_tags/tags only once, by the tag
+	// filter, and a second JOIN of the same tables would multiply the
+	// rows.
+	//
+	// An UNKNOWN family key is an error, not "no filter": a filter that
+	// cannot fire is a request the caller did not mean, and silently
+	// ignoring it returns every work while looking like a filter that
+	// did.
+	fams, err := tagfamily.LoadFamilies()
+	if err != nil {
+		return nil, err
+	}
+	for _, fam := range []string{"universe", "concept"} {
+		v := strings.TrimSpace(q.Get(fam))
+		if v == "" {
+			continue
+		}
+		var names []string
+		switch fam {
+		case "universe":
+			u, ok := fams.Universe(v)
+			if !ok {
+				return nil, fmt.Errorf("unknown universe %q; known: %s",
+					v, strings.Join(fams.UniverseNames(), ", "))
+			}
+			names = u.Spellings
+		case "concept":
+			c, ok := fams.Concept(v)
+			if !ok {
+				return nil, fmt.Errorf("unknown concept %q; known: %s",
+					v, strings.Join(fams.ConceptNames(), ", "))
+			}
+			names = c.Tags
+		}
+		ph := make([]string, 0, len(names))
+		args := make([]any, 0, len(names))
+		for _, n := range names {
+			ph = append(ph, "?")
+			args = append(args, n)
+		}
+		out = append(out, worksFilter{
+			clause: "EXISTS (SELECT 1 FROM work_tags wt JOIN tags t ON t.id = wt.tag_id " +
+				"WHERE wt.work_id = w.id AND t.name COLLATE NOCASE IN (" + strings.Join(ph, ",") + "))",
+			args: args,
+		})
+	}
+
 	return out, nil
 }
 
@@ -913,7 +979,7 @@ func (s *Server) handleAO3Works(w http.ResponseWriter, r *http.Request) {
 	case "kudos":
 		order = "w.kudos DESC"
 	case "date":
-		order = "w.update_date DESC"
+		order = corpus.ChronologicalUpdateDateDesc
 	case "words":
 		order = "w.word_count DESC"
 	}

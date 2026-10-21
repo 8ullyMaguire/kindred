@@ -2895,7 +2895,7 @@ func tagOrder(sortKey string) string {
 	case "recent":
 		// update_date is TEXT and nullable, so a NULL date sorts last with
 		// an explicit guard rather than first by accident.
-		return "CASE WHEN w.update_date IS NULL OR w.update_date = '' THEN 1 ELSE 0 END, w.update_date DESC"
+		return corpus.ChronologicalUpdateDateDesc
 	case "words":
 		return "w.word_count DESC, w.id"
 	default:

@@ -345,7 +345,6 @@ package tagfamily
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -406,9 +405,9 @@ func TestShapeTreatsATypeMarkerAsWinningOverACanonicalBase(t *testing.T) {
 		t.Fatalf("LoadShape: %v", err)
 	}
 	if sh.IsFandom("naruto - freeform") {
-		t.Error(`IsFandom("naruto - freeform") = true; a type marker on the right ` +
+		t.Error("IsFandom(\"naruto - freeform\") = true; a type marker on the right " +
 			"must win over a canonical base on the left, or every " +
-			"<fandom> - freeform" tag is a fandom")
+			"<fandom> - freeform\" tag is a fandom")
 	}
 }
 ```
@@ -439,7 +438,7 @@ func TestShapeTreatsATypeMarkerAsWinningOverACanonicalBase(t *testing.T) {
 > 	t.Helper()
 > 	db, err := sql.Open("sqlite", ":memory:")
 > 	if err != nil {
-> 	t.Fatal(err)
+> 		t.Fatal(err)
 > 	}
 > 	return db
 > }
@@ -448,7 +447,7 @@ func TestShapeTreatsATypeMarkerAsWinningOverACanonicalBase(t *testing.T) {
 > func mustExec(t *testing.T, db *sql.DB, q string) {
 > 	t.Helper()
 > 	if _, err := db.Exec(q); err != nil {
-> 	t.Fatalf("exec %q: %v", q, err)
+> 		t.Fatalf("exec %q: %v", q, err)
 > 	}
 > }
 > ```
@@ -668,10 +667,7 @@ package tagfamily
 
 import (
 	"context"
-	"database/sql"
 	"testing"
-
-	_ "modernc.org/sqlite"
 )
 
 func TestFamiliesLoadAndCarryTheDeclaredMembers(t *testing.T) {
@@ -1011,7 +1007,6 @@ package tagfamily
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 	"time"
 )
@@ -1099,7 +1094,6 @@ func TestQueryReportsAWorkThatAlsoCarriesAnotherFandom(t *testing.T) {
 		t.Errorf("OtherFandom = %q, want %q", res.Items[0].OtherFandom, "harry potter")
 	}
 }
-
 ```
 
 > **`mustExec` and `openTestDB` live in `internal/tagfamily/helpers_test.go`** (written in Task 1).
@@ -1164,14 +1158,14 @@ type QueryOptions struct {
 
 // Item is one matching work, with the evidence for why it matched.
 type Item struct {
-	ID     int64  `json:"id"`
-	Title  string `json:"title"`
-	URL    string `json:"url"`
-	Authors string `json:"authors"`
-	Kudos  int64  `json:"kudos"`
-	Words  int64  `json:"words"`
-	Rating string `json:"rating"`
-	Complete bool `json:"complete"`
+	ID       int64  `json:"id"`
+	Title    string `json:"title"`
+	URL      string `json:"url"`
+	Authors  string `json:"authors"`
+	Kudos    int64  `json:"kudos"`
+	Words    int64  `json:"words"`
+	Rating   string `json:"rating"`
+	Complete bool   `json:"complete"`
 	// UpdateDate is the mirror's raw "DD Mon YYYY" string, kept verbatim
 	// because that is what the mirror stores and what a reader can check.
 	UpdateDate string `json:"update_date"`
@@ -1467,8 +1461,8 @@ cd ~/code-local/go/kindred && gofmt -w internal/tagfamily/ && go test ./internal
 package api
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -1492,11 +1486,22 @@ func TestParseWorksFiltersAcceptsAFamilyPair(t *testing.T) {
 	if n := strings.Count(clause, "t.name COLLATE NOCASE IN"); n != 2 {
 		t.Errorf("clause %q has %d tag IN filters, want 2", clause, n)
 	}
-	// The worm family's spellings must be in the clause, because
+	// The worm family's SPELLINGS must be the bound arguments, because
 	// "worm" on its own is only 7 works out of the family's ~4,300.
-	if !strings.Contains(clause, "parahumans series - wildbow") {
-		t.Errorf("clause %q does not carry the worm family's spellings; the "+
-			"family key was used as a tag name", clause)
+	// They are arguments, not clause text -- the clause carries only
+	// placeholders -- so the assertion has to look at the args.
+	var args []any
+	for _, f := range filters {
+		args = append(args, f.args...)
+	}
+	joined := fmt.Sprint(args)
+	if !strings.Contains(joined, "parahumans series - wildbow") {
+		t.Errorf("args %v do not carry the worm family's spellings; the "+
+			"family key was used as a tag name", args)
+	}
+	// And the concept family's too.
+	if !strings.Contains(joined, "reverse isekai") {
+		t.Errorf("args %v do not carry the isekai family's tags", args)
 	}
 }
 
@@ -1534,7 +1539,18 @@ func TestParseWorksFiltersRejectsAnUnknownFamily(t *testing.T) {
 > }
 > ```
 >
-> Add `"net/url"` to the test file's imports.
+> The test file's import block is therefore:
+>
+> ```go
+> import (
+> 	"net/url"
+> 	"strings"
+> 	"testing"
+> )
+> ```
+>
+> (`net/http` and `net/http/httptest` are **not** needed here — those are for the HTTP-level
+> tests in Task 5, which live in a different file.)
 
 **Step 4b — run it and SEE IT FAIL.**
 
@@ -1664,7 +1680,7 @@ ignored" ambiguity the comment above that loop exists to prevent.
 ```
 becomes
 ```go
-		order = corpus.ChronologicalUpdateDate
+		order = corpus.ChronologicalUpdateDateDesc
 ```
 
 `internal/web/handlers.go` line ~2898:
@@ -1673,7 +1689,7 @@ becomes
 ```
 becomes
 ```go
-		return "CASE WHEN w.update_date IS NULL OR w.update_date = '' THEN 1 ELSE 0 END, " + corpus.ChronologicalUpdateDate
+		return corpus.ChronologicalUpdateDateDesc
 ```
 
 Then add to `internal/corpus/` a new file `internal/corpus/dates.go`:
@@ -1681,8 +1697,8 @@ Then add to `internal/corpus/` a new file `internal/corpus/dates.go`:
 ```go
 package corpus
 
-// ChronologicalUpdateDate is a SQL expression that orders works by their
-// update_date in CHRONOLOGICAL order.
+// ChronologicalUpdateDateDesc is a SQL expression that orders works by
+// their update_date in CHRONOLOGICAL order, most recent first.
 //
 // The mirror stores update_date as TEXT in AO3's "DD Mon YYYY" form, so a
 // plain `update_date DESC` sorts it as a string: measured on the live
@@ -1695,10 +1711,22 @@ package corpus
 // compares them numerically. It is used for every "recent" ordering, so
 // that the site's recent-first list and the API's date sort agree with
 // the calendar.
-const ChronologicalUpdateDate = `
+//
+// The DESCENDING direction is part of the constant, not left to the
+// caller. That is deliberate: every use of it is "most recent first", and
+// a bare key expression would let a caller append nothing and get
+// ASCENDING order -- which is exactly the bug the first draft of this
+// constant had, and it was caught only by running the existing sort tests
+// (they listed [1,2,3,4,5,6,7,8] instead of [8,7,6,5,4,3,2,1]).
+//
+// A NULL or empty date becomes '0000-00-00', which sorts LAST in a
+// descending list, so an undated work is at the end rather than the
+// beginning.
+const ChronologicalUpdateDateDesc = `
 CASE
 	WHEN w.update_date IS NULL OR w.update_date = '' THEN '0000-00-00'
-	ELSE substr(w.update_date, -4) || '-' ||
+	WHEN instr(w.update_date, ' ') > 0 THEN
+		substr(w.update_date, -4) || '-' ||
 		CASE substr(w.update_date, instr(w.update_date, ' ') + 1, 3)
 			WHEN 'Jan' THEN '01' WHEN 'Feb' THEN '02' WHEN 'Mar' THEN '03'
 			WHEN 'Apr' THEN '04' WHEN 'May' THEN '05' WHEN 'Jun' THEN '06'
@@ -1706,8 +1734,25 @@ CASE
 			WHEN 'Oct' THEN '10' WHEN 'Nov' THEN '11' WHEN 'Dec' THEN '12'
 			ELSE '00' END || '-' ||
 		substr('0' || substr(w.update_date, 1, instr(w.update_date, ' ') - 1), -2)
-END`
+	ELSE substr(w.update_date, 1, 10)
+END DESC`
 ```
+
+> **The expression handles BOTH date formats, and it has to.** The mirror stores `update_date` as
+> AO3's `DD Mon YYYY` (measured: 112,892 rows of length 11, 43 empty), but the repo's own TEST
+> FIXTURES use ISO `YYYY-MM-DD` (`internal/api/tagsort_test.go` seeds `"2026-01-01"` …). A
+> single-format expression sorts the ISO fixtures as garbage — `substr(update_date, -4)` on
+> `"2026-01-01"` is `"-01-01"`, and the month lookup finds no space, so every ISO row collapses
+> to the same key and the order is arbitrary.
+>
+> **The `instr(update_date, ' ') > 0` test is the format discriminator:** a space means the
+> `DD Mon YYYY` form (which needs parsing); no space means ISO (which already sorts correctly,
+> and is passed through as `substr(…, 1, 10)` so a full ISO timestamp also works).
+>
+> **This was found by running the existing test suite, not by reading it.** The plan's first
+> version of this expression was single-format and it broke six subtests in
+> `internal/api/tagsort_test.go` (`?sort=recent` listed `[1,2,3,4,5,6,7,8]` instead of
+> `[8,7,6,5,4,3,2,1]`).
 
 Verify the `corpus` package is imported in both files; if not, add it.
 
