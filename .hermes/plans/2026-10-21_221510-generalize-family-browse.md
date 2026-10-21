@@ -1803,9 +1803,17 @@ cd ~/code-local/go/kindred && gofmt -w internal/ && go test ./internal/... -coun
 `/api/v1/ao3/works` returns works, but the *question* "which family matched?" needs the
 `Meta` counts and the per-item `other_fandom`. A small dedicated endpoint returns exactly that.
 
-**Step 5a — write the failing test.** Create `internal/api/browse_test.go` (append):
+**Step 5a — write the failing test.** Create `internal/api/browse_endpoint_test.go`:
 
 ```go
+package api
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+)
+
 func TestHandleBrowseReturnsTheFamilyQueryWithItsCounts(t *testing.T) {
 	ts := newTestServer(t)
 	// The parameters are FAMILY KEYS: "worm" and "isekai", the same
@@ -1867,21 +1875,21 @@ func TestHandleBrowseRejectsAnUnknownFamily(t *testing.T) {
 > resp, err := http.Get(ts.URL + "/api/v1/...?...")
 > ```
 >
-> The helper `readAll(t, resp)` does **not** exist — add it to `browse_test.go`:
+> **The helper `readAll(t, resp)` ALREADY EXISTS** — it is at `internal/api/block_test.go:292`.
+> Do NOT add it to the test file: Go will not compile a second declaration of the same
+> function in a package, and the error (`readAll redeclared in this block`) is the only sign
+> that the plan's first draft of this step was wrong. Reuse the existing one, which is why
+> this test file's import block needs no `io`:
 >
 > ```go
-> // readAll reads a response body as a string.
-> func readAll(t *testing.T, resp *http.Response) string {
-> 	t.Helper()
-> 	b, err := io.ReadAll(resp.Body)
-> 	if err != nil {
-> 		t.Fatal(err)
-> 	}
-> 	return string(b)
-> }
+> import (
+> 	"net/http"
+> 	"strings"
+> 	"testing"
+> )
 > ```
 >
-> Add `"io"` to the test file's imports. **Note** `readAll` consumes the body, so in the first
+> **Note** `readAll` consumes the body, so in the first
 > test the `defer resp.Body.Close()` is still right but the body can only be read once — read it
 > once into `body` and assert against that, as the code above does.
 >
@@ -1909,8 +1917,21 @@ EXPECT: `status = 404, want 200` — the catch-all route (`internal/api/server.g
 	mux.HandleFunc("GET /api/v1/browse", s.handleBrowse)
 ```
 
-2. Add the handler:
+2. Add the handler. Create `internal/api/browse.go` — a NEW file, so the endpoint is
+   separable from `server.go` and deletable without touching it:
+
 ```go
+package api
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"git.polarisocial.xyz/kindred/kindred/internal/tagfamily"
+)
+
 // handleBrowse answers the general "fandom family x concept family"
 // question and returns the evidence for it.
 //
@@ -3022,7 +3043,8 @@ table. A `LoadShape` call inside the per-item loop would make every query take m
 
 | # | Risk | Likelihood | Mitigation |
 |---|---|---|---|
-| R1 | **The F2 shape rule's recall is 0.397.** Many creator-form fandom tags (`a song of ice and fire - george r. r. martin`) are missed, so a work's "other universe" may go unreported. | Certain (measured) | Accepted and documented. The rule errs toward silence, which is the safe direction for a *crossing* claim. Explicit per-spelling declarations cover the family's own members. |
+| R1 | **The F2 shape rule's recall is 0.354 (re-measured at implementation time against the 302-fandom / 3,286-freeform ground truth in `gt_tags.json`; the plan's 0.397 estimate was slightly optimistic).** Many creator-form fandom tags (`a song of ice and fire - george r. r. martin`) are missed, so a work's "other universe" may go unreported. | Certain (measured) | Accepted and documented. The rule errs toward silence, which is the safe direction for a *crossing* claim. Explicit per-spelling declarations cover the family's own members. |
+| R1b | **The recall gap is dominated by PLAIN-named fandoms.** Measured: 90 of the 302 ground-truth fandom names are plain (`dragon age: inquisition`, `mass effect`, `star wars original trilogy`) and **all 90 are missed**; 2,984 of the 3,286 freeform names are also plain. A plain name is therefore intrinsically ambiguous, and the corpus cannot separate them: `futa - fandom` and `bdsm - all media types` really do exist as tags, so AO3 itself has typed those as fandoms. | Certain (measured) | **Tried and rejected:** admitting any plain name that is a canonical base elsewhere raises recall 0.354 → 0.364 but drops precision 1.000 → 0.564 (85 false positives: `futa`, `bdsm`, `erotica`, `self insert`, `enemies to lovers`). Admitting a parenthetical-derived base set raises recall to 0.533 and drops precision to 0.508. **The plan's choice of precision over recall stands**, and the false-positive list is the evidence for it. A reader is shown a wrong crossing far more often than a missing one. |
 | R2 | **A declared family can silently rot** (a tag renamed upstream). | Medium | `ValidateUniverse` reports `missing` / `non_fandom_shape`; the CLI prints them; the API exposes them. Add the report to the browse page's count line in a follow-up if the CLI output proves noisy. |
 | R3 | **The `update_date` fix changes existing sort output** (the site's "recent" list and the API's date sort will reorder). Any test asserting the old order is asserting a bug. | Certain | Read the failing test and update the expectation to the chronological value; say so in the commit message. Verify the live page's order by eye (Task 6i). |
 | R4 | **`COLLATE NOCASE` on the tag name in the `IN` clause** changes matching for a family member whose case differs from the stored row. | Low | `tags.name` is declared `UNIQUE ... COLLATE NOCASE`, so a case-insensitive comparison matches the unique index. Verify with Task 10's live run: the `universe_works` count must be ≥ 2,041 (the measured size of `parahumans series - wildbow` alone). **If the count is 0, the COLLATE placement is wrong — fix it before continuing.** |

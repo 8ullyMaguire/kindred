@@ -120,6 +120,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/ao3/tags", s.handleAO3Tags)
 	mux.HandleFunc("GET /api/v1/ao3/tags/{id}", s.handleAO3Tag)
 	mux.HandleFunc("GET /api/v1/ao3/tags/{id}/works", s.handleAO3TagWorks)
+	// The family-browse endpoint. It answers the "which works are in BOTH
+	// this fandom family and this concept family" question, and returns
+	// the pool counts that make the answer explainable.
+	mux.HandleFunc("GET /api/v1/browse", s.handleBrowse)
 
 	// Corpus-query modes. These are the same Runner the pages use, exposed as
 	// JSON so a script gets the same analysis the browser gets rather than
