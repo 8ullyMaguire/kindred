@@ -235,6 +235,31 @@ kindred corpus-query --corpus ~/kindling-data/ao3_metadata.db \
 `--min-co-works` is the flag that keeps the leaderboard honest, and it is the
 reason the web page shows a count beside every fandom rather than a ranking.
 
+## `browse` — recent works matching a fandom family and a concept family
+
+```bash
+kindred browse --universe worm --concept isekai --recent 365 --n 50
+kindred browse --universe worm --concept isekai --json --out worm-isekai.json
+```
+
+| flag | default | meaning |
+|---|---|---|
+| `--universe` | — | fandom family key (e.g. `worm`) |
+| `--concept` | — | concept family key (e.g. `isekai`) |
+| `--recent` | `365` | recency window in days |
+| `--n` | `50` | maximum rows |
+| `--json` | off | emit the payload as JSON instead of a table |
+| `--out` | — | also write the JSON payload to this path |
+
+`--universe` and `--concept` name families declared in
+`internal/tagfamily/families.json`, so a new fandom or a new idea is a data
+edit, not a code edit. At least one of the two is required.
+
+The table reports the pool sizes (`universe=`, `concept=`) as well as the
+rows, because "3 results" and "0 results" are indistinguishable without
+them. Each row carries the concept tags it matched and the other fandom it
+crosses into, when it has one.
+
 ## `stats` — corpus and index statistics
 
 ```bash

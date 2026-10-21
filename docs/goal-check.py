@@ -206,6 +206,24 @@ def clause_page_coverage():
 
     routes = set()
     handlers = (REPO / "internal/web/handlers.go")
+    registry = (REPO / "internal/web/registry.go")
+    # The routes live in the REGISTRY now (each pageSpec carries its Paths),
+    # not in a `case p == "..."` switch in handlers.go. The switch regex
+    # matched nothing, so `routes` was empty and every nav link was reported
+    # as pointing at a route that does not exist -- the gate could not pass
+    # no matter what the site looked like.
+    #
+    # Both sources are read: the registry is the truth for a page's paths,
+    # and the handlers' own prefix checks still cover the paths that are
+    # matched by prefix rather than by the registry.
+    if registry.is_file():
+        reg = registry.read_text(errors="ignore")
+        for m in re.finditer(r'Paths:\s*\[\]string\{([^}]*)\}', reg):
+            for p in re.findall(r'"([^"]*)"', m.group(1)):
+                if p:
+                    routes.add(p)
+        for m in re.finditer(r'Prefix:\s*true', reg):
+            pass
     if handlers.is_file():
         for m in re.finditer(r'case p == "([^"]+)":', handlers.read_text()):
             routes.add(m.group(1))
@@ -213,6 +231,9 @@ def clause_page_coverage():
             routes.add(m.group(1))
     else:
         problems.append("internal/web/handlers.go does not exist")
+    if not routes:
+        problems.append("could not find any route: the registry's Paths and "
+                        "the handlers' own path checks both read empty")
 
     # (route, the file that must mention it). The browser suite drives real
     # HTTP, so a route the suite never visits is a route nothing checks.
@@ -267,12 +288,31 @@ def clause_page_coverage():
     render_tests = (REPO / "internal/web/render_pages_test.go")
     tpl_list = ""
     render_go = (REPO / "internal/web/render.go")
+    registry_go = (REPO / "internal/web/registry.go")
     if render_go.is_file():
+        # The page list is not a literal any more: init() builds it from
+        # pageTemplates(), which reads the registry. So the list of TEMPLATE
+        # NAMES is read from the registry, where the truth now lives, and
+        # the old inline-literal regex is gone. The regex that used to be
+        # here matched a []string{...} literal that a refactor deleted, and
+        # because it matched nothing it reported EVERY nav link as
+        # unresolvable -- a gate that fails on everything measures nothing.
+        #
+        # The registry is still parsed textually rather than by running Go,
+        # because this script must work without a toolchain. The pattern it
+        # looks for is `Template: "x.html"`, which is the registry's own
+        # field name and appears once per page.
+        if registry_go.is_file():
+            tpl_list = registry_go.read_text(errors="ignore")
+        else:
+            problems.append("internal/web/registry.go does not exist; it is "
+                            "where the page list lives now")
+    if not tpl_list:
         m = re.search(r'pages = map\[string\]\*template\.Template\{\}\s*\n\s*\n?func init\(\) \{\s*\n\s*for _, page := range \[\]string\{(.*?)\}',
-                      render_go.read_text(), re.S)
+                      render_go.read_text(), re.S) if render_go.is_file() else None
         if m:
             tpl_list = m.group(1)
-        else:
+        elif render_go.is_file():
             problems.append("could not find the page list in render.go")
     if not render_tests.is_file():
         problems.append(

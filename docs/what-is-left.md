@@ -234,6 +234,44 @@ behaviour gate `BEHAVIOUR IN SYNC: all 46 checks pass`,
       `--no-crawl` vs `crawl` instances on a state-db copy both idle at
       38-45 MB RSS; the jump is request-driven, not startup-driven.
 
+## Session 2026-10-21: the family-intersection query, generalised
+
+The one-off `worm-isekai` command is gone, replaced by a general capability:
+works carrying a tag from a **fandom family** AND a tag from a **concept
+family**, updated within N days.
+
+- [x] **`/browse` (page), `GET /api/v1/browse` (API), `kindred browse` (CLI).**
+      All three speak ONE vocabulary — the family key (`worm`, `isekai`) — so
+      a new fandom or a new idea is a data edit in
+      `internal/tagfamily/families.json`, not a code edit. The API extends
+      the existing `/api/v1/ao3/works` with `?universe=` and `?concept=`
+      rather than replacing it. The page is ONE new page inside the EXISTING
+      "Find something to read" nav group, reusing the shared workrow
+      template.
+- [x] **The families are DECLARED, not derived, and that is a measured
+      decision, not a shortcut.** The corpus cannot derive them: one
+      franchise's spellings are near-disjoint populations (Worm's two biggest
+      spellings share 17 of ~2,000 works each) and character tags do not
+      bridge franchises ("harry potter - j. k. rowling" and "star wars - all
+      media types" share 4,619 character tags). What the corpus CAN do is
+      VALIDATE a declaration, and `ValidateUniverse` reports a missing or
+      non-fandom-shaped spelling rather than ignoring it.
+- [x] **The fandom-shape rule has precision 1.000 and recall 0.354.**
+      Measured against a 302-fandom / 3,286-freeform ground truth scraped
+      from AO3's own `fandom tags` markup. The gap is entirely PLAIN-named
+      fandoms: all 90 of them are missed, and 2,984 of the 3,286 freeform
+      names are plain too, so the corpus genuinely cannot separate them
+      (`futa - fandom` and `bdsm - all media types` really do exist as tags).
+      Two extensions were tried and both cost precision (1.000 -> 0.564 and
+      -> 0.508). **Precision over recall is the standing choice**: a false
+      "this crosses into Harry Potter" is a wrong claim in a reader's face.
+- [x] **Two recency-ordering bugs fixed.** `works.update_date` is TEXT
+      `DD Mon YYYY`, so `ORDER BY update_date DESC` is lexicographic, not
+      chronological: it yielded `31 Oct 2025` as the most recent work while
+      the true maximum is `26 Jun 2026`. Fixed in `internal/web/handlers.go`
+      (`tagOrder`) and `internal/api/server.go`, both now using
+      `internal/corpus.ChronologicalUpdateDateDesc`.
+
 ## Standing caveat
 
 `complete=true` means COMPLETE ONLY, not "no filter". It reads like a vacuous

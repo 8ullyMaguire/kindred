@@ -2878,6 +2878,36 @@ EXPECT: exit 0 (the goal is complete). If a clause now fails because a new packa
 package count, **read the failing clause and fix the code or the baseline honestly** — the
 script's own rules say a floor is measured with `--update-baseline`, never guessed.
 
+> **The `page coverage` clause was ALREADY FAILING before this work, for a reason that has
+> nothing to do with it: the gate reads two things from the Go source with regexes, and a
+> refactor moved both of them.**
+>
+> | What the gate reads | Where it looked | Where it is now |
+> |---|---|---|
+> | the page list | a `[]string{...}` literal in `render.go` | `pageTemplates()`, which reads the registry |
+> | the routes | `case p == "..."` in `handlers.go` | each `pageSpec`'s `Paths` in `registry.go` |
+>
+> Both regexes matched **nothing**, so the gate reported `could not find the page list in
+> render.go` and then **every nav link as unresolvable** — 15 gaps, on a site whose nav links
+> all resolve. A gate that fails on everything measures nothing.
+>
+> **The fix is to repair the gate, not to weaken it.** `docs/goal-check.py` now reads the page
+> list and the routes from `internal/web/registry.go`, where the truth lives. The old regexes
+> are kept as a FALLBACK (the `if not tpl_list:` branch), so a future refactor that moves the
+> list back still works.
+>
+> **Verified by mutation:** changing the registry's `/browse` to `/browse-typo` makes the gate
+> report `route /browse-typo is never requested by the browser suite`, and restoring it makes
+> the gate green again. A gate that cannot fail is not a gate.
+>
+> **The e2e suite needs the new page too.** The same clause requires every route to be
+> requested by `e2e/tests/*.spec.js`, so `/browse` was added to the `PAGES` table in
+> `e2e/tests/pages.spec.js`:
+>
+> ```js
+>   { path: '/browse', link: '/browse', name: 'browse', title: /browse/i, heading: true },
+> ```
+
 **Step 9d — run the whole verification.**
 
 ```bash
