@@ -8,10 +8,51 @@
         "worm - fandom",
         "worm - wildbow",
         "worm (web serial novel)",
-        "worm",
-        "worm - freeform"
+        "worm"
       ],
-      "spellings_explicit_freeform": ["worm - freeform"]
+      "spellings_explicit": [
+        "worm (web serial novel)",
+        "parahumans series - wildbow",
+        "worm"
+      ]
+    },
+    "harry potter": {
+      "label": "Harry Potter",
+      "spellings": [
+        "harry potter - j. k. rowling",
+        "harry potter",
+        "harry potter - fandom",
+        "harry potter - rowling"
+      ],
+      "spellings_explicit": [
+        "harry potter"
+      ]
+    },
+    "naruto": {
+      "label": "Naruto",
+      "spellings": [
+        "naruto",
+        "naruto (anime & manga)",
+        "naruto - character",
+        "naruto - freeform"
+      ],
+      "spellings_explicit": [
+        "naruto",
+        "naruto - character",
+        "naruto - freeform"
+      ]
+    },
+    "marvel": {
+      "label": "Marvel",
+      "spellings": [
+        "marvel cinematic universe",
+        "marvel",
+        "marvel (comics)"
+      ],
+      "spellings_explicit": [
+        "marvel cinematic universe",
+        "marvel"
+      ]
     }
   },
   "concepts": {
@@ -27,6 +68,37 @@
         "isekai'd",
         "isekai?",
         "isekai shenanigans"
+      ]
+    },
+    "alternate universe": {
+      "label": "alternate universe / canon divergence",
+      "tags": [
+        "alternate universe",
+        "alternate universe - canon divergence",
+        "alternate universe - modern setting",
+        "alternate universe - time travel",
+        "alternate universe - college/university",
+        "alternate universe - soulmates",
+        "alternate universe - everyone lives/nobody dies",
+        "alternate universe - fantasy",
+        "alternate universe - reincarnation",
+        "alternate universe - high school",
+        "alternate universe - gender changes",
+        "alternate universe - no powers",
+        "alternate universe - harem",
+        "alternate universe - royalty",
+        "alternate universe - different first meeting",
+        "alternate universe - magic",
+        "alternate universe - no voldemort"
+      ]
+    },
+    "reincarnation": {
+      "label": "reincarnation / rebirth",
+      "tags": [
+        "reincarnation",
+        "rebirth",
+        "reincarnated",
+        "reincarnation?"
       ]
     }
   }

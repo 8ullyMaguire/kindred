@@ -240,6 +240,7 @@ reason the web page shows a count beside every fandom rather than a ranking.
 ```bash
 kindred browse --universe worm --concept isekai --recent 365 --n 50
 kindred browse --universe worm --concept isekai --json --out worm-isekai.json
+kindred browse --universe worm --concept isekai --text --text-out recs.txt
 ```
 
 | flag | default | meaning |
@@ -249,11 +250,39 @@ kindred browse --universe worm --concept isekai --json --out worm-isekai.json
 | `--recent` | `365` | recency window in days |
 | `--n` | `50` | maximum rows |
 | `--json` | off | emit the payload as JSON instead of a table |
+| `--text` | off | emit one work per line instead of a table |
 | `--out` | — | also write the JSON payload to this path |
+| `--text-out` | — | also write the one-work-per-line form to this path |
+
+`--text` and `--text-out` write ONE WORK PER LINE, as `title<TAB>url`. An
+empty result is an empty file, not a file with a heading in it, so a
+line-counting script does not have to know the format.
 
 `--universe` and `--concept` name families declared in
 `internal/tagfamily/families.json`, so a new fandom or a new idea is a data
 edit, not a code edit. At least one of the two is required.
+
+The declared families are:
+
+| universe | label |
+|---|---|
+| `worm` | Worm (Parahumans) |
+| `harry potter` | Harry Potter |
+| `naruto` | Naruto |
+| `marvel` | Marvel |
+
+| concept | label |
+|---|---|
+| `isekai` | isekai / transmigration |
+| `alternate universe` | alternate universe / canon divergence |
+| `reincarnation` | reincarnation / rebirth |
+
+A family member the shape rule cannot vouch for (a plain-named fandom, a
+creator form whose left side is not a canonical base anywhere) is admitted by
+DECLARATION and listed in that family's `spellings_explicit`. The live
+validation test checks every declaration against the real mirror, so a
+spelling that does not exist, or one that is not fandom-shaped, is reported
+rather than silently widening or narrowing the filter.
 
 The table reports the pool sizes (`universe=`, `concept=`) as well as the
 rows, because "3 results" and "0 results" are indistinguishable without

@@ -828,7 +828,7 @@ type Universe struct {
 	// by name but still mean this universe to a reader ("worm - freeform").
 	// They are admitted by DECLARATION, and the validation report says so,
 	// so a reader can see which members were admitted by rule.
-	SpellingsExplicitFreeform []string `json:"spellings_explicit_freeform"`
+	SpellingsExplicit []string `json:"spellings_explicit"`
 }
 
 // Concept is one idea's set of tag spellings.
@@ -941,7 +941,7 @@ type UniverseReport struct {
 func ValidateUniverse(ctx context.Context, db *sql.DB, sh *Shape, u *Universe) (UniverseReport, error) {
 	var rep UniverseReport
 	explicit := map[string]bool{}
-	for _, s := range u.SpellingsExplicitFreeform {
+	for _, s := range u.SpellingsExplicit {
 		explicit[s] = true
 	}
 	for _, s := range u.Spellings {
@@ -3151,3 +3151,95 @@ table. A `LoadShape` call inside the per-item loop would make every query take m
    answer different questions — `internal/fandom` is the strict diversity-cap filter, the new rule
    is the loose "is this a fandom" classifier. The plan leaves them separate on purpose. Merging
    them would change diversity-cap behaviour, which is out of scope here.
+
+---
+
+### Task 11 — the export, and the families the export needed
+
+**What the user asked for:** *"execute plan, when you are done export 200 recs to a txt file,
+single work per line."*
+
+**Step 11a — MEASURE before choosing a family pair.** The 200 works are not a free choice: the
+intersection of a universe family and a concept family is a fixed population, and the plan's
+canonical `worm x isekai` is only **55 works in the whole corpus** (30 within 365 days). A pair
+that "sounds big" is not a pair that can yield 200.
+
+Measured against the live mirror, all pools, all-time vs 365-day:
+
+| universe | concept | all-time | 365d | 730d |
+|---|---|---|---|---|
+| worm | isekai | 55 | 30 | 48 |
+| worm | alternate universe | 453 | 170 | **272** |
+| harry potter | isekai | 119 | 83 | 107 |
+| harry potter | alternate universe | 1048 | 305 | 506 |
+| naruto | isekai | 176 | 104 | 145 |
+| marvel | alternate universe | 256 | 76 | 113 |
+
+So the export uses **`worm x alternate universe` over 730 days: 272 matches, 200 exported.**
+
+**Step 11b — the new families are DATA, not code.** `harry potter`, `naruto` and `marvel`
+universes and `alternate universe` and `reincarnation` concepts were added to
+`internal/tagfamily/families.json`. No Go code changed to add them. That is the whole point of
+the generalization, and it is now measured rather than asserted.
+
+**Step 11c — the LIVE validation test found real errors in the DECLARATIONS.** A family is
+declared, so a declaration can be wrong, and only the corpus can say so. The new
+`internal/tagfamily/live_validate_test.go` opens the real mirror and checks every declared
+member. It found, and the declarations now fix:
+
+| family | what the live check caught |
+|---|---|
+| `worm` | `worm` is not fandom-shaped (a plain name); `parahumans series - wildbow` and `worm (web serial novel)` are not recognisable either |
+| `naruto` | `naruto - fandom` DOES NOT EXIST in the mirror |
+| `marvel` | `marvel - fandom` DOES NOT EXIST in the mirror |
+| `reincarnation` | 4 of 8 declared tags DO NOT EXIST (`reincarnate`, `reincarnation!`, `reincarnated into another world`, `reincarnation & multiple lives identity crises`) |
+| `harry potter` | `harry potter` is a plain name, not fandom-shaped |
+
+**The `worm` family had three unvouched members and NOBODY had ever checked.** The validation
+was written but never wired to anything that ran. It is now a test that runs against the real
+mirror.
+
+**Step 11d — `spellings_explicit_freeform` became `spellings_explicit`.** The old name said
+"freeform", but the members that need declaring are not all freeform: a plain-named fandom
+(`harry potter`), a creator form whose left side is not a canonical base
+(`parahumans series - wildbow`), an unknown medium qualifier (`worm (web serial novel)`) and a
+freeform tag (`worm - freeform`) are all the same thing to the query -- a declared member the
+shape rule did not vouch for. One list, not one list per reason.
+
+**Step 11e — `--text` and `--text-out`, ONE WORK PER LINE.** The line is `title<TAB>url`. An
+empty result is an EMPTY FILE, not a file with a heading, so a line-counting script does not
+have to know the format.
+
+**THE MUTATION THAT CAUGHT A REAL GAP.** The first version had the printer and the file writer
+as two copies of the same loop, and the test only covered the printer. Adding a heading line to
+the file-writer copy was **NOT CAUGHT** -- the test passed. The mutation was:
+
+```
+MUTATED exit: 0
+```
+
+The two were then merged into one `browseText` function, and a second test
+(`TestBrowseTextFileHoldsOneWorkPerLine`) was added for the file path. The same mutation now
+kills three tests:
+
+```
+--- FAIL: TestPrintBrowseTextWritesOneWorkPerLine
+    browse_test.go:62: want 2 lines, one per work, got 3: "2 works\na work\t..."
+--- FAIL: TestBrowseTextFileHoldsOneWorkPerLine
+    browse_test.go:100: want one line per work (3), got 4 lines: "3 works\n..."
+RESTORED exit: 0
+```
+
+**Step 11f — the export itself.**
+
+```bash
+cd ~/code-local/go/kindred && \
+  ./bin/kindred browse --corpus ~/code/python/ao3/recommender/cache/ao3_metadata.db \
+    --universe worm --concept "alternate universe" --recent 730 --n 200 \
+    --text-out exports/worm-alternate-universe.txt
+```
+EXPECT: `272 matched (showing 200) | universe=2166 concept=27745 window=730d`, and
+`wc -l exports/worm-alternate-universe.txt` reports **200**.
+
+VERIFIED on the file: 200 lines, every line exactly one tab, every URL matching
+`https://archiveofourown.org/works/<digits>`, 200 distinct URLs, 200 distinct titles.

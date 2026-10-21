@@ -25,11 +25,19 @@ type Universe struct {
 	Name      string   `json:"-"`
 	Label     string   `json:"label"`
 	Spellings []string `json:"spellings"`
-	// SpellingsExplicitFreeform lists spellings that are freeform-shaped
-	// by name but still mean this universe to a reader ("worm - freeform").
-	// They are admitted by DECLARATION, and the validation report says so,
-	// so a reader can see which members were admitted by rule.
-	SpellingsExplicitFreeform []string `json:"spellings_explicit_freeform"`
+	// SpellingsExplicit lists spellings the SHAPE RULE cannot recognise
+	// but that a reader plainly means as this universe.
+	//
+	// It is one list, not one list per reason, because the reasons do not
+	// matter to the query: a plain-named fandom ("harry potter"), a
+	// creator form whose left side is not a canonical base anywhere
+	// ("parahumans series - wildbow"), a medium the qualifier table does
+	// not know ("worm (web serial novel)") and a freeform-shaped tag
+	// ("worm - freeform") are all the same thing to the query -- a
+	// declared member. The validation report says how many members were
+	// admitted by DECLARATION rather than by rule, so a reader can see
+	// which ones the shape rule did not vouch for.
+	SpellingsExplicit []string `json:"spellings_explicit"`
 }
 
 // Concept is one idea's set of tag spellings.
@@ -131,7 +139,9 @@ type UniverseReport struct {
 	Present   []string `json:"present"`
 	Missing   []string `json:"missing"`
 	NonFandom []string `json:"non_fandom_shape"`
-	Explicit  []string `json:"explicit_freeform"`
+	// Explicit are the members the shape rule did not vouch for, which
+	// were admitted by declaration instead.
+	Explicit []string `json:"explicit"`
 }
 
 // ValidateUniverse checks every declared spelling against the mirror.
@@ -142,7 +152,7 @@ type UniverseReport struct {
 func ValidateUniverse(ctx context.Context, db *sql.DB, sh *Shape, u *Universe) (UniverseReport, error) {
 	var rep UniverseReport
 	explicit := map[string]bool{}
-	for _, s := range u.SpellingsExplicitFreeform {
+	for _, s := range u.SpellingsExplicit {
 		explicit[s] = true
 	}
 	for _, s := range u.Spellings {

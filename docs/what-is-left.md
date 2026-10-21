@@ -265,6 +265,26 @@ family**, updated within N days.
       Two extensions were tried and both cost precision (1.000 -> 0.564 and
       -> 0.508). **Precision over recall is the standing choice**: a false
       "this crosses into Harry Potter" is a wrong claim in a reader's face.
+- [x] **The families are now FOUR universes and THREE concepts, and the
+      export proves the generalization works.** `harry potter`, `naruto`
+      and `marvel` were added alongside `worm`; `alternate universe` and
+      `reincarnation` alongside `isekai`. **No Go code changed to add
+      them** -- each is a data edit in `internal/tagfamily/families.json`.
+      The 200-work export is `worm x alternate universe` over 730 days
+      (272 matches, 200 exported) to
+      `exports/worm-alternate-universe.txt`, one work per line as
+      `title<TAB>url`.
+- [x] **A family is DECLARED, so a declaration can be wrong, and now
+      something CHECKS.** `internal/tagfamily/live_validate_test.go` opens
+      the real mirror and validates every declared member. It found that
+      the `worm` family had three members the shape rule does not vouch
+      for and that **no test had ever looked**, that `naruto - fandom` and
+      `marvel - fandom` do not exist in the mirror at all, and that four of
+      the eight `reincarnation` tags were invented. All fixed. The
+      per-family `spellings_explicit` list (formerly
+      `spellings_explicit_freeform`, renamed because the members that need
+      declaring are not all freeform) is what admits a member the rule
+      cannot recognise.
 - [x] **Two recency-ordering bugs fixed.** `works.update_date` is TEXT
       `DD Mon YYYY`, so `ORDER BY update_date DESC` is lexicographic, not
       chronological: it yielded `31 Oct 2025` as the most recent work while
