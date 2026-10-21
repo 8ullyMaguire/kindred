@@ -30,6 +30,7 @@ commands:
   profile   build, list, show and rate taste profiles
   rate      fold one like/dislike into a profile (alias for 'profile rate')
   corpus-query  ask a question about the corpus (fandom-ranking, underrated, tag-neighbours)
+  worm-isekai   recent Worm-universe works matching an isekai taste
   stats     print corpus and index statistics
   dump      write an anonymised, signed snapshot for peers
   verify    verify a snapshot's signature and hashes
@@ -75,6 +76,8 @@ func main() {
 		err = runRate(ctx, config.Load().CorpusDB, args)
 	case "corpus-query":
 		err = runCorpusQuery(ctx, config.Load().CorpusDB, args)
+	case "worm-isekai":
+		err = runWormIsekai(ctx, config.Load().CorpusDB, args)
 	case "stats":
 		err = runStats(ctx, args)
 	case "dump":
