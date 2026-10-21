@@ -23,6 +23,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
+	"git.polarisocial.xyz/kindred/kindred/internal/tagfamily"
 )
 
 // Deps is what the pages need from the rest of kindred.
@@ -3104,4 +3105,72 @@ func clampInt(n, lo, hi int) int {
 		return hi
 	}
 	return n
+}
+
+// renderBrowse answers "recent works in this fandom that are this concept".
+//
+// The page is a form over one query: a universe (a fandom family), a
+// concept (an idea family), and a recency window. Both families come from
+// the declared set in internal/tagfamily, so adding a fandom or a concept
+// to the site is a data edit, not a code edit.
+func (d Deps) renderBrowse(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	q := r.URL.Query()
+	page := BrowsePage{Base: d.baseOf(r, "Browse by fandom and concept", "Browse by fandom and concept")}
+	fams, err := tagfamily.LoadFamilies()
+	if err != nil {
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	for _, u := range fams.Universes() {
+		page.UniverseOptions = append(page.UniverseOptions,
+			SortOption{Value: u.Name, Label: u.Label})
+	}
+	for _, c := range fams.Concepts() {
+		page.ConceptOptions = append(page.ConceptOptions,
+			SortOption{Value: c.Name, Label: c.Label})
+	}
+	page.Universe = q.Get("universe")
+	page.Concept = q.Get("concept")
+	page.RecentDays = clampInt(atoiDefault(q.Get("recent"), tagfamily.DefaultRecentDays), 1, 3650)
+	page.N = clampInt(atoiDefault(q.Get("n"), 50), 1, 200)
+	page.Searched = page.Universe != "" || page.Concept != ""
+
+	if page.Searched {
+		var universeTags, conceptTags []string
+		if u, ok := fams.Universe(page.Universe); ok {
+			universeTags = u.Spellings
+		}
+		if c, ok := fams.Concept(page.Concept); ok {
+			conceptTags = c.Tags
+		}
+		if len(universeTags) > 0 || len(conceptTags) > 0 {
+			res, err := tagfamily.Query(ctx, d.Engine.Corpus.DB, tagfamily.QueryOptions{
+				UniverseTags: universeTags,
+				ConceptTags:  conceptTags,
+				RecentDays:   page.RecentDays,
+				Limit:        page.N,
+			})
+			if err != nil {
+				d.fail(w, r, http.StatusInternalServerError, err)
+				return
+			}
+			page.Meta = res.Meta
+			// The rows are converted to WorkHit so the SHARED workrow
+			// template renders them. A second row markup for one page
+			// would be a second thing to keep in step with the first.
+			for _, it := range res.Items {
+				page.Works = append(page.Works, WorkHit{
+					ID:        it.ID,
+					Title:     it.Title,
+					Author:    it.Authors,
+					URL:       it.URL,
+					Kudos:     it.Kudos,
+					WordCount: it.Words,
+					Complete:  boolToInt(it.Complete),
+				})
+			}
+		}
+	}
+	d.page(w, "browse.html", page, http.StatusOK)
 }

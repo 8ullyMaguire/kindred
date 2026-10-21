@@ -1,0 +1,63 @@
+{{define "content"}}
+{{/* A GET form, so a result is a URL a reader can bookmark or share --
+     the same reason the tag page's filter form is a GET. */}}
+<form class="controls" method="get" action="/browse" role="search"
+      aria-label="Filter works by fandom and concept">
+  {{/* The reader's ?n= rides along, or every filter change would snap the
+       list back to the default while the heading kept claiming otherwise. */}}
+  <input type="hidden" name="n" value="{{.N}}">
+
+  <label for="universe">Fandom</label>
+  <select id="universe" name="universe">
+    <option value="">any fandom</option>
+    {{$u := .Universe}}
+    {{range .UniverseOptions}}
+      <option value="{{.Value}}" {{if eq .Value $u}}selected{{end}}>{{.Label}}</option>
+    {{end}}
+  </select>
+
+  <label for="concept">Concept</label>
+  <select id="concept" name="concept">
+    <option value="">any concept</option>
+    {{$c := .Concept}}
+    {{range .ConceptOptions}}
+      <option value="{{.Value}}" {{if eq .Value $c}}selected{{end}}>{{.Label}}</option>
+    {{end}}
+  </select>
+
+  <label for="recent">Updated within</label>
+  <select id="recent" name="recent">
+    <option value="30" {{if eq .RecentDays 30}}selected{{end}}>30 days</option>
+    <option value="90" {{if eq .RecentDays 90}}selected{{end}}>90 days</option>
+    <option value="365" {{if eq .RecentDays 365}}selected{{end}}>one year</option>
+    <option value="730" {{if eq .RecentDays 730}}selected{{end}}>two years</option>
+  </select>
+
+  <input type="submit" value="Search">
+</form>
+
+{{if .Searched}}
+  {{/* The counts are on the page because a short list is otherwise
+       unexplainable: "3 results" and "0 results" look identical until
+       the reader can see how large each pool was. */}}
+  <p class="count" data-testid="browse-counts">
+    {{.Meta.Matched}} work{{if ne .Meta.Matched 1}}s{{end}} matched &mdash;
+    fandom pool {{commas .Meta.UniverseWorks}},
+    concept pool {{commas .Meta.ConceptWorks}},
+    window {{.Meta.RecentDays}} days.
+  </p>
+
+  {{if .Works}}
+    {{range .Works}}{{template "workrow" .}}{{end}}
+  {{else}}
+    <p class="count" data-testid="browse-empty" data-empty="true">
+      No work matched that combination. Widen the recency window, or pick
+      another concept &mdash; the counts above say how large each pool was.
+    </p>
+  {{end}}
+{{else}}
+  <p class="count">
+    Pick a fandom and a concept to see recent works that carry both.
+  </p>
+{{end}}
+{{end}}

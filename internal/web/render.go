@@ -14,6 +14,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
+	"git.polarisocial.xyz/kindred/kindred/internal/tagfamily"
 )
 
 // Base is embedded in every page. It is how the shared header, footer and
@@ -267,6 +268,43 @@ type TagInfo struct {
 }
 
 // WorkHit is one row of a work list.
+// BrowsePage is the "fandom x concept" browse page.
+type BrowsePage struct {
+	Base
+	// UniverseOptions and ConceptOptions are the declared families, as
+	// select options, so the form can show a label ("Worm (Parahumans)")
+	// while the URL carries the key ("worm").
+	UniverseOptions []SortOption
+	ConceptOptions  []SortOption
+	// Universe and Concept are the current selections, by key.
+	Universe string
+	Concept  string
+	// RecentDays is the recency window in days.
+	RecentDays int
+	// N is the page size.
+	N int
+	// Searched is true once a family has been named. It separates "the
+	// reader has not asked yet" from "the reader asked and found
+	// nothing" -- two states that must not share a sentence.
+	Searched bool
+	// Works are the matching works, as WorkHit rows so the shared
+	// workrow template renders them.
+	Works []WorkHit
+	// Meta reports the pool sizes.
+	Meta tagfamily.Meta
+}
+
+// boolToInt converts a bool to the int64 the workrow template reads.
+//
+// WorkHit.Complete is an int64 because the corpus stores completeness as a
+// flag column, and a bool here would mean converting at every call site.
+func boolToInt(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 type WorkHit struct {
 	ID        int64
 	Title     string

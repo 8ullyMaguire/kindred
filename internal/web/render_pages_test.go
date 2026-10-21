@@ -38,6 +38,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
+	"git.polarisocial.xyz/kindred/kindred/internal/tagfamily"
 )
 
 // renderOne executes a named page template against data.
@@ -937,6 +938,67 @@ var pageRenderCases = []pageRenderCase{
 		data:            MirrorPage{Base: sweepBase, HasCorpus: true, QueueErr: true, Cap: 5},
 		wantContains:    []string{"could not be read", "backlog is unknown"},
 		wantNotContains: []string{"Nothing is queued"},
+	},
+	{
+		name: "browse.html",
+		tpl:  "browse.html",
+		data: BrowsePage{
+			Base:            sweepBase,
+			Searched:        true,
+			Universe:        "worm",
+			Concept:         "isekai",
+			UniverseOptions: []SortOption{{Value: "worm", Label: "Worm (Parahumans)"}},
+			ConceptOptions:  []SortOption{{Value: "isekai", Label: "isekai"}},
+			RecentDays:      365,
+			N:               50,
+			Works: []WorkHit{
+				{ID: 1, Title: "W1", Author: "A", Kudos: 10, Hits: 100,
+					WordCount: 5000, Language: "en", Complete: 1,
+					URL: "https://example.invalid/works/1"},
+			},
+			Meta: tagfamily.Meta{
+				UniverseWorks: 100, ConceptWorks: 20, Matched: 1, Returned: 1, RecentDays: 365,
+			},
+		},
+		wantContains: []string{
+			// The counts are on the page, because "1 result" and
+			// "0 results" look identical until the reader can see
+			// how large each pool was.
+			"100", "20", "365",
+			// The form is a GET, so the result is a shareable URL.
+			`name="universe"`, `name="concept"`,
+			// And the row is the SHARED row template.
+			"/work/1", "5,000 words",
+		},
+		// A populated render must NOT carry the empty marker.
+		wantNotContains: []string{"data-empty"},
+	},
+	{
+		// A search that matched nothing says so, and names the pools
+		// rather than claiming the fandom is empty.
+		name:         "browse.html with no matches",
+		tpl:          "browse.html",
+		hasEmptyList: true,
+		data: BrowsePage{
+			Base:            sweepBase,
+			Searched:        true,
+			Universe:        "worm",
+			Concept:         "isekai",
+			UniverseOptions: []SortOption{{Value: "worm", Label: "Worm (Parahumans)"}},
+			ConceptOptions:  []SortOption{{Value: "isekai", Label: "isekai"}},
+			RecentDays:      365,
+			N:               50,
+			Works:           nil,
+			Meta: tagfamily.Meta{
+				UniverseWorks: 100, ConceptWorks: 20, Matched: 0, Returned: 0, RecentDays: 365,
+			},
+		},
+		wantContains: []string{
+			`data-empty="true"`,
+			// The pools are still stated, so the reader can tell
+			// "no overlap" from "no data".
+			"100", "20",
+		},
 	},
 }
 
