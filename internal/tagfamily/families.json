@@ -1,0 +1,33 @@
+{
+  "universes": {
+    "worm": {
+      "label": "Worm (Parahumans)",
+      "spellings": [
+        "parahumans series - wildbow",
+        "wildbow - fandom",
+        "worm - fandom",
+        "worm - wildbow",
+        "worm (web serial novel)",
+        "worm",
+        "worm - freeform"
+      ],
+      "spellings_explicit_freeform": ["worm - freeform"]
+    }
+  },
+  "concepts": {
+    "isekai": {
+      "label": "isekai / transmigration",
+      "tags": [
+        "isekai",
+        "reverse isekai",
+        "technically an isekai",
+        "isekai au",
+        "isekai and transmigration",
+        "reverse isekai and transmigration",
+        "isekai'd",
+        "isekai?",
+        "isekai shenanigans"
+      ]
+    }
+  }
+}
