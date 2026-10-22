@@ -343,6 +343,70 @@ family**, updated within N days.
       (`tagOrder`) and `internal/api/server.go`, both now using
       `internal/corpus.ChronologicalUpdateDateDesc`.
 
+## Session 2026-10-22: the algorithm arena finished, and what the gates caught
+
+S1 (the algorithm A/B arena) was committed with handler tests and a page, and
+three things were still wrong. Each was found by a check rather than by reading.
+
+- [x] **`/algo` was reachable only by typing the URL.** The registry carried
+      `Nav: "/algo"` — which marks the page current once you are on it — and
+      `layout.html` had no link to it. `goal-check.py`'s page-coverage clause
+      failed the commit for having no browser test, and chasing that found the
+      missing nav item. A Go render test cannot see this: the page renders
+      perfectly and the defect is in the layout on every OTHER page. Now: a nav
+      entry, a `pages.spec.js` row, and `e2e/tests/algo.spec.js` walking the
+      form, a comparison, a vote, and both refusals.
+- [x] **The comparison was measuring the diversifier, not the algorithm.** The
+      page promises "only the weights change", and the engine ran
+      `diversify.Apply` at Lambda 0.75 on both columns. MMR scores
+      `lambda*score - (1-lambda)*similarity`, so its penalty shares the score's
+      units: tunes whose scores differ in MAGNITUDE are penalised unequally.
+      Measured on the fixture, `default` and an extreme quality/recency-only
+      tune returned the SAME five works in the SAME order, and the printed
+      scores were not even descending (0.48, 0.27, 0.32 — the order was MMR's).
+      `engine.Request.Lambda` now exists (zero keeps the site's 0.75 for every
+      existing caller; the comparison surfaces pass 1.0). Live on the real
+      mirror: `default` vs `quality-lean` shared 2 of 5 works, both columns
+      descending, 1.2 s.
+- [x] **`idf_overlap` was degraded in production.** The fix that moved
+      document frequencies to `<corpus>.docfreq` shipped, but nothing had
+      built the artefact on the deploy host, so the signal skipped and named
+      itself in `meta.degraded`. Built there (634,249 tags, 112,937 works,
+      5.07 MB) and now live: weight 0.13 in the evidence, absent from
+      `degraded`.
+- [x] **`serve` claimed to listen before it bound.** The log line came first,
+      so a port owned by another service printed `msg=listening` and then
+      `bind: address already in use`. It cost a verification walk: a demo
+      instance printed "listening" on a port a PieFed backend owned, the walk's
+      healthz returned 200, and the 200 was PieFed's. Now it binds first and
+      logs `ln.Addr()`, and a test occupies a port and asserts no listening
+      claim.
+
+### Still open, with the measurement
+
+The deployed `serve` runs **over its own memory budget**: peak RSS 298,416 KiB
+against the `full` cap of 225,280 KiB, so `/healthz` answers 503
+`over_budget` and `scripts/check-deploy.sh` exits 2 — correctly, as a SERVICE
+problem rather than a drift one (provenance is in sync).
+
+This pre-dates the round: the same host logged 266,436 KiB on a binary two
+commits older, and `deploy.sh` has recorded 265,984 KiB since 2026-10-16. What
+this session added is measured, not guessed: the document-frequency map is
+**18.0 MiB** of the heap (loaded with the real file at 634,231 tags).
+
+The components, measured on the host: heap 147 MiB, peak 298 MiB — so ~150 MiB
+is Go's non-heap retention after the startup transients (graph load parses a
+28 MiB CSR plus 634k names; the collab builder walks 3.4M pairs to keep
+12,812). Embeddings are 81 MiB of the heap (634,232 x 32 floats).
+
+Neither a cap change nor a `lite` switch is the answer: 220 MiB is a SPEC §6
+constraint with its own test, and raising it because the code exceeds it is the
+accepted-and-ignored shape this project refuses. The honest lever is the graph
+load (mmap the CSR instead of parsing it into Go maps) plus persisting the
+collab index at ingest, as the graph index and `.docfreq` already are. That is
+a unit of work, not a tail-end edit, and it is recorded here so the next
+session starts from the number rather than from "it seems slow".
+
 ## Standing caveat
 
 `complete=true` means COMPLETE ONLY, not "no filter". It reads like a vacuous

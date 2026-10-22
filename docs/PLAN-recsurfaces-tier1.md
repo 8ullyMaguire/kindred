@@ -79,6 +79,32 @@ ranker) would need its own registry and a candidate shape of its own; the
 comparison page would then be the harness for it, and the votes table already
 holds what such a test needs.
 
+### A fourth decision, forced by measurement: the comparison ranks on relevance alone
+
+Shipped as written, the page was quietly measuring the wrong thing. Both columns
+were computed with `diversify.Apply` at Lambda 0.75, and MMR scores a candidate
+as `lambda*score - (1-lambda)*similarity` — a novelty penalty in the SAME units
+as the score. Two tunes whose weights produce different score MAGNITUDES are
+therefore penalised unequally, and the diversifier decides the order. Measured
+on the 40-work fixture: `default` and an extreme quality/recency-only tune
+returned the SAME five works in the SAME order, and the printed scores were not
+descending (0.48, 0.27, 0.32 …), because the order was MMR's and the score was
+the pre-MMR relevance. A page promising "only the weights change" was showing
+the diversifier.
+
+So `engine.Request.Lambda` exists. Zero means the site's 0.75 (every existing
+caller is untouched, and the field is documented as a caller knob rather than a
+policy), and the two comparison surfaces pass 1.0. The consequence to remember:
+**`/algo` and `/recommend` do not show the same order for the same tune**, and
+the page says so in its own hint. That is correct — the vote is about the weight
+vector, and applying the diversifier to both columns would make the arena's
+question "which diversifier output do you prefer".
+
+Pins: `TestLambdaOneRanksOnRelevanceAlone` (asserts Lambda=1 IS the relevance
+order AND that the default is not, so a fixture that cannot distinguish them
+reports itself), `TestTheAlgoColumnsAreOrderedByTheirWeights` (reads the printed
+scores out of both columns), and the browser spec's per-column descending check.
+
 ## Before you start
 
 **Read the conventions from the source, not the spec.** The signal module is `internal/signal/signal.go`;
