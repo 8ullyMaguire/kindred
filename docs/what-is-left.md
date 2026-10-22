@@ -295,8 +295,12 @@ family**, updated within N days.
       — so a new fandom or a new idea is a data edit in
       `internal/tagfamily/families.json`, not a code edit.
 - [x] **FOLDED INTO `/search` (2026-10-22), after the owner judged the
-      separate page too much surface for the function.** `/browse`, its nav
-      entry, its template and `GET /api/v1/browse` are GONE. The form is now
+      separate page too much surface for the function.** `/browse` (page, nav
+      entry, template), `GET /api/v1/browse` and the route's handler are GONE;
+      the OLD ADDRESS survives as a 301 to `/search` with the query string
+      intact, because a bookmark outlives a redesign and a 404 there breaks a
+      link the owner already has. A redirect is not the surface returning: no
+      template, no handler, no nav, no API. The form is now
       a fieldset on `/search` (a GET to `/search?universe=&concept=&recent=`),
       and the results are a "Both families" section there. What survives:
       the `kindred browse` verb (scriptable, no UI surface) and the families
