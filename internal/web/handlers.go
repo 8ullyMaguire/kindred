@@ -1471,9 +1471,16 @@ func (d Deps) renderAuthor(w http.ResponseWriter, r *http.Request) {
 		// Best-effort, like every other secondary panel: the author's works
 		// are the answer to the URL, and a similarity failure must not turn
 		// that into an error page.
+		//
+		// ErrNotFound is not a failure here: it means no work carries this
+		// byline, which the works list above already says in its own empty
+		// state. Rendering it as "the lookup failed" would report a broken
+		// panel for a page that is correctly empty.
 		if sim, serr := d.Engine.SimilarAuthors(ctx, q, 10); serr != nil {
-			d.log().Warn("similar authors failed", "author", q, "err", serr)
-			page.SimilarErr = serr.Error()
+			if !errors.Is(serr, corpus.ErrNotFound) {
+				d.log().Warn("similar authors failed", "author", q, "err", serr)
+				page.SimilarErr = serr.Error()
+			}
 		} else {
 			page.Similar = sim
 		}
