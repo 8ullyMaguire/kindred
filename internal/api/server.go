@@ -287,12 +287,74 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	// The reader's own learned taste, if they have any.
+	//
+	// The arena already writes `arena_user_tag_weights` and already reads
+	// it back for pair selection; this is the recommender joining in. A
+	// reader who has judged forty pairs has a taste vector, and a ranking
+	// that ignores it discards the only evidence this deployment holds of
+	// what that reader wants.
+	//
+	// It is best-effort by design: a reader with no session, no store, or
+	// no learned weights gets the ranking they got before, because the
+	// signal SKIPS rather than scoring zero. A failure to read the
+	// preferences must not turn a recommendation into a 500.
+	s.applySessionTaste(w, r, req)
 	res, err := s.Engine.Recommend(r.Context(), *req)
 	if err != nil {
 		s.writeEngineErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// applySessionTaste loads the reader's learned tag weights onto the request.
+//
+// It resolves the reader's owner key the same way the arena does — through
+// the session cookie, hashed by Store.OwnerKey — and reads the weights the
+// arena has been learning all along.
+//
+// Every failure path is silent ON PURPOSE, and the silence is bounded: if
+// the weights cannot be read, the request carries no SessionTaste, the
+// session_taste signal skips for every candidate, and the response names it
+// in meta.degraded[]. "This reader has no learned taste" and "the taste
+// could not be read" then both appear as a named degradation rather than as
+// a ranking that quietly differs from what the reader asked for.
+func (s *Server) applySessionTaste(w http.ResponseWriter, r *http.Request, req *engine.Request) {
+	if s.Store == nil {
+		return
+	}
+	ownerKey, err := s.Store.OwnerKey(r.Context(), s.sessionKeyFor(r))
+	if err != nil || ownerKey == "" {
+		return
+	}
+	weights, err := s.Store.TagWeights(r.Context(), ownerKey, 60)
+	if err != nil || len(weights) == 0 {
+		return
+	}
+	taste := make(map[int32]float64, len(weights))
+	evidence := make(map[int32]float64, len(weights))
+	for _, tw := range weights {
+		taste[int32(tw.TagID)] = tw.Weight
+		evidence[int32(tw.TagID)] = float64(tw.N)
+	}
+	req.SessionTaste = taste
+	req.SessionTasteEvidence = evidence
+}
+
+// sessionKeyFor returns the arena session cookie value, or "" when the
+// reader has none.
+//
+// It is a read-only variant of ArenaService.SessionKey: that method MINTS a
+// cookie, and a recommendation request should not mint a session for a
+// reader who only asked for a list. A reader with no cookie gets no taste,
+// and the signal skips.
+func (s *Server) sessionKeyFor(r *http.Request) string {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil || c.Value == "" {
+		return ""
+	}
+	return c.Value
 }
 
 func (s *Server) parseRecommend(r *http.Request) (*engine.Request, error) {

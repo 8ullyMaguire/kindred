@@ -176,6 +176,27 @@ type Request struct {
 	// so" failure this codebase has now found five times.
 	NoOwnerTaste bool
 
+	// SessionTaste is the reader's own learned tag preferences, as tag id
+	// to weight. It is a REQUEST field for the same reason NoOwnerTaste
+	// is: the engine ranks against a bare corpus with no store at all, and
+	// a reader identity is not the engine's to resolve.
+	//
+	// The weights come from `arena_user_tag_weights`, which the arena
+	// already writes and already reads for its own pair selection. This
+	// is the wiring that makes the recommender honour them too.
+	//
+	// A nil map means "this reader has no learned taste", and the
+	// session_taste signal SKIPS rather than scoring zero — a reader with
+	// no history must get the same ranking as before, not a ranking
+	// dragged down by a dimension that has nothing to say.
+	SessionTaste map[int32]float64
+
+	// SessionTasteEvidence is the number of comparisons behind each
+	// learned weight, in the same key space as SessionTaste. The signal
+	// reads it to damp a weight learned from one comparison against one
+	// learned from forty.
+	SessionTasteEvidence map[int32]float64
+
 	// PoolMode selects how candidates enter the pool.
 	PoolMode PoolMode
 
@@ -460,6 +481,19 @@ func DefaultTune() rank.Tune {
 			// compiled before this signal existed. That is why the weight
 			// does not need the `renormalise` treatment embedding gets.
 			"owner_taste": 0.06,
+			// session_taste is the reader's OWN learned preferences,
+			// read from the arena's arena_user_tag_weights. It is
+			// evidence of what this reader chose, which is the same
+			// kind of evidence peer_rating carries, and it earns a
+			// weight just above peer_rating because it is about THIS
+			// reader rather than about a work's crowd.
+			//
+			// A reader with no learned weights pays nothing for this
+			// entry: the signal skips for every candidate, and a
+			// skipped signal contributes no term, so the surviving
+			// weights keep their ratios and the ranking is identical to
+			// one compiled before this signal existed.
+			"session_taste": 0.14,
 		},
 	}
 }
@@ -599,7 +633,11 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	sigs, tune := e.signals(seeds, collabVotes, collabScale, tuneWeights, tuneName, !req.NoOwnerTaste)
+	sigs, tune := e.signals(seeds, collabVotes, collabScale, tuneWeights, tuneName, !req.NoOwnerTaste,
+		signalOptions{
+			sessionTaste:         req.SessionTaste,
+			sessionTasteEvidence: req.SessionTasteEvidence,
+		})
 	ranked, meta, err := rank.Score(ctx, cands, seeds, sigs, tune, e)
 	if err != nil {
 		return nil, err
@@ -1197,7 +1235,19 @@ func filterSQL(f Filter, args *[]any) string {
 // this project has found repeatedly.
 //
 // `overrides` is nil when the request named no tune.
-func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, collabScale float64, overrides map[string]float64, tuneName string, personal bool) ([]rank.Signal, rank.Tune) {
+// signalOptions carries the optional signals' inputs into signals().
+//
+// It is a struct passed by variadic pointer so that signals() keeps its
+// existing call signature: the tests that assert WHICH signals are registered
+// (internal/engine/owner_taste_test.go) call it positionally, and adding a
+// parameter there would have meant rewriting the assertions that are the
+// point of those tests.
+type signalOptions struct {
+	sessionTaste         map[int32]float64
+	sessionTasteEvidence map[int32]float64
+}
+
+func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, collabScale float64, overrides map[string]float64, tuneName string, personal bool, opts ...signalOptions) ([]rank.Signal, rank.Tune) {
 	tune := DefaultTune()
 	tune.Name = tuneName
 	if len(overrides) > 0 {
@@ -1303,6 +1353,41 @@ func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, 
 	// bookmark evidence" is distinguishable from "collaborative filtering is
 	// broken".
 	sigs = append(sigs, signal.Collab{Votes: collabVotes, Scale: collabScale})
+
+	// session_taste is the reader's OWN learned preferences, read from the
+	// arena's `arena_user_tag_weights` and passed in on the request.
+	//
+	// It is registered UNCONDITIONALLY, for the same reason collab and
+	// peer_rating are: a signal that is only present when it has data is a
+	// signal that is absent without saying so. With no learned weights it
+	// skips for every candidate and names itself in meta.degraded[], so
+	// "this reader has no history yet" is distinguishable from "the session
+	// taste signal is broken".
+	//
+	// The option is a variadic rather than a positional parameter so the
+	// existing call sites -- including the tests that assert which signals
+	// are registered -- keep compiling unchanged.
+	//
+	// The signal is registered UNCONDITIONALLY, not only when the reader
+	// has learned weights. Registering it conditionally is precisely the
+	// "absent without saying so" failure: a reader with no history would
+	// get a response with no session_taste in meta.degraded[] and no way
+	// to tell that from the signal being broken. Registered always, the
+	// signal SKIPS for every candidate and names itself.
+	//
+	// An empty taste map is therefore passed through as an empty map, not
+	// as nil, so the signal exists and has an opinion (it has none) rather
+	// than not existing at all.
+	taste := map[int32]float64{}
+	tasteEvidence := map[int32]float64{}
+	for _, o := range opts {
+		if o.sessionTaste != nil {
+			taste = o.sessionTaste
+			tasteEvidence = o.sessionTasteEvidence
+			break
+		}
+	}
+	sigs = append(sigs, signal.SessionTasteFrom(taste, tasteEvidence))
 
 	if !e.Lite {
 		sigs = append(sigs, signal.Embedding{

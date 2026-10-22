@@ -25,25 +25,45 @@ cross-lingual (§91), dream queries (§99). These need research infra not yet av
 
 ## 11 shipped features
 
-| # | Idea | Code path touched |
-|---|---|---|
-| S1 | Arena A/B framework — new `algo_comparison` kind via the existing arena schema | `internal/arena`, `internal/web/arena.html` |
-| S2 | Tag page "Similar Tags" sidebar | `internal/web/tag.html` (+ `/api/v1/tags/{id}/similar` exists) |
-| S3 | Author recommendations via tag-profile cosine similarity | new `Signal` author_profile + `/api/v1/authors/{id}/similar` |
-| S4 | Per-session implicit taste vector | reuse `seen_works` + arena judgement rows → tag weight vector, re-rank hook |
-| S5 | "Readers who bookmarked this also bookmarked" | `collab` matrix signal already computed; 1 SQL join on work_feedback |
-| S6 | Fandom-scoped arena (URL param passthrough) | `/api/v1/arena/pair?fandom=`, template change, one query param |
-| S7 | "Why this author?" evidence | add `author_tag_overlap` and `author_cosine` signals |
-| S8 | "More like this" button on every work card | change `work.html` to link `/recommend?seed=ao3_work:{id}` |
-| S9 | Offline eval harness `kindred eval` | new cmd `eval`, fold from existing ranked candidates against held-bookmark data |
-| S10 | Weighted tag matching with IDF | one function `tag_idf(tag_ids)` reused by tag_overlap's Jaccard cap |
-| S11 | Cross-fandom bridge works / pick a disliked fandom | reuse tag graph + exclusions; 1 endpoint |
+**THE AUDIT THAT CHANGED THIS TABLE.** Every one of the 11 was checked against the
+tree before a line was written, and **two were already built**: S2 (the tag page
+already renders "Tags that travel with it" from the CSR graph, via
+`d.neighbours(ctx, id)` in `internal/web/handlers.go:1832`) and S8 (the "rank
+from this" link already exists in the shared `workrow` template,
+`internal/web/assets/layout.html:159`). Claiming them as new work would have
+been a plan that lied about its own starting point.
 
-Excluding S9 because it is conceptually simple but writes to the user_work_interactions table
-which needs write permission review; it is deferred to this spec §10.2 and run as a follow-up
-command in this cycle. S9 shipped in the same feature-bundle as S1 A/B because the harness is
-the eval backbone; the user asked for the full pack though, so both are spec'd, S9's implementation
-runs in the next turn once the flag wiring exists.
+A third, S4, turned out to be **half-built**: `arena_user_tag_weights` stores
+per-reader tag preferences and `Store.TagWeights` reads them
+(`internal/store/arena.go:896`), and the arena already uses them to build pair
+preferences (`internal/api/arena.go:225`) — but the RECOMMENDER does not read
+them. The session taste vector exists as a learned artefact and is simply not
+wired into ranking. That is the cheapest real win in the set: the data is
+already there, the writer already runs.
+
+| # | Idea | Status after audit | Code path touched |
+|---|---|---|---|
+| S1 | Arena A/B framework | NEW | `internal/engine` (dual-rank), `internal/api` (route) |
+| S2 | Tag-page "Similar Tags" sidebar | **ALREADY BUILT** | — (verified, not rewritten) |
+| S3 | Author recommendations via tag-profile cosine | NEW | `internal/signal`, `internal/api` (route) |
+| S4 | Per-session implicit taste vector | **HALF-BUILT** — wire the existing `arena_user_tag_weights` into ranking | `internal/engine`, `internal/signal` |
+| S5 | "Readers who bookmarked this also bookmarked" | NEW | `internal/api` (route), `internal/web/assets/work.html` |
+| S6 | Fandom-scoped arena | NEW | `internal/api/arena.go`, `internal/web/assets/arena.html` |
+| S7 | "Why this author?" evidence | NEW | `internal/signal` (evidence strings for S3) |
+| S8 | "More like this" button on every work card | **ALREADY BUILT** | — (verified, not rewritten) |
+| S9 | Offline eval harness `kindred eval` | NEW | `cmd/kindred/eval.go`, `internal/eval` |
+| S10 | Weighted tag matching with IDF | NEW | `internal/signal` (idf-weighted overlap) |
+| S11 | Cross-fandom bridge works | NEW | `internal/api` (route) |
+
+S9 is in this cycle: the eval harness is the offline arm of the north star and
+it is a pure computation over tables that already exist (`works`, `work_tags`,
+`works.authors` bylines), so it needs no write path into the mirror.
+
+**What the audit cost and what it bought.** Two of eleven features were found
+already built and one half-built. That is a 27% reduction in the work, and it
+arrived before any code was written, which is the whole argument for auditing
+before planning. The features that remain are the ones the tree could not
+answer.
 
 ## Data model additions
 
