@@ -162,7 +162,25 @@ type Request struct {
 	Tune        string
 	MaxPerGroup int
 	GroupBy     string // "fandom", "tag", "author", or "" for none
-	PoolSize    int
+
+	// Lambda is the diversifier's relevance/diversity trade-off for this
+	// request, and it exists for ONE caller: the algorithm comparison.
+	//
+	// Zero means "the engine's default" (0.75), so every existing caller keeps
+	// exactly the ranking the site serves. 1.0 is pure relevance, which is
+	// what /algo and /api/v1/algo/compare ask for, because they compare WEIGHT
+	// VECTORS.
+	//
+	// The reason is measured, not aesthetic: MMR scores a candidate as
+	// lambda*score - (1-lambda)*similarity, so its novelty term is in the same
+	// units as the score. A fixed 0.25 penalty therefore weighs differently
+	// against a tune whose scores span 0.27-0.48 than against one whose scores
+	// span 1.03-1.24. On the fixture, two very different tunes produced the
+	// SAME five works in the SAME order -- the diversity pass dominated both,
+	// and a page promising "only the weights change" was showing the
+	// diversifier instead. Comparisons rank on relevance alone.
+	Lambda   float64
+	PoolSize int
 	// Exclude drops the seeds themselves from the results: nobody wants to
 	// be recommended the work they seeded from.
 	Exclude bool
@@ -710,9 +728,15 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 			Reason: "max-per-group was set but no group was chosen; pass group_by=fandom",
 		}
 	}
+	// 0.75 is the site's trade-off. A caller can raise it to 1.0 to rank on
+	// relevance alone; see Request.Lambda for why the comparison surfaces do.
+	lambda := req.Lambda
+	if lambda <= 0 || lambda > 1 {
+		lambda = 0.75
+	}
 	div := diversify.Apply(ranked, diversify.Options{
 		Requested:   n,
-		Lambda:      0.75,
+		Lambda:      lambda,
 		MaxPerGroup: req.MaxPerGroup,
 		GroupOf:     groupFn,
 		MMRK:        500,

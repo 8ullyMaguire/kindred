@@ -42,6 +42,11 @@ const PAGES = [
   // the same gap as the six parity pages: a route nothing visits cannot be
   // broken by a change nobody makes.
   { path: '/arena', link: '/arena', name: 'arena', title: /arena/i, heading: true },
+  // The algorithm comparison. It shipped with `Nav: "/algo"` in the registry
+  // and no link in layout.html, so it was reachable only by typing the URL —
+  // caught by goal-check.py's page-coverage clause, which is the only check
+  // that sees a route nothing visits.
+  { path: '/algo', link: '/algo', name: 'algo', title: /algorithms?/i, heading: true },
   { path: '/leaderboard', link: '/leaderboard', name: 'leaderboard', title: /leaderboard|rankings/i, heading: true },
   { path: '/my-ranking', link: '/my-ranking', name: 'my-ranking', title: /ranking/i, heading: true },
   { path: '/block', link: '/block', name: 'block', title: /block/i, heading: true },

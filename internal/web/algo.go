@@ -122,6 +122,12 @@ func (d Deps) renderAlgo(w http.ResponseWriter, r *http.Request) {
 			Exclude:  true,
 			N:        n,
 			PoolSize: pool,
+			// Pure relevance. The page asks which WEIGHT VECTOR ranks better,
+			// so the diversifier must not reshape either column: its novelty
+			// term shares the score's units, and a fixed penalty against
+			// differently-scaled tunes makes the diversity pass, not the
+			// weights, decide the order. See engine.Request.Lambda.
+			Lambda: 1,
 		})
 		if err != nil {
 			return nil, err

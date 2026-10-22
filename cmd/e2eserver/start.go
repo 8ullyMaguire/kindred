@@ -113,6 +113,23 @@ func start(ctx context.Context, dir, listen string) (string, error) {
 	}
 	eng.SetArenaRatings(ratings, median)
 
+	// A second algorithm, so /algo has something to compare against.
+	//
+	// A fresh state db holds no tunes, and /algo's whole subject is the
+	// difference between two weight vectors. With only "default" in the
+	// registry the page renders its form and can never be walked past it, so
+	// the two columns, the delta line and the vote would have no browser
+	// coverage at all. The weights are deliberately extreme (quality and
+	// recency only, and no overlap or neighbourhood) so the two lists differ
+	// on a 40-work fixture by construction rather than by luck.
+	if err := s.SaveTune(ctx, "quality-lean", map[string]float64{
+		"quality": 0.70,
+		"recency": 0.30,
+	}); err != nil {
+		ln.Close()
+		return "", fmt.Errorf("seed algo tune: %w", err)
+	}
+
 	srv := &api.Server{
 		Engine:    eng,
 		Store:     s,

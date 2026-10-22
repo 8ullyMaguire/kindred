@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -183,5 +184,80 @@ func TestJudgingFromTheFormRefusesAnUnknownChoice(t *testing.T) {
 	d.route(rec, post)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("POST /algo/judge with choice \"left\" = %d, want 400", rec.Code)
+	}
+}
+
+// columnScores reads the printed scores out of one /algo column, in document
+// order.
+//
+// The score is what a reader judges: each item prints `printf "%.2f" .Score`.
+// Reading it back from the rendered HTML rather than from the engine's result
+// is deliberate — the defect this pins lived entirely in the wiring (the page
+// asked the engine for a diversified ranking and then promised the reader that
+// only the weights differed), and a test of the handler's inputs would have
+// seen nothing wrong.
+func columnScores(t *testing.T, body, marker string) []float64 {
+	t.Helper()
+	i := strings.Index(body, marker)
+	if i < 0 {
+		t.Fatalf("no column marked %q in the page", marker)
+	}
+	rest := body[i:]
+	// The column ends where the next one begins.
+	if j := strings.Index(rest[1:], `class="algo-column"`); j >= 0 {
+		rest = rest[:j+1]
+	}
+	var out []float64
+	for _, field := range strings.Split(rest, `class="score">`)[1:] {
+		end := strings.IndexByte(field, '<')
+		if end < 0 {
+			continue
+		}
+		v, err := strconv.ParseFloat(strings.TrimSpace(field[:end]), 64)
+		if err != nil {
+			t.Fatalf("score %q is not a number: %v", field[:end], err)
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// TestTheAlgoColumnsAreOrderedByTheirWeights pins the page's central promise.
+//
+// The page says "both columns rank this same work, from the same candidate
+// pool: only the weights change". That was false: the engine ran the MMR
+// diversifier on both columns, and MMR subtracts a novelty penalty measured in
+// the score's own units. Two tunes producing different score magnitudes were
+// therefore penalised unequally, and the printed scores were not descending —
+// measured on the fixture, `default` and an extreme quality-only tune returned
+// the same five works in the same order, so the arena was asking a reader to
+// judge the diversifier.
+//
+// A column ordered by its weights has non-increasing scores by construction.
+// Anything else means something re-ordered the list after scoring, and the
+// reader is no longer looking at the algorithm.
+func TestTheAlgoColumnsAreOrderedByTheirWeights(t *testing.T) {
+	d, _ := algoDeps(t)
+
+	for _, pair := range []string{"a=default&b=quality", "a=quality&b=fresh", "a=fresh&b=default"} {
+		code, body := arenaBody(t, d, "/algo?seed=ao3_work:1&n=6&"+pair)
+		if code != http.StatusOK {
+			t.Fatalf("GET /algo?%s = %d: %s", pair, code, body)
+		}
+
+		for _, marker := range []string{`data-testid="algo-a"`, `data-testid="algo-b"`} {
+			scores := columnScores(t, body, marker)
+			if len(scores) < 3 {
+				t.Fatalf("%s&%s: %s has %d scored items; an ordering assertion would be vacuous",
+					pair, marker, marker, len(scores))
+			}
+			for i := 1; i < len(scores); i++ {
+				if scores[i] > scores[i-1] {
+					t.Fatalf("%s %s prints %v: item %d scores above item %d, so something "+
+						"re-ordered the column after scoring. The page promises only the weights differ.",
+						pair, marker, scores, i, i-1)
+				}
+			}
+		}
 	}
 }

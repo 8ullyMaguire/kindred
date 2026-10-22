@@ -117,6 +117,11 @@ func (s *Server) handleAlgoCompare(w http.ResponseWriter, r *http.Request) {
 			GroupBy:     "",
 			MaxPerGroup: 0,
 			PoolSize:    0,
+			// Pure relevance for the same reason as the page: a comparison
+			// asks which weight vector ranks better, and MMR's novelty term
+			// is scaled against the score, so it would decide the order for
+			// two tunes whose weights produce different score magnitudes.
+			Lambda: 1,
 		})
 		if err != nil {
 			return algoCompareResult{Algo: algo, Error: err.Error()}
