@@ -1,0 +1,136 @@
+# Ideas 31-100, audited one row at a time
+
+Status: **written 2026-10-22**, after the tier-2 audit (`PLAN-recsurfaces-tier2.md`).
+Supersedes that document's four buckets: it said 70 ideas were "grouped, not
+audited". This is the audit.
+
+## Method, because "not built" is a claim
+
+Every row was decided by looking for **the specific thing the idea names** — a
+route, a table, a signal, a runner, a template field — and not by a title-word
+grep. The grep-first method was measured as useless here: `follower`, `gallery`
+and `voice` hit nearly every file in the sibling project, and in this tree
+`rss` matches `PeakRSSKiB` only, while `series` matches JSON key names in
+`arena_handlers.go`.
+
+The three structural checks behind every OPEN row:
+
+| Check | What it can and cannot prove |
+|---|---|
+| Routes (`internal/web/registry.go`, `internal/api/server.go`) | A surface that is not routed is not reachable. A route that exists is not a feature: the page may render an empty state. |
+| Tables (`internal/store/*.go` `CREATE TABLE`) | The cheapest refutation of a premise: no `series` table means no series. |
+| Signals and runners (`internal/signal/*`, `internal/corpusquery/corpusquery.go`) | `rank.Score` sums whatever is registered; a score term that is not a registered signal cannot be in a ranking. |
+
+Four statuses:
+
+- **BUILT** — the tree does it; the row names where.
+- **PARTIAL** — the input or half the surface exists; the row names the half that does not.
+- **OPEN** — nothing in the tree computes it.
+- **NO PREMISE** — the thing the idea needs does not exist in this archive, and its
+  absence is a property of the mirror or the product, not a missing feature.
+
+## The table
+
+| # | Idea | Status | Evidence / what is missing |
+|---|---|---|---|
+| 31 | Tag trend detection (90-day vs corpus average) | OPEN | `corpusquery` has four runners — `FandomRanking`, `Underrated`, `TagNeighbours`, `Surprise` — and none compares time windows; `/eval` has no time slice. |
+| 32 | Completion-aware ranking | PARTIAL | Completion is a tri-state **filter** (`engine.Request.Complete`: `CompleteAny`/`CompleteOnly`/`CompleteWIP`) and a tag-page sort; no tune carries a completion weight. |
+| 33 | Multi-seed intersection scoring | OPEN | `rank.Score` sums per-signal values, and each signal scores against the **best** seed (`signal.go`: `"shares %d tags with seed %d"`), so matching 3/3 scores the same as 1/3 when the best seed overlaps equally. |
+| 34 | "Works this tag needs" gap analysis | OPEN | No writer-facing surface, and no query diffs a tag's neighbours against its own co-occurrence. |
+| 35 | Author-author co-readership | OPEN | `/api/v1/authors/similar` is **IDF-weighted tag-profile overlap** (`engine/authors.go`), not a co-bookmark matrix aggregated to authors. |
+| 36 | Session taste vector export/import | OPEN | No `/api/v1/taste`; session taste is derived per request (`signal/session_taste.go`) and never serialised. |
+| 37 | Tag hierarchy from embedding clusters | OPEN | `internal/tagfamily` holds a hand-written `families.json`; nothing clusters the embeddings into a tree. |
+| 38 | Quality-adjusted co-occurrence | PARTIAL | Co-occurrence edges are shrunk by `DefaultShrinkK` (`collab.go`) — evidence weighting, not per-work kudos weighting. |
+| 39 | Bayesian average for tag quality | OPEN | Shrinkage exists for collab lift only; no per-tag Bayesian average of kudos across a tag's works. |
+| 40 | Ordered "reading path" | OPEN | Candidates are scored independently; no sequential walk through embedding space. |
+| 41 | Length binning for similar-length recs | PARTIAL | `MinWords`/`MaxWords` filter and a `words` sort exist; no same-quartile boost inside a ranking. |
+| 42 | Calibrated recommendation confidence | PARTIAL | Every hit carries `Evidence{Signal, Value, Weight, Reason}` and the page prints it; there is no calibrated probability and no speculative/strong label. |
+| 43 | Anti-recommendations | OPEN | Nothing negates the taste vector. |
+| 44 | Seasonal/temporal context | OPEN | No tag→month mapping and no calendar term. |
+| 45 | Tag canonical form resolution | PARTIAL | `tagfamily` (embedded `families.json`) plus `fandom.base()` collapse variants; there is no alias table and the index is never merged. |
+| 46 | Per-fandom quality tracking | OPEN | `/eval` reports offline bookmarks, algo votes, interleave credits and coverage; no fandom slice. |
+| 47 | Work cluster labels | OPEN | No work-level clustering; embeddings are `kind='tag'` only. |
+| 48 | Reader velocity signal | OPEN | No session model: scoping is an owner key (`arena_sessions`), and nothing counts marks per visit. |
+| 49 | Tag polarity detection | PARTIAL | A reader can block a tag (`arena_user_blocked_tags`, `POST /block`) and blocks are honoured in ranking; nothing infers polarity corpus-wide from block/bookmark ratios. |
+| 50 | "Complete your collection" for an author | PARTIAL | `/author` lists an author's works and `/seen` excludes read ones; no "3 of 7 read, 4 to go" surface. |
+| 51 | Series-aware recommendations | NO PREMISE | No series column or table; AO3 series metadata is not crawled. |
+| 52 | Writing-style similarity via summary embeddings | OPEN | Embeddings are tag-level (`embeddings.kind='tag'`); there is no text model and no summary vector. |
+| 53 | Bradley-Terry vs Glicko | OPEN | Glicko-2 only (`internal/arena/glicko.go`); no BT fit and no rank-correlation comparison. |
+| 54 | Rich tag profile page | PARTIAL | `/tag/{id}` carries the count, the sorted works and a neighbours sidebar; no median kudos/words, no most-bookmarked work, no trend line. |
+| 55 | Explanation quality evaluation | OPEN | `/algo` compares two tunes' **result lists** and records a preference; two explanations are never shown side by side. |
+| 56 | Weighted tag matching with IDF | **BUILT** | `signal/idf_overlap.go`, plus document-frequency weighting in `engine/authors.go`. |
+| 57 | Cross-fandom bridge works | **BUILT** | `engine/bridges.go` + `/api/v1/works/{id}/bridges`, kudos-capped scan, other-fandom names as the reason. |
+| 58 | Productivity vs quality scatter | OPEN | No scatter surface; `/fandoms` and `/author` print numbers, not a plot. |
+| 59 | t-SNE/UMAP tag map | OPEN | No projection and no `/tag-map`. |
+| 60 | "Works you keep avoiding" | OPEN | `interleave_impressions` now records what was shown (`store/interleave.go`), so the input exists; nothing reads it as "shown, never marked". |
+| 61 | RSS feed of recommendations | OPEN | No `/feed`; the tree serves no XML document (the only `rss` match is `PeakRSSKiB`). |
+| 62 | OpenSearch descriptor | OPEN | No `/opensearch.xml` route. |
+| 63 | Jaccard co-occurrence similarity | **BUILT** | `signal.go` computes and prints a Jaccard ratio; `TagNeighbours` ranks by PMI; `idf_overlap.go` is the weighted variant. |
+| 64 | "Tag DNA" distinctive tags | OPEN | `WorkHit` carries tags but nothing selects the low-IDF ones as a work's fingerprint. |
+| 65 | "New since your last visit" | OPEN | `seen_works` is a set, not a cursor; no `first_seen` comparison per reader. |
+| 66 | Author recs from a single work | PARTIAL | `/api/v1/authors/similar` exists (`engine/authors.go`); the work page does not link to it and no template renders it (`grep` for `authors/similar` in `work.html`/`handlers.go`: 0). |
+| 67 | Smart default seeds for new readers | OPEN | `/recommend` with no seeds renders the empty form on purpose (`handlers.go:2239`). |
+| 68 | Tag "temperature" (contested tags) | OPEN | No per-tag variance over comparisons. |
+| 69 | Work controversy score | OPEN | `arena_entity_history` holds per-entity history; nothing computes a divisiveness score from it. |
+| 70 | Batch arena with keyboard shortcuts | **BUILT** | `/api/v1/arena/batch` + the speed round in the arena UI. |
+| 71 | Per-tag recommendation quality leaderboard | OPEN | `/eval` has no per-tag slice. |
+| 72 | Embedding dimension search | PARTIAL | `kindred embed --dim` exists (default 32, `embedcmd.go:47`); eval runs never vary it, so no width is compared. |
+| 73 | Multi-objective Pareto ranking | OPEN | One scalar score; no dominance relation. |
+| 74 | Random walks (personalised PageRank) | OPEN | No walk; ranking is overlap/affinity/collab signals. |
+| 75 | Cross-fandom trope transfer | OPEN | Bridges surface works that **are** in both fandoms; "same non-fandom tags, a different fandom" is a different query and no runner does it. |
+| 76 | Embedding drift monitoring | OPEN | `embedcmd` rewrites `embeddings`; nothing compares old and new vectors. |
+| 77 | Tag suggestions for writers | OPEN | No writer surface. |
+| 78 | Work-pair similarity API | OPEN | No `/works/{id}/similarity/{other}`. |
+| 79 | Recommendation diversity metric | PARTIAL | `diversify` enforces MMR and per-group caps and reports what it dropped; `eval_runs` stores recall/NDCG only, so intra-list diversity is not tracked over time. |
+| 80 | Seasonal tag auto-detection | OPEN | No temporal frequency model over tags. |
+| 81 | Federated taste profiles | OPEN | `dump`/`fetch` move mirror snapshots (`cmd/kindred/dumpcmd.go`); no taste vector is exchanged. |
+| 82 | Bandit-based exploration | OPEN | No exploration policy and no reward stream. |
+| 83 | Transfer from AO3's wrangling graph | OPEN | `families.json` is hand-written; no synonym supervision and no contrastive training. |
+| 84 | Counterfactual evaluation | OPEN | `interleave_impressions` stores the alternative only as the other algorithm's pick; no IPS estimator reads it. |
+| 85 | Causal inference for impact | OPEN | No instrument, no estimator. |
+| 86 | Bandit weight optimisation | OPEN | Weights are hand-set per tune (`store/tunes.go`) and compared by `/algo` votes. |
+| 87 | Graph neural network | OPEN | Embeddings are truncated SVD by power iteration (`embedcmd --iters`), which is the thing a GCN would replace. |
+| 88 | Attention-based multi-seed fusion | OPEN | Multi-seed handling is per-signal best-seed, not learned weights. |
+| 89 | Implicit-feedback matrix factorisation (ALS) | PARTIAL | Collab is item-item cosine over co-bookmarks (`internal/collab`) — counting, not factorisation. |
+| 90 | Reinforcement learning for sequences | OPEN | No session MDP. |
+| 91 | Cross-lingual recommendations | OPEN | One language in the corpus; no multilingual vectors. |
+| 92 | LLM-generated explanations | OPEN | Explanations are structured evidence strings (`Evidence.Reason`), never generated prose. |
+| 93 | Fairness auditing | OPEN | No group attributes are collected, by design. |
+| 94 | Social recommendation layer | OPEN | No cross-instance identity and no social graph. |
+| 95 | Work lifecycle prediction | OPEN | No per-work crawl time series to fit. |
+| 96 | Variable embedding dimension per tag | OPEN | One width for every row (`embeddings.dim`). |
+| 97 | Haptic mobile arena | NO PREMISE | The product is HTTP-only with no JavaScript (SPEC §1.1) and there is no mobile app. |
+| 98 | Narrative arc matching | NO PREMISE | The mirror stores no chapter structure. |
+| 99 | Natural-language query | OPEN | The query language is structured (`tag:`, `words:`, `kudos:`); no model maps prose onto it. |
+| 100 | Autonomous recommendation agent | NO PREMISE | No runtime, no product basis, and it would need a taste model that does not exist. |
+
+## Counted
+
+| Status | Count | Ideas |
+|---|---|---|
+| BUILT | 4 | 56, 57, 63, 70 |
+| PARTIAL | 12 | 32, 38, 41, 42, 45, 49, 50, 54, 66, 72, 79, 89 |
+| OPEN | 50 | 31, 33, 34, 35, 36, 37, 39, 40, 43, 44, 46, 47, 48, 52, 53, 55, 58, 59, 60, 61, 62, 64, 65, 67, 68, 69, 71, 73, 74, 75, 76, 77, 78, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| NO PREMISE | 4 | 51, 97, 98, 100 |
+
+With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
+open of 30), the whole list stands at **22 built, 13 partial, 61 open, 4 without
+a premise** — 100 accounted for.
+
+## What the audit changed about the group story
+
+1. **The embeddings are built and used, and still have no enumeration.** Every
+   recommendation scores an `embedding` signal at weight 0.10 (`engine.go:476`,
+   `signal.Embedding`, seed vector = mean of the seeds' vectors) — that is idea
+   29, and it shipped in the tier-1/2 work. What does not exist is any query
+   that *enumerates* the vector space: no K-nearest-tags endpoint (11), no 2-D
+   projection (59), no drift check (76), no width search (72) and no per-tag
+   width (96). The vectors are here; the scans over them are not.
+2. **Impressions now exist**, so two ideas that were previously impossible are
+   merely unbuilt: 60 (shown but never marked) and 84 (counterfactual). The
+   interleave table records the alternative, which is exactly the counterfactual.
+3. **Four ideas were already built and were being counted as open** in the
+   group text: 56 (IDF), 57 (bridges), 63 (Jaccard/PMI), 70 (batch arena).
+4. **The cheapest genuinely-open ideas are eval slices, not rankers**: 46 and 71
+   are one `GROUP BY` each on data `eval_runs` already stores; 33 and 65 are
+   small scoring/reading changes; 64 is a sort. None of them needs a new signal.

@@ -51,30 +51,22 @@ the "high score" half of the list.
 | 29 | Embedding-based work similarity | **built** | `embedding` signal + embedding neighbours |
 | 30 | Reader cohort clustering | not built | needs ~100 sessions; no clustering step |
 
-Ideas 31-100 were not audited row by row. They fall into four groups and the
-grouping is the useful part:
+Ideas 31-100 are audited row by row in **`PLAN-recsurfaces-31-100.md`**. What
+that audit found, and what this grouping got wrong:
 
-- **Already covered by an existing surface** (31 trends, 32 completion sort,
-  40 reading path, 50 author completion, 54 tag profile, 63 Jaccard, 65 new
-  since last visit, 66 more-by-author, 67 defaults for new readers): each is a
-  small query plus a template, and each is a separate decision about where it
-  goes rather than a new mechanism.
-- **Needs a signal that does not exist yet** (33 multi-seed intersection, 38
-  quality-weighted co-occurrence, 39 Bayesian tag quality, 41 length
-  bucketing, 42 confidence, 48 reader velocity, 49 tag polarity): cheaper than
-  they look, because signals are pure functions with a registry, but each one
-  needs an offline eval run before it earns a weight.
-- **Needs machinery this project deliberately does not have** (52 sentence
-  embeddings, 59 t-SNE map, 74 random walks, 82 bandits, 87 GCN, 89 ALS, 90
-  RL, 92 LLM explanations): a model, a training loop, or a runtime dependency.
-  The HTTP-only, no-JavaScript, single-binary constraint (SPEC §1.1) makes
-  most of them a different project.
-- **Rejected as measurement theatre** (60 "works you keep avoiding" needs
-  impression logs that only exist for interleaved lists; 71 per-tag rec
-  quality needs the same; 76 embedding drift needs a baseline per run; 84/85
-  counterfactuals and causal inference need randomised assignment at a scale
-  this deployment will never have). Building these would produce numbers
-  nobody could act on.
+- **4 are built, not grouped**: 56 (IDF, `signal/idf_overlap.go`), 57 (bridges,
+  `engine/bridges.go`), 63 (Jaccard/PMI), 70 (`/api/v1/arena/batch`).
+- **12 are partial**, not "needs a signal": the input exists and the surface or
+  the weight does not (32 completion filter without a rank term, 41 words filter
+  without binning, 45 `tagfamily` without an alias table, 49 blocks without
+  polarity, 66 the author API without a link, 79 MMR without a diversity metric).
+- **50 are genuinely open** and 4 have no premise in this archive (51 series,
+  97 haptics, 98 chapter arcs, 100 an agent).
+- Two rows this section called "theatre" are now merely unbuilt, because
+  `interleave_impressions` records what was shown: 60 (shown, never marked) and
+  84 (the counterfactual is the other algorithm's pick).
+- The sentence "31 trends, 32 completion sort, 40 reading path … are already
+  covered" was wrong in five of nine cases: none of 31, 40, 50, 65, 67 exists.
 
 ## 1a. What is left, counted (2026-10-22, after tier 2 shipped)
 
