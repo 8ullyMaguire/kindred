@@ -983,9 +983,12 @@ func parseWorksFilters(q url.Values) ([]worksFilter, error) {
 	// something from each side.
 	//
 	// A family key rather than a raw tag list, because every surface
-	// of this feature speaks one vocabulary: the works API, the
-	// /api/v1/browse endpoint, the `kindred browse` CLI and the /browse
-	// page all take "worm" and "isekai". A raw ad-hoc tag is what the
+	// of this feature speaks one vocabulary: this endpoint, the family
+	// fieldset on /search, and the `kindred browse` CLI all take
+	// "worm" and "isekai". (The standalone /browse page and the
+	// /api/v1/browse endpoint that mirrored it were folded here on
+	// 2026-10-22; this endpoint already answered the intersection, so
+	// the second one was a duplicate.) A raw ad-hoc tag is what the
 	// EXISTING `tag` filter is for, and it still works; `universe` and
 	// `concept` are the declared, named families.
 	//
