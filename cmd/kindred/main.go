@@ -31,6 +31,7 @@ commands:
   rate      fold one like/dislike into a profile (alias for 'profile rate')
   corpus-query  ask a question about the corpus (fandom-ranking, underrated, tag-neighbours)
   browse      recent works matching a fandom family and a concept family
+  eval      score the recommender against held-out bookmarks (recall@K, NDCG@K)
   stats     print corpus and index statistics
   dump      write an anonymised, signed snapshot for peers
   verify    verify a snapshot's signature and hashes
@@ -78,6 +79,8 @@ func main() {
 		err = runCorpusQuery(ctx, config.Load().CorpusDB, args)
 	case "browse":
 		err = runBrowse(ctx, config.Load().CorpusDB, args)
+	case "eval":
+		err = runEval(ctx, args)
 	case "stats":
 		err = runStats(ctx, args)
 	case "dump":
