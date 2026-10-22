@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/collab"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
@@ -31,9 +32,16 @@ func (r engineRecommender) Recommend(ctx context.Context, seeds []int64, n int) 
 		Kind:    corpus.AO3Kind,
 		N:       n,
 		Exclude: true,
+		// Every training bookmark is seen, not just the seeds. The question
+		// is whether the recommender finds works this reader has NOT kept;
+		// leaving the other training bookmarks in the pool lets them take
+		// slots from the held-out works and depresses recall for a reason
+		// that has nothing to do with ranking quality.
+		SeenIDs: make(map[string]bool, len(seeds)),
 	}
 	for _, id := range seeds {
 		req.Seeds = append(req.Seeds, engine.Seed{Kind: corpus.AO3Kind, ID: id})
+		req.SeenIDs[corpus.AO3Kind+":"+strconv.FormatInt(id, 10)] = true
 	}
 	res, err := r.eng.Recommend(ctx, req)
 	if err != nil {
