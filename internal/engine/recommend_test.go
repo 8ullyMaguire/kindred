@@ -172,7 +172,10 @@ func TestMaxPerGroupWithNoGroupChosenIsReported(t *testing.T) {
 func TestRecommendReturnsUsableItems(t *testing.T) {
 	e := newFixtureEngine(t)
 	res, err := e.Recommend(context.Background(), Request{
-		Kind: "ao3_work", Seeds: []Seed{{Kind: "ao3_work", ID: 1}}, N: 5,
+		Kind:    "ao3_work",
+		Seeds:   []Seed{{Kind: "ao3_work", ID: 1}},
+		Exclude: true,
+		N:       5,
 	})
 	if err != nil {
 		t.Fatal(err)

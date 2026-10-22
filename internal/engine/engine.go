@@ -494,6 +494,17 @@ func DefaultTune() rank.Tune {
 			// weights keep their ratios and the ranking is identical to
 			// one compiled before this signal existed.
 			"session_taste": 0.14,
+			// idf_overlap is tag_overlap with the weight of each shared
+			// tag scaled by its rarity. It answers a different question
+			// from tag_overlap — "do these agree on the parts that
+			// discriminate" rather than "how much do these overlap" —
+			// so it gets its own weight rather than replacing one.
+			//
+			// It is below tag_overlap because it is the more brittle of
+			// the two: with a sparse corpus it can find no rare shared
+			// tag at all and skip, where tag_overlap always has an
+			// opinion. A tune can raise it on a large mirror.
+			"idf_overlap": 0.12,
 		},
 	}
 }
@@ -623,6 +634,19 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("load candidate tags: %w", err)
 	}
 
+	// The document frequencies the IDF-weighted overlap signal needs.
+	//
+	// They are computed ONCE, here, over the pool's own tag ids — never
+	// per candidate. The corpus's work_tags table holds tens of millions
+	// of rows, and a full-table GROUP BY per request would put every
+	// ranking behind a full scan.
+	//
+	// A failure to read them is NOT fatal: the signal then has no
+	// frequencies, every tag looks maximally rare, and the signal skips
+	// for candidates whose shared tags carry no mass. The ranking
+	// degrades to the other signals rather than failing.
+	docFreq, corpusTotal := e.docFrequencies(ctx, cands)
+
 	// Signals.
 	// The named tune is resolved HERE, before any signal runs, so an unknown
 	// name is a visible error rather than a ranking by weights the reader
@@ -637,6 +661,8 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 		signalOptions{
 			sessionTaste:         req.SessionTaste,
 			sessionTasteEvidence: req.SessionTasteEvidence,
+			docFreq:              docFreq,
+			corpusTotal:          corpusTotal,
 		})
 	ranked, meta, err := rank.Score(ctx, cands, seeds, sigs, tune, e)
 	if err != nil {
@@ -1245,6 +1271,8 @@ func filterSQL(f Filter, args *[]any) string {
 type signalOptions struct {
 	sessionTaste         map[int32]float64
 	sessionTasteEvidence map[int32]float64
+	docFreq              map[int32]float64
+	corpusTotal          float64
 }
 
 func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, collabScale float64, overrides map[string]float64, tuneName string, personal bool, opts ...signalOptions) ([]rank.Signal, rank.Tune) {
@@ -1389,6 +1417,28 @@ func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, 
 	}
 	sigs = append(sigs, signal.SessionTasteFrom(taste, tasteEvidence))
 
+	// idf_overlap weights tag agreement by how RARE each shared tag is.
+	// It is registered unconditionally for the same reason as the rest: a
+	// signal that is only present when it has data is a signal that is
+	// absent without saying so.
+	//
+	// The document frequencies come from the corpus, computed once per
+	// request over the pool's own tags — not a scan of the whole
+	// work_tags table, which holds tens of millions of rows.
+	docFreq := map[int32]float64{}
+	corpusTotal := 0.0
+	for _, o := range opts {
+		if o.docFreq != nil {
+			docFreq = o.docFreq
+			corpusTotal = o.corpusTotal
+			break
+		}
+	}
+	sigs = append(sigs, signal.IDFWeightedOverlap{
+		DocFreq: docFreq,
+		Total:   corpusTotal,
+	})
+
 	if !e.Lite {
 		sigs = append(sigs, signal.Embedding{
 			Store:   e,
@@ -1400,6 +1450,46 @@ func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, 
 		tune.Weights = renormalise(tune.Weights, "embedding")
 	}
 	return sigs, tune
+}
+
+// docFrequencies returns how many works carry each tag in the candidate
+// pool, and the corpus's total work count.
+//
+// It is computed once per request, over the pool's own tag ids. The
+// alternative — counting every tag in the corpus — is a full aggregate over
+// a table with tens of millions of rows, and it would run on every
+// recommendation.
+//
+// A failure returns empty maps rather than an error: the IDF signal then
+// has no frequencies, treats every tag as maximally rare, and skips for
+// candidates whose shared tags carry no mass. The ranking degrades to its
+// other signals instead of failing, which is the right trade for a
+// refinement dimension.
+func (e *Engine) docFrequencies(ctx context.Context, cands []rank.Candidate) (map[int32]float64, float64) {
+	if e.Corpus == nil || len(cands) == 0 {
+		return map[int32]float64{}, 0
+	}
+	// Deduplicate: a pool of 500 candidates can carry tens of thousands of
+	// tag ids with heavy repetition, and the query's IN list wants the
+	// distinct set.
+	seen := make(map[int32]bool)
+	ids := make([]int32, 0, len(cands)*8)
+	for _, c := range cands {
+		for _, id := range c.TagIDs {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return map[int32]float64{}, 0
+	}
+	freq, total, err := e.Corpus.TagDocFreq(ctx, ids)
+	if err != nil {
+		return map[int32]float64{}, 0
+	}
+	return freq, total
 }
 
 // collabNeighbourLimit converts the engine's generic TopN into the

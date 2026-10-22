@@ -236,6 +236,78 @@ func (a *AO3) TagPairs(ctx context.Context, ids []int64) (map[int64][]TagPair, e
 	return out, rows.Err()
 }
 
+// TagDocFreq returns how many works carry each of the given tag ids, and
+// the total number of works in the corpus.
+//
+// It exists for the IDF-weighted overlap signal, which needs to know how
+// common each tag is before it can decide whether a shared tag means
+// anything. A tag on 40,000 of 112,935 works discriminates nothing; a tag
+// on 40 discriminates a great deal.
+//
+// The query is driven by the CALLER's tag list, not by a scan of the whole
+// work_tags table: the corpus's work_tags holds tens of millions of rows
+// and counting all of them per request would put the ranking behind a
+// full-table aggregate. Restricting to the tags actually present in the
+// candidate pool uses idx_work_tags_tag_id and stays bounded by the pool.
+//
+// The total is COUNT(*) over works, which is a small table and cheap.
+//
+// It returns a map and a total; a tag absent from the map has a frequency
+// of zero, which the signal treats as maximally rare (a table-completeness
+// gap, not an error).
+func (a *AO3) TagDocFreq(ctx context.Context, tagIDs []int32) (map[int32]float64, float64, error) {
+	var total float64
+	if err := a.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM works`).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("work count: %w", err)
+	}
+	out := map[int32]float64{}
+	if len(tagIDs) == 0 {
+		return out, total, nil
+	}
+
+	// SQLite's variable limit is 999 by default, so the tag list is
+	// chunked. The corpus has 634K tags and a full-pool request can carry
+	// tens of thousands of them.
+	const chunk = 500
+	for start := 0; start < len(tagIDs); start += chunk {
+		end := start + chunk
+		if end > len(tagIDs) {
+			end = len(tagIDs)
+		}
+		part := tagIDs[start:end]
+		args := make([]any, 0, len(part))
+		marks := make([]byte, 0, len(part)*2)
+		for i, id := range part {
+			if i > 0 {
+				marks = append(marks, ',')
+			}
+			marks = append(marks, '?')
+			args = append(args, int64(id))
+		}
+		rows, err := a.DB.QueryContext(ctx,
+			`SELECT tag_id, COUNT(*) FROM work_tags
+			 WHERE tag_id IN (`+string(marks)+`) GROUP BY tag_id`, args...)
+		if err != nil {
+			return nil, 0, fmt.Errorf("tag doc freq: %w", err)
+		}
+		for rows.Next() {
+			var id int64
+			var n float64
+			if err := rows.Scan(&id, &n); err != nil {
+				rows.Close()
+				return nil, 0, err
+			}
+			out[int32(id)] = n
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
+}
+
 // CandidateRows loads works with their tags in one pass — no N+1. Ranking
 // pulls thousands of candidates per request, so a per-candidate tag
 // query is the single largest avoidable cost in the engine.
