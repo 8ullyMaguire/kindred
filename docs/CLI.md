@@ -80,6 +80,24 @@ that does, after the index is built. This is deliberate: embedding is a
 separate multi-minute step with its own memory profile, and folding it in would
 make `ingest` a two-phase command whose peak nobody measured.
 
+`ingest` also writes the **document-frequency table**,
+`<corpus>.docfreq`, beside the mirror — one covering-index scan over
+`work_tags`. The `idf_overlap` signal needs it to know how common each tag is,
+and reading it per request is not affordable: the equivalent query costs
+12.5 s on the real mirror, while building the file costs 14.5 s once and
+loading it 68 ms. The file is a side file, not a table in the mirror, because
+the server opens the mirror read-only.
+
+A mirror with no `.docfreq` file still serves. The signal then SKIPS and names
+itself in `meta.degraded`, rather than silently ranking as if every tag were
+equally rare. Re-run `ingest` after a crawl that adds works, or a new tag's
+frequency stays missing and is treated as maximally rare.
+
+```bash
+# what it prints
+docfreq tags=634231 works=112935 bytes=5073868 /path/to/ao3_metadata.db.docfreq
+```
+
 ## `embed` — build the tag embedding
 
 Not yet documented above because every one of its flags is either global or

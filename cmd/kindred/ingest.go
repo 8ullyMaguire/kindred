@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/budget"
+	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
@@ -74,6 +75,24 @@ func runIngest(ctx context.Context, args []string) error {
 	if err := log(ctx, "index", fmt.Sprintf(
 		"nodes=%d edges=%d kept=%d tags_in=%d top_n=%d csr_bytes=%d",
 		res.Nodes, res.Edges, res.KeptEdges, res.TagsIn, res.TopN, res.CSRBytes)); err != nil {
+		return err
+	}
+
+	// Document frequencies. One covering-index scan, written beside the
+	// mirror as a side file.
+	//
+	// It is built here, in the ingest, because it is a property of the
+	// corpus that does not change until the corpus does. Measured on the
+	// real mirror: 29.7 s for the scan against 12.5 s PER REQUEST for the
+	// equivalent query restricted to one request's tags — the second is
+	// what made every recommendation slower than a reader will wait.
+	tags, works, err := corpus.BuildDocFreq(ctx, s.Corpus, c.CorpusDB)
+	if err != nil {
+		return fmt.Errorf("build doc frequency: %w", err)
+	}
+	fmt.Printf("docfreq tags=%d works=%.0f bytes=%d %s\n",
+		tags, works, docFreqBytes(tags), corpus.DocFreqPath(c.CorpusDB))
+	if err := log(ctx, "docfreq", fmt.Sprintf("tags=%d works=%.0f", tags, works)); err != nil {
 		return err
 	}
 
@@ -204,3 +223,8 @@ func max(a, b int64) int64 {
 	}
 	return b
 }
+
+// docFreqBytes is the size the written table will take: a 20-byte header plus
+// 8 bytes per tag. Printed so an operator can see the side file they are
+// about to leave beside the mirror.
+func docFreqBytes(tags int) int { return 20 + tags*8 }

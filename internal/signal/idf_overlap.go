@@ -61,9 +61,6 @@ func (s IDFWeightedOverlap) Name() string { return "idf_overlap" }
 // frequency table is a table-completeness gap, not a reason to fail the
 // whole ranking.
 func (s IDFWeightedOverlap) idf(id int32) float64 {
-	if s.Total <= 1 {
-		return 1
-	}
 	df, ok := s.DocFreq[id]
 	if !ok || df <= 0 {
 		return math.Log(s.Total)
@@ -80,6 +77,18 @@ func (s IDFWeightedOverlap) idf(id int32) float64 {
 // candidate is a good match if it matches ONE of the seeds well, not if it
 // matches all of them diffusely.
 func (s IDFWeightedOverlap) Score(c rank.Candidate, seeds []rank.Candidate, _ rank.Store) (float64, string, error) {
+	// No frequency table means no way to tell a rare tag from a universal
+	// one. SKIP rather than score: cosine over unweighted tags is what
+	// tag_overlap already does, and answering with a duplicate under a
+	// different name would tell the reader two signals agreed when one of
+	// them never ran.
+	//
+	// rank.Meta reports a signal that skips for every candidate in
+	// `degraded`, so the response names this rather than hiding it. The
+	// table is built by `kindred ingest`.
+	if s.Total <= 1 || len(s.DocFreq) == 0 {
+		return 0, "", rank.ErrSkip
+	}
 	if len(c.TagIDs) == 0 || len(seeds) == 0 {
 		return 0, "", rank.ErrSkip
 	}

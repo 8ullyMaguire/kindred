@@ -30,7 +30,12 @@ import (
 type Engine struct {
 	Store  *store.Store
 	Corpus *corpus.AO3
-	Graph  *graph.CSR
+
+	// DocFreq is the loaded document-frequency table, or nil when this
+	// mirror has not been ingested. It is a table rather than a query: see
+	// docFrequencies.
+	DocFreq *corpus.DocFreq
+	Graph   *graph.CSR
 
 	// PoolSize bounds the candidate set. Ranking tens of thousands of
 	// entities per request is what the previous deployment did and it is
@@ -645,7 +650,7 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 	// frequencies, every tag looks maximally rare, and the signal skips
 	// for candidates whose shared tags carry no mass. The ranking
 	// degrades to the other signals rather than failing.
-	docFreq, corpusTotal := e.docFrequencies(ctx, cands)
+	docFreq, corpusTotal := e.docFrequencies()
 
 	// Signals.
 	// The named tune is resolved HERE, before any signal runs, so an unknown
@@ -1452,44 +1457,23 @@ func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, 
 	return sigs, tune
 }
 
-// docFrequencies returns how many works carry each tag in the candidate
-// pool, and the corpus's total work count.
+// docFrequencies returns the corpus's document-frequency table.
 //
-// It is computed once per request, over the pool's own tag ids. The
-// alternative — counting every tag in the corpus — is a full aggregate over
-// a table with tens of millions of rows, and it would run on every
-// recommendation.
+// It is LOADED, never computed. The first version queried work_tags per
+// request and cost 12.5 s on the real mirror — every recommendation, not
+// only /algo, which is a regression no unit test could see because the
+// fixtures are small. The table is built once by `kindred ingest` and read
+// from a side file beside the mirror.
 //
-// A failure returns empty maps rather than an error: the IDF signal then
-// has no frequencies, treats every tag as maximally rare, and skips for
-// candidates whose shared tags carry no mass. The ranking degrades to its
-// other signals instead of failing, which is the right trade for a
-// refinement dimension.
-func (e *Engine) docFrequencies(ctx context.Context, cands []rank.Candidate) (map[int32]float64, float64) {
-	if e.Corpus == nil || len(cands) == 0 {
+// A nil index means this mirror has never been ingested. The IDF signal then
+// skips for every candidate, which rank.Meta reports in `degraded` by name:
+// the response says the signal did not run rather than ranking as if rarity
+// meant nothing.
+func (e *Engine) docFrequencies() (map[int32]float64, float64) {
+	if e == nil || e.DocFreq == nil {
 		return map[int32]float64{}, 0
 	}
-	// Deduplicate: a pool of 500 candidates can carry tens of thousands of
-	// tag ids with heavy repetition, and the query's IN list wants the
-	// distinct set.
-	seen := make(map[int32]bool)
-	ids := make([]int32, 0, len(cands)*8)
-	for _, c := range cands {
-		for _, id := range c.TagIDs {
-			if !seen[id] {
-				seen[id] = true
-				ids = append(ids, id)
-			}
-		}
-	}
-	if len(ids) == 0 {
-		return map[int32]float64{}, 0
-	}
-	freq, total, err := e.Corpus.TagDocFreq(ctx, ids)
-	if err != nil {
-		return map[int32]float64{}, 0
-	}
-	return freq, total
+	return e.DocFreq.ByTag, e.DocFreq.Total
 }
 
 // collabNeighbourLimit converts the engine's generic TopN into the

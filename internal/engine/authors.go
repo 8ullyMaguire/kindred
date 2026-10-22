@@ -301,20 +301,18 @@ func (e *Engine) authorWorkIDs(ctx context.Context, author string) ([]int64, err
 	return out, rows.Err()
 }
 
-// docFrequenciesForTagIDs reads document frequencies for a profile, degrading
-// to zero rather than failing the request. A similarity with no frequencies is
-// a plain tag count, which is worse but not a wrong answer.
-func (e *Engine) docFrequenciesForTagIDs(ctx context.Context, profile map[int32]float64) (map[int32]float64, float64) {
-	ids := make([]int32, 0, len(profile))
-	for id := range profile {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	freq, total, err := e.Corpus.TagDocFreq(ctx, ids)
-	if err != nil {
+// docFrequenciesForTagIDs returns the document-frequency table for the
+// author-similarity profile.
+//
+// It reads the LOADED table, not a query: the query cost 12.5 s per request
+// on a real mirror, and the author page would have been slower still. A nil
+// table returns empty, and the caller degrades to a plain tag count, which
+// is worse but not a wrong answer.
+func (e *Engine) docFrequenciesForTagIDs(_ context.Context, _ map[int32]float64) (map[int32]float64, float64) {
+	if e == nil || e.DocFreq == nil {
 		return map[int32]float64{}, 0
 	}
-	return freq, total
+	return e.DocFreq.ByTag, e.DocFreq.Total
 }
 
 // idfOf is the same correction the IDF-weighted work signal uses, kept local

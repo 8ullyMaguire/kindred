@@ -154,6 +154,24 @@ func runServe(ctx context.Context, args []string) error {
 	if !lite {
 		poolSize = engine.FullPoolSize
 	}
+	// The document-frequency table, loaded once so the IDF-weighted overlap
+	// signal is a map lookup per tag rather than a query per request.
+	//
+	// The equivalent query cost 12.5 s on a real mirror for one request's
+	// worth of tags, which is the whole reason it is precomputed. A missing
+	// file is not fatal: the signal skips and the response names it in
+	// meta.degraded, which is the honest answer for a mirror that has never
+	// been ingested.
+	var docFreq *corpus.DocFreq
+	if df, dfErr := corpus.LoadDocFreq(c.CorpusDB); dfErr != nil {
+		if !errors.Is(dfErr, os.ErrNotExist) {
+			fmt.Printf("docfreq: %v\n", dfErr)
+		}
+		fmt.Printf("no document-frequency table at %s; idf_overlap will skip — run \"kindred ingest\"\n",
+			corpus.DocFreqPath(c.CorpusDB))
+	} else {
+		docFreq = df
+	}
 	eng := &engine.Engine{
 		Store:    s,
 		Corpus:   ao3,
@@ -163,6 +181,7 @@ func runServe(ctx context.Context, args []string) error {
 		TopN:     c.TopN,
 		Lite:     lite,
 		EmbedDim: embedDim,
+		DocFreq:  docFreq,
 	}
 
 	// The arena's ratings, loaded once at startup so the peer_rating signal

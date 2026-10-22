@@ -307,9 +307,35 @@ func openMirrorForWrite(c *config.Config) (*sql.DB, error) {
 	if c.CorpusDB == "" {
 		return nil, errors.New("crawl: no corpus configured; pass --corpus PATH")
 	}
-	db, err := sql.Open("sqlite", c.CorpusDB)
+	db, err := sql.Open("sqlite", "file:"+c.CorpusDB+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("crawl: open mirror %s: %w", c.CorpusDB, err)
+	}
+	// PROVE the mirror takes a write lock before handing this handle to a
+	// crawler that will otherwise fail one job at a time, forever.
+	//
+	// sql.Open does not touch the file, so a mirror that cannot be written
+	// opens perfectly and every write then fails with "attempt to write a
+	// readonly database". Measured on this deployment: a corpus on an sshfs
+	// mount produced that warning on EVERY fetched work — five jobs, five
+	// identical failures — while the crawler kept fetching from AO3 and
+	// filling the queue. The costs are real (requests to the archive, parse
+	// work, a permanently-dirty queue) and the message reads like a
+	// transient error.
+	//
+	// BEGIN IMMEDIATE actually acquires the write lock and releases it
+	// again, which is the exact capability the crawler needs. On a mirror
+	// that cannot take it, this returns an error the caller turns into ONE
+	// clear "auto-crawl disabled" line.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if _, err := db.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("crawl: mirror %s cannot be written: %w", c.CorpusDB, err)
+	}
+	if _, err := db.ExecContext(ctx, "ROLLBACK"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("crawl: mirror %s: %w", c.CorpusDB, err)
 	}
 	return db, nil
 }

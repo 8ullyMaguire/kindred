@@ -153,6 +153,40 @@ func TestIDFOverlapTreatsAnUnknownTagAsRare(t *testing.T) {
 	}
 }
 
+func TestIDFOverlapSkipsWithoutADocumentFrequencyTable(t *testing.T) {
+	// The mirror has not been ingested, so there is no way to tell a rare
+	// tag from a universal one. The signal must SKIP, not fall back to
+	// unweighted overlap: answering with a duplicate of tag_overlap under a
+	// different name tells a reader two signals agreed when one never ran.
+	//
+	// rank.Meta reports a signal that skips for every candidate in
+	// `degraded`, so this is a NAMED absence rather than a silent one.
+	for _, s := range []IDFWeightedOverlap{
+		// Nothing loaded at all.
+		{},
+		// Empty table, no total.
+		{DocFreq: map[int32]float64{}, Total: 0},
+		// The case that made this test worth writing: the total is known
+		// but the table holds no frequencies, which is what a half-written
+		// or partially loaded file looks like. Without the skip guard every
+		// tag counts as maximally rare, so two works sharing one tag score
+		// a perfect 1.0 — the strongest possible claim from no evidence.
+		// (The cases above skip anyway, because a zero-work total makes
+		// every IDF zero; they are kept so the contract is stated once.)
+		{DocFreq: map[int32]float64{}, Total: 1000},
+		// A one-work corpus has no rarity to speak of.
+		{DocFreq: map[int32]float64{1: 5}, Total: 1},
+	} {
+		_, _, err := s.Score(
+			rank.Candidate{TagIDs: []int32{1}},
+			[]rank.Candidate{{ID: 7, TagIDs: []int32{1}}},
+			nil)
+		if err != rank.ErrSkip {
+			t.Fatalf("with %+v: err = %v, want rank.ErrSkip", s, err)
+		}
+	}
+}
+
 func TestIDFOverlapNameIsTheTuneKey(t *testing.T) {
 	if got := (IDFWeightedOverlap{}).Name(); got != "idf_overlap" {
 		t.Fatalf("Name() = %q, want %q", got, "idf_overlap")
