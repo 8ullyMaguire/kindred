@@ -4,21 +4,44 @@ Status as of 2026-10-07. Every line below was verified by running it, not by
 reading the code. A line marked DONE names the test or the tool output that
 established it.
 
-## Tier 1 recommendation surfaces (2026-10-22)
+## Tier 1 recommendation surfaces (2026-10-22, S1 closed 2026-10-22)
 
 The plan and spec are `docs/PLAN-recsurfaces-tier1.md` and
 `docs/SPEC-recsurfaces-tier1.md`; the status table there is authoritative.
-Ten of the eleven surfaces are live: IDF-weighted tag overlap (`idf_overlap`),
-the reader's learned taste in ranking (`session_taste`), co-bookmarked works,
+All eleven surfaces are live: IDF-weighted tag overlap (`idf_overlap`), the
+reader's learned taste in ranking (`session_taste`), co-bookmarked works,
 cross-fandom bridges, author similarity with shared-tag evidence, the
-fandom-scoped arena, the tag-page reachable alias, `kindred eval`, and the two
-surfaces that were already built (tag sidebar, "rank from this").
+fandom-scoped arena, the tag-page reachable alias, `kindred eval`, the two
+surfaces that were already built (tag sidebar, "rank from this"), and the
+algorithm A/B arena.
 
-**S1, the algorithm A/B arena, is deliberately open.** The plan's proposed
-`algo_comparison` kind does not fit the arena's candidate/rating model, and
-reusing `arena_comparisons` would feed algorithm votes into work tag learning.
-The rationale is written down at the top of the plan so the next attempt starts
-from the constraint rather than rediscovering it.
+**S1 shipped as "an algorithm is a named tune".** Two named weight vectors
+rank the same seed from the same pool; `/algo` shows both columns and the
+signals whose weights differ, and a vote goes to `algo_comparisons`. That
+table is separate from `arena_comparisons` on purpose: arena judgements feed
+the tag learner, and a preference between weight vectors is not evidence about
+the tags on two works. `TestAlgoVotesNeverReachTheTagLearner` holds that line.
+
+What is still NOT built, and the honest name for it: the arena compares WEIGHT
+VECTORS, not two independent ranking implementations. A learned ranker would
+need its own registry and candidate shape; the page and the votes table are
+the harness it would plug into.
+
+Two live findings from closing S1, both fixed:
+
+- **`idf_overlap` cost 12.5 s per request.** It queried `work_tags` for the
+  pool's tag ids on every ranking — measured on the 1.7 GB mirror, and it
+  made /recommend take 98 s. Document frequencies are now built ONCE by
+  `kindred ingest` into `<corpus>.docfreq` (14.5 s to build, 68 ms to load)
+  and the signal reads the loaded table. With no table the signal SKIPS and
+  `meta.degraded` names it, rather than quietly degrading into a duplicate of
+  `tag_overlap`.
+- **`serve`'s auto-crawler failed one job at a time, forever, on a mirror it
+  could not write** (`attempt to write a readonly database`, per fetched
+  work, while still fetching from AO3). This deployment's corpus is on an
+  sshfs mount. `openMirrorForWrite` now proves the write lock with
+  `BEGIN IMMEDIATE`/`ROLLBACK` at startup, so the condition is one clear
+  "auto-crawl disabled" line instead of an endless stream.
 
 Verification for the shipped set:
 

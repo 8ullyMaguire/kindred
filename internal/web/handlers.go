@@ -108,6 +108,37 @@ type Deps struct {
 	// that key is what grants one reader's votes their special weight, and it
 	// has no business on a page struct.
 	OwnerCohort bool
+
+	// Algo is the algorithm registry and the votes cast between algorithms.
+	//
+	// It is an interface, like Queue and Profiles, so a page test can supply
+	// a fake: what /algo does with a weight vector is worth testing, and
+	// what it needs from storage is four methods.
+	//
+	// Optional. A read-only deployment passes nil, and /algo then says there
+	// is no algorithm registry here rather than rendering two empty columns
+	// that read as "these algorithms agree on nothing".
+	Algo AlgoStore
+}
+
+// AlgoStore is the algorithm registry: named tunes, and the A/B votes cast
+// between them.
+//
+// The votes live in their OWN table, never in the work arena's. A tune
+// preference is evidence about weights, not about the tags on two works, and
+// the arena's judgements feed a tag learner that would read it as the
+// latter.
+type AlgoStore interface {
+	TuneNames(ctx context.Context) ([]string, error)
+	Tune(ctx context.Context, name string) (map[string]float64, error)
+	RecordAlgoComparison(ctx context.Context, ownerKey string, c store.AlgoComparison) error
+	AlgoStandings(ctx context.Context, ownerKey string) ([]store.AlgoStanding, error)
+	// OwnerKey derives the stable per-reader key from a session cookie
+	// value. It is on this interface rather than assumed because the API
+	// handler and this page must derive the SAME key: two derivations
+	// would split one reader's votes across two owner keys and halve
+	// every standings count.
+	OwnerKey(ctx context.Context, sessionKey string) (string, error)
 }
 
 // CorpusQuerier is the corpus-analysis surface the pages need.

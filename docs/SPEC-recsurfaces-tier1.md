@@ -43,7 +43,7 @@ already there, the writer already runs.
 
 | # | Idea | Status after audit | Code path touched |
 |---|---|---|---|
-| S1 | Arena A/B framework | NEW | `internal/engine` (dual-rank), `internal/api` (route) |
+| S1 | Arena A/B framework | **SHIPPED (2026-10-22)** as a tune comparison — see §S1 | `internal/store/algo.go`, `internal/api/algo.go`, `internal/web/assets/algo.html` |
 | S2 | Tag-page "Similar Tags" sidebar | **ALREADY BUILT** | — (verified, not rewritten) |
 | S3 | Author recommendations via tag-profile cosine | NEW | `internal/signal`, `internal/api` (route) |
 | S4 | Per-session implicit taste vector | **HALF-BUILT** — wire the existing `arena_user_tag_weights` into ranking | `internal/engine`, `internal/signal` |
@@ -79,8 +79,9 @@ configured via env var (S10 does not need it either).
 
 ## Engine changes
 
-S1 adds a new `SignalKindName` string ("algo_comparison") to the match-definer so the arena
- recognises the new kind. S3 adds an `AuthorProfileSignal`; S7 reuses it. S4 reuses the
+S1 adds NO signal and no `SignalKindName`. That part of this spec was wrong: an algorithm is
+a named TUNE — a weight vector the engine already ranks with — so there is nothing for
+`signals()` to learn and nothing for the match-definer to recognise. S3 adds an `AuthorProfileSignal`; S7 reuses it. S4 reuses the
 existing scoring infrastructure and adds a re-rank pass that drops session-dismissed works.
 None of these touch the signal scoring itself — each adds one signal type and one MMR call site.
 
@@ -112,3 +113,45 @@ that takes a corpus, db and a held-out ratio — zero web surface, pure eval bac
 empty cases — non-obvious failure mode), gate coverage (scripts/check-deploy.sh assert every
 new route is probed), and the goal check (docs/goal-check.py). Each feature has its own D-row
 with the specific command + expected output the plan writes verbatim.
+
+## S1 — the algorithm A/B arena, as shipped
+
+An algorithm is a **named tune**: a weight vector over the scoring signals,
+stored in `tunes` and set with `kindred tune set`. That is the registry this
+deployment has, and it is the only definition that cannot disagree with the
+engine: the ranking IS a weighted sum, so two algorithms differ exactly when
+two weight vectors differ.
+
+**Votes are in their own table.** `algo_comparisons` holds
+(owner_key, seed_kind, seed_id, algo_a, algo_b, winner) where winner is
+`a`, `b` or `neither`. It is NOT `arena_comparisons` with a strategy column,
+and the reason is the constraint that deferred this surface:
+
+- `arena_comparisons` records a preference between two CORPUS ENTITIES, and
+  its judgements feed the tag learner. Choosing work A over work B is evidence
+  about the tags both carry.
+- An algorithm preference is evidence about WEIGHTS. Written into the arena's
+  table, "this reader prefers the tune that weights recency" would be read as
+  "this reader likes the tags shared by this pair of works".
+
+`TestAlgoVotesNeverReachTheTagLearner` records votes and asserts that
+`arena_comparisons` and `arena_user_tag_weights` do not move. It was proved
+to bite by mutating the insert into `arena_comparisons`.
+
+**The comparison.** `GET /api/v1/algo/compare?seed=kind:id&a=NAME&b=NAME`
+resolves BOTH tunes before ranking (an unknown name is a 400 that names it),
+refuses `a == b` (two identical columns produce a vote about nothing), and
+ranks the SAME pool twice, so the only variable is the weights. The response
+carries both lists, both weight vectors, and how many ids they share —
+two lists that agree on membership but not order are still a comparison, and a
+caller who cannot tell that apart from a real disagreement will misread the
+vote.
+
+**Draws are stored and count for both sides.** Dropping `neither` would
+inflate every algorithm's win rate exactly as the reader grows indifferent,
+which is when the numbers matter least.
+
+**The page** (`/algo`) renders the two columns and the signals whose weights
+differ, and judges through a plain form POST to `/algo/judge` — the same
+control shape `/arena` uses, and for the same measured reason: a button with a
+click handler has already made this project's arena control inert once.

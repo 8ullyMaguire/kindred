@@ -126,6 +126,7 @@ var pageForms = []pageForm{
 	// The judge is the completion of the arena's own form and records exactly
 	// what POST /api/v1/arena/compare records.
 	{Path: "/arena/judge", Handler: func(d Deps, w http.ResponseWriter, r *http.Request) { d.postJudge(w, r) }},
+	{Path: "/algo/judge", Handler: func(d Deps, w http.ResponseWriter, r *http.Request) { d.postAlgoJudge(w, r) }},
 	// Blocking is a one-button form the /block page renders.
 	{Path: "/block", Handler: func(d Deps, w http.ResponseWriter, r *http.Request) { d.postBlock(w, r) }},
 	// Marking a work read or unread, from the result list. Without it the
@@ -234,6 +235,13 @@ func allPages() []pageSpec {
 				Handler: func(d Deps, w http.ResponseWriter, r *http.Request, _ string) {
 					d.renderBrowse(w, r)
 				},
+			},
+			{
+				Template: "algo.html",
+				Paths:    []string{"/algo"},
+				Nav:      "/algo",
+				List:     true,
+				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, _ string) { d.renderAlgo(w, r) },
 			},
 			{
 				Template: "arena.html",

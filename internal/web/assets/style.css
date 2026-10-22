@@ -372,6 +372,37 @@ a.tag:hover {
   gap: 1.5rem;
   margin: 1.5rem 0;
 }
+/* /algo: one seed ranked through two tunes, side by side. Same shape as the
+   arena pair on purpose — a reader who has judged a work pair already knows
+   how to read this, and the two columns are the same question about weights
+   rather than about works. */
+.algo-pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  margin: 1.5rem 0;
+}
+.algo-column {
+  flex: 1 1 22rem;
+  border: 1px solid var(--arena-border);
+  padding: 1rem 1.25rem;
+  min-width: 0;
+}
+.algo-column h3 {
+  margin-top: 0;
+}
+.algo-items {
+  padding-left: 1.4rem;
+}
+.algo-items li {
+  margin: 0.35rem 0;
+}
+.algo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
 .arena-card {
   flex: 1 1 20rem;
   border: 1px solid var(--arena-border);

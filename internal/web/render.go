@@ -558,6 +558,49 @@ type NeighboursPage struct {
 	TotalCo int
 }
 
+// AlgoPage pits two algorithms against each other for one seed.
+//
+// An algorithm here is a NAMED TUNE: the weight vector that ranks a list.
+// The page shows the same seed ranked twice, side by side, so the only
+// variable is the weights.
+//
+// It shows the two WEIGHT VECTORS as well as the two lists, because two
+// columns of fic that a reader is asked to judge without being told what
+// differed is a preference test whose answer cannot be explained. The
+// per-signal delta is the evidence behind the question.
+type AlgoPage struct {
+	Base
+	// Seed echoes what was ranked, so a typo comes back in the form.
+	Seed string
+	// A and B are the algorithm names being compared.
+	A string
+	B string
+	// Choices lists every algorithm the deployment knows, so the two
+	// selects are populated from the registry rather than from a constant
+	// that can drift from it.
+	Choices []string
+
+	// Left and Right are the two ranked lists.
+	Left  []rank.Candidate
+	Right []rank.Candidate
+	// LeftWeights and RightWeights are the tunes' own vectors.
+	LeftWeights  map[string]float64
+	RightWeights map[string]float64
+	// WeightsDiffer is the signals whose weights are not equal, sorted. It
+	// is the honest summary of what the reader is judging.
+	WeightsDiffer []string
+	// Shared is how many ids appear in both lists.
+	Shared int
+
+	// Err is a named failure (an unknown algorithm, a bad seed). Rendered
+	// in the page's own voice rather than as a 500, because every one of
+	// these is a thing the reader can fix in the form above.
+	Err string
+	// Judged is the reader's own latest answer for this pair, so a reload
+	// confirms what was recorded rather than showing a fresh question.
+	Judged string
+}
+
 // ProfilesPage lists the stored taste profiles and offers the build form.
 type ProfilesPage struct {
 	Base

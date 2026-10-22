@@ -9,7 +9,7 @@ and its expected output.
 
 | # | State | Where it lives | Evidence |
 |---|---|---|---|
-| S1 | **DEFERRED** — see below | — | — |
+| S1 | shipped | `internal/store/algo.go`, `internal/api/algo.go`, `/algo` page | `algo_test.go` (store, API, web), routes audit |
 | S2 | already built (verified, not rewritten) | `tag.html`, `GET /api/v1/tags/{id}/similar` | existing tests + render sweep |
 | S3 | shipped | `Engine.SimilarAuthors`, `GET /api/v1/authors/similar?name=` | `internal/engine/authors_test.go`, `internal/api/authors_test.go` |
 | S4 | shipped in `0c6b2b7` | `session_taste` signal, `Request.SessionTaste` | `internal/engine/session_taste_test.go` |
@@ -35,26 +35,49 @@ symbols the tree does not have:
   tags included. A tag-type query finds 51 works out of 113,995 and would
   report "no crossovers" on a corpus full of them.
 
-### Why S1 is deferred rather than half-shipped
+### S1 as built, and the constraint that shaped it
 
-The plan's own M1 is internally inconsistent: it adds an `algo_comparison`
+The plan's own M1 was internally inconsistent: it added an `algo_comparison`
 `SignalKindName` to a "match-definer" that does not exist (`signals()` builds
-scoring signals, not entity kinds), then says no web change is needed, then M3
-requires a two-column template. More importantly, the arena's candidate and
-rating machinery is built over corpus entities: a pair is chosen from
-`entity_candidates`, rated with Glicko, and work judgements feed tag learning.
-An "algorithm" is not a corpus entity, there is no algorithm registry, and
-recording algorithm votes in `arena_comparisons` with work ids would make the
-tag learner treat an algorithm preference as evidence about two works' tags.
+scoring signals, not entity kinds), then said no web change was needed, then
+required a two-column template. The obstacle underneath was real, though, and
+it is worth restating because it is what the shipped design is built around.
 
-Shipping that shape would produce a comparison page whose votes mean something
-other than what the page says, which is the failure this project spends most of
-its tests preventing. The honest version needs a design pass first: an algorithm
-registry, a kind whose candidates come from it, and a judgement path that does
-not touch work tag weights. The offline arm (S9) and the existing work arena
-already give the two measurements that exist today; S1 remains open rather than
-pretending otherwise.
+The arena's candidate and rating machinery is built over CORPUS ENTITIES: a
+pair comes from `entity_candidates`, is rated with Glicko, and work judgements
+feed the tag learner. An algorithm is not a corpus entity. Recording algorithm
+votes in `arena_comparisons` would make the learner read "this reader prefers
+the tune that weights recency" as "this reader likes the tags shared by this
+pair of works" — a true-looking number about the wrong thing, which is the
+failure this project spends most of its tests preventing.
 
+So S1 ships as three decisions:
+
+1. **An algorithm is a named tune.** That is the registry this deployment
+   already has (`kindred tune set`, the `tunes` table), and it is the only
+   honest definition available: the ranking IS a weighted sum over the
+   signals, so "different algorithm" can only mean "different weights" unless
+   a second ranking implementation exists. `GET /api/v1/algo/list` names them.
+
+2. **Votes live in their own table, `algo_comparisons`.** Not a row in
+   `arena_comparisons` with a strategy column. The separation is the design,
+   and `TestAlgoVotesNeverReachTheTagLearner` asserts it by recording five
+   votes and checking the arena's own two tables did not move. It was proved
+   to bite by mutating the insert into `arena_comparisons` and watching the
+   test redden.
+
+3. **The comparison is one seed ranked twice from the SAME pool.**
+   `GET /api/v1/algo/compare?seed=kind:id&a=NAME&b=NAME` resolves both tunes
+   before ranking, refuses `a == b` by name, and returns both lists plus the
+   ids they share. The page shows the weight delta, because two columns of
+   fic with no statement of what changed is a preference test whose answer
+   cannot be explained.
+
+What that leaves open, deliberately: this measures weight vectors, not
+ranking ALGORITHMS. A second engine (a learned ranker, an embedding-only
+ranker) would need its own registry and a candidate shape of its own; the
+comparison page would then be the harness for it, and the votes table already
+holds what such a test needs.
 
 ## Before you start
 

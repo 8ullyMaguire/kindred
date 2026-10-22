@@ -130,6 +130,16 @@ func (s *Server) Routes() http.Handler {
 	// fandom is a tag the seed does not carry, which is why neither overlap
 	// nor item-to-item collab surfaces it.
 	mux.HandleFunc("GET /api/v1/works/{id}/bridges", s.handleBridges)
+	// The algorithm A/B arena. An "algorithm" is a named tune (a weight
+	// vector over the scoring signals), which is the registry this
+	// deployment already has. Votes go to algo_comparisons, NOT to
+	// arena_comparisons: an algorithm is not a corpus entity, and feeding
+	// its votes to the tag learner would make a preference between weight
+	// vectors read as evidence about two works' tags.
+	mux.HandleFunc("GET /api/v1/algo/list", s.handleAlgoList)
+	mux.HandleFunc("GET /api/v1/algo/compare", s.handleAlgoCompare)
+	mux.HandleFunc("POST /api/v1/algo/judge", s.handleAlgoJudge)
+	mux.HandleFunc("GET /api/v1/algo/standings", s.handleAlgoStandings)
 	mux.HandleFunc("GET /api/v1/ao3/tags", s.handleAO3Tags)
 	mux.HandleFunc("GET /api/v1/ao3/tags/{id}", s.handleAO3Tag)
 	mux.HandleFunc("GET /api/v1/ao3/tags/{id}/works", s.handleAO3TagWorks)
@@ -229,6 +239,10 @@ func (s *Server) Routes() http.Handler {
 	if s.Store != nil {
 		pages.Queue = s.Store
 	}
+	// /algo reads the tune registry and records A/B votes in their own table.
+	// Wired from the same Store: a read-only deployment gets the page's "no
+	// algorithm registry" text rather than two empty columns.
+	pages.Algo = s.Store
 	// The gate is lowered only by the e2e harness, whose fixture corpus gives
 	// every work four or five tags. A deployed server leaves it 0 and gets
 	// corpusquery's own default of 10.

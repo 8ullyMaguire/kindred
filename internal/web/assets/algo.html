@@ -1,0 +1,112 @@
+{{define "content"}}
+{{/* An "algorithm" is a named tune: the weight vector that ranks a list.
+     The page shows ONE seed ranked twice, so the only variable is the
+     weights, and it names the weights that differ — two columns of fic
+     with no statement of what changed is a preference test whose answer
+     cannot be explained. */}}
+<form class="controls" method="get" action="/algo" aria-label="Compare algorithms">
+  <fieldset>
+    <legend>Seed</legend>
+    <label for="seed">Work</label>
+    <input type="text" id="seed" name="seed" value="{{.Seed}}"
+           placeholder="ao3_work:20151202" size="22" required>
+    <p class="hint">
+      Both columns rank this same work, from the same candidate pool. Only
+      the weights change.
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Algorithms</legend>
+    <label for="a">Left</label>
+    <select id="a" name="a">
+      {{range .Choices}}<option value="{{.}}" {{if eq . $.A}}selected{{end}}>{{.}}</option>{{end}}
+    </select>
+    <label for="b">Right</label>
+    <select id="b" name="b">
+      {{range .Choices}}<option value="{{.}}" {{if eq . $.B}}selected{{end}}>{{.}}</option>{{end}}
+    </select>
+    <p class="hint">
+      An algorithm is a named tune: a weight vector over the ranking signals.
+      Define one with <code>kindred tune set</code>; every one stored appears
+      here.
+    </p>
+  </fieldset>
+
+  <input type="submit" value="Compare">
+</form>
+
+{{if .Err}}
+  <p class="error" data-testid="algo-error">{{.Err}}</p>
+{{end}}
+
+{{if .Judged}}
+  <p class="note" data-testid="algo-judged">
+    Recorded: you preferred {{if eq .Judged "a"}}{{.A}}{{else if eq .Judged "b"}}{{.B}}{{else}}neither{{end}}.
+  </p>
+{{end}}
+
+{{if .Left}}
+  {{/* What differs, stated before the lists. A reader is being asked to
+       judge two rankings and is entitled to know which signals moved. */}}
+  <p class="count" data-testid="algo-delta">
+    {{if .WeightsDiffer}}
+      Signals that differ: {{range $i, $s := .WeightsDiffer}}{{if $i}}, {{end}}<code>{{$s}}</code>{{end}}.
+    {{else}}
+      These two algorithms carry the SAME weights, so any difference below is
+      tie-breaking rather than a different opinion.
+    {{end}}
+    {{.Shared}} of {{len .Left}} works appear in both lists.
+  </p>
+
+  <form method="post" action="/algo/judge" class="algo">
+    <input type="hidden" name="seed" value="{{.Seed}}">
+    <input type="hidden" name="algo_a" value="{{.A}}">
+    <input type="hidden" name="algo_b" value="{{.B}}">
+
+    <div class="algo-pair">
+      <div class="algo-column" data-testid="algo-a">
+        <h3><code>{{.A}}</code></h3>
+        {{if .LeftWeights}}<p class="hint">{{range $k, $v := .LeftWeights}}{{$k}}={{printf "%.2f" $v}} {{end}}</p>{{end}}
+        <ol class="algo-items">
+          {{range .Left}}
+            <li>
+              <a href="/work/{{.ID}}">{{.Title}}</a>
+              <span class="score">{{printf "%.2f" .Score}}</span>
+            </li>
+          {{end}}
+        </ol>
+      </div>
+      <div class="algo-column" data-testid="algo-b">
+        <h3><code>{{.B}}</code></h3>
+        {{if .RightWeights}}<p class="hint">{{range $k, $v := .RightWeights}}{{$k}}={{printf "%.2f" $v}} {{end}}</p>{{end}}
+        <ol class="algo-items">
+          {{range .Right}}
+            <li>
+              <a href="/work/{{.ID}}">{{.Title}}</a>
+              <span class="score">{{printf "%.2f" .Score}}</span>
+            </li>
+          {{end}}
+        </ol>
+      </div>
+    </div>
+
+    {{/* Radios plus one submit, like /arena: a button with a click handler
+         has already made this exact control inert once on this project. */}}
+    <p class="algo-actions">
+      <button type="submit" name="choice" value="a">Left is better</button>
+      <button type="submit" name="choice" value="b">Right is better</button>
+      <button type="submit" name="choice" value="neither">Neither</button>
+    </p>
+    <p class="hint">
+      Votes go to their own table, not the work arena's: a preference between
+      two weight vectors is not evidence about the tags on any work, and the
+      tag learner must never read it as such.
+    </p>
+  </form>
+{{else if not .Err}}
+  <p class="count" data-testid="empty" data-empty="true">
+    Name a work and pick two algorithms to see them ranked side by side.
+  </p>
+{{end}}
+{{end}}

@@ -585,6 +585,48 @@ CREATE TABLE IF NOT EXISTS arena_user_blocked_tags (
 	PRIMARY KEY (owner_key, tag_id)
 ) WITHOUT ROWID;
 
+/* An algorithm A/B judgement: two named tunes shown side by side for one
+   seed, and which list the reader preferred.
+
+   THIS TABLE IS SEPARATE FROM arena_comparisons ON PURPOSE, and the reason
+   is the single constraint that deferred this surface for a day.
+
+   arena_comparisons records a preference between two CORPUS ENTITIES, and
+   its judgements feed the tag learner: choosing work A over work B is
+   evidence about the tags those works carry. An ALGORITHM is not a corpus
+   entity. Its id is a tune name, its "candidates" are the same works seen
+   twice through different weight vectors, and a preference between them is
+   evidence about the WEIGHTS, not about any tag. Writing those votes into
+   arena_comparisons would make the learner read "this reader prefers the
+   tune that weights recency" as "this reader likes the tags shared by this
+   pair of works" — a true-looking number about the wrong thing, which is
+   the failure mode this project spends most of its tests preventing.
+
+   So: one row per judgement, the two algorithm NAMES as the evidence, and
+   nothing here is ever read by the tag learner. winner is 'a', 'b' or
+   'neither' — a draw is a real answer and is stored rather than dropped,
+   because dropping draws would quietly inflate every algorithm's win rate
+   as the reader grows more indifferent.
+
+   seed_kind + seed_id are recorded so the standings can be broken down by
+   kind later. The seed is not part of the primary key: the same reader may
+   compare the same two algorithms on the same seed more than once, and
+   collapsing those would hide a reader changing their mind. */
+CREATE TABLE IF NOT EXISTS algo_comparisons (
+	owner_key TEXT NOT NULL,
+	seed_kind TEXT NOT NULL,
+	seed_id   INTEGER NOT NULL,
+	algo_a    TEXT NOT NULL,
+	algo_b    TEXT NOT NULL,
+	winner    TEXT NOT NULL CHECK (winner IN ('a','b','neither')),
+	at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- The standings read: count wins per algorithm, newest-heavy readers last
+-- (no windowing yet; a whole-table scan over this table is small).
+CREATE INDEX IF NOT EXISTS idx_algo_comparisons_algo
+	ON algo_comparisons (algo_a, algo_b, winner);
+
 /* Works a reader has already been shown or has marked as read.
 
    The id is stored as TEXT because the same store serves several kinds

@@ -43,18 +43,25 @@ var routeTable = map[string]routeAudit{
 	"GET /api/v1/ao3/works/{id}/recommend": {Page: "/work/{id}"},
 	"GET /api/v1/works/{id}/co-bookmarked": {Page: "/work/{id}"},
 	"GET /api/v1/works/{id}/bridges":       {Page: "/work/{id}"},
-	"GET /api/v1/ao3/tags":                 {Page: "/search"},
-	"GET /api/v1/ao3/tags/{id}":            {Page: "/tag/{id}"},
-	"GET /api/v1/ao3/tags/{id}/works":      {Page: "/tag/{id}"},
-	"GET /api/v1/browse":                   {Page: "/browse"},
-	"GET /api/v1/corpus-query/{mode}":      {Page: "/fandoms | /underrated | /neighbours | /surprise"},
-	"GET /api/v1/arena/pair":               {Page: "/arena"},
-	"POST /api/v1/arena/compare":           {Page: "/arena"},
-	"GET /api/v1/arena/leaderboard":        {Page: "/leaderboard"},
-	"GET /api/v1/arena/rank/{id}":          {Page: "/rank/{id}"},
-	"GET /api/v1/arena/rank/{kind}/{id}":   {Why: "the page is the frontend app's route, not this repo's; this repo owes the API, and no page exists for it yet"},
-	"GET /api/v1/arena/my-ranking":         {Page: "/my-ranking"},
-	"GET /api/v1/crawl-queue":              {Page: "/crawl"},
+	// The algorithm A/B surface. An algorithm is a named tune; the page
+	// shows one seed ranked through two of them, side by side, and records
+	// which list the reader preferred.
+	"GET /api/v1/algo/list":              {Page: "/algo"},
+	"GET /api/v1/algo/compare":           {Page: "/algo"},
+	"POST /api/v1/algo/judge":            {Page: "/algo"},
+	"GET /api/v1/algo/standings":         {Page: "/algo"},
+	"GET /api/v1/ao3/tags":               {Page: "/search"},
+	"GET /api/v1/ao3/tags/{id}":          {Page: "/tag/{id}"},
+	"GET /api/v1/ao3/tags/{id}/works":    {Page: "/tag/{id}"},
+	"GET /api/v1/browse":                 {Page: "/browse"},
+	"GET /api/v1/corpus-query/{mode}":    {Page: "/fandoms | /underrated | /neighbours | /surprise"},
+	"GET /api/v1/arena/pair":             {Page: "/arena"},
+	"POST /api/v1/arena/compare":         {Page: "/arena"},
+	"GET /api/v1/arena/leaderboard":      {Page: "/leaderboard"},
+	"GET /api/v1/arena/rank/{id}":        {Page: "/rank/{id}"},
+	"GET /api/v1/arena/rank/{kind}/{id}": {Why: "the page is the frontend app's route, not this repo's; this repo owes the API, and no page exists for it yet"},
+	"GET /api/v1/arena/my-ranking":       {Page: "/my-ranking"},
+	"GET /api/v1/crawl-queue":            {Page: "/crawl"},
 
 	// --- deliberately no page ---
 	"POST /api/v1/recommend": {

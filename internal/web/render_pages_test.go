@@ -344,6 +344,36 @@ var pageRenderCases = []pageRenderCase{
 			"someone-else", "epistolary"},
 	},
 	{
+		tpl:  "algo.html",
+		name: "algo.html with two rankings",
+		data: AlgoPage{
+			Base:          sweepBase,
+			Seed:          "ao3_work:20151202",
+			A:             "default",
+			B:             "recency",
+			Choices:       []string{"default", "recency"},
+			Left:          sampleCandidates(3),
+			Right:         sampleCandidates(3),
+			LeftWeights:   map[string]float64{"tag_overlap": 0.24},
+			RightWeights:  map[string]float64{"tag_overlap": 0.10, "recency": 0.30},
+			WeightsDiffer: []string{"recency", "tag_overlap"},
+			Shared:        2,
+		},
+		// The delta line is the page's whole reason to exist: a reader is
+		// asked to judge two lists and is told which signals moved.
+		wantContains: []string{"Signals that differ", "recency", "2 of 3 works"},
+	},
+	{
+		tpl:          "algo.html",
+		name:         "algo.html untouched",
+		hasEmptyList: true,
+		data: AlgoPage{
+			Base:    sweepBase,
+			Choices: []string{"default", "recency"},
+		},
+		wantContains: []string{"Name a work and pick two algorithms"},
+	},
+	{
 		tpl:          "neighbours.html",
 		name:         "neighbours.html with no tag",
 		hasEmptyList: true,
