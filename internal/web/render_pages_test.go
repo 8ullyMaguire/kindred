@@ -947,6 +947,60 @@ var pageRenderCases = []pageRenderCase{
 		wantNotContains: []string{"No co-occurrence graph is loaded"},
 	},
 	{
+		// The merged list. The exposure sentence is the assertion that
+		// matters: it is built by naming the two arms, and the first version
+		// ranged over a map with no separator and rendered "default
+		// contributed 3quality contributed 3" — visible only in a browser.
+		tpl:  "algo.html",
+		name: "algo.html merged list with both arms",
+		data: AlgoPage{
+			Base: sweepBase, Mode: "interleave", Seed: "ao3_work:1",
+			A: "default", B: "quality",
+			Merged: []rank.InterleavedItem{
+				{Candidate: rank.Candidate{ID: 7, Title: "One", Score: 1.5}, Arm: "default", Slot: 0},
+				{Candidate: rank.Candidate{ID: 8, Title: "Two", Score: 1.2}, Arm: "quality", Slot: 1},
+			},
+			Exposure: map[string]int{"default": 1, "quality": 1},
+			// The standings populated too, so this case does not render a
+			// data-empty marker: a case with rows must not claim emptiness,
+			// and the empty standings branch has its own case below.
+			Arms: []store.InterleaveArmStat{
+				{Arm: "default", Impressions: 120, Credits: 9, CreditRate: 0.075},
+				{Arm: "quality", Impressions: 118, Credits: 6, CreditRate: 0.0508},
+			},
+			Pairs: []store.InterleavePairStat{{
+				ArmA: "default", ArmB: "quality",
+				ImpressionsA: 120, ImpressionsB: 118, CreditsA: 9, CreditsB: 6,
+				Difference: 0.075 - 0.0508,
+			}},
+		},
+		wantContains: []string{
+			"One list, both algorithms",
+			`data-arm="default"`,
+			`data-arm="quality"`,
+			"contributed 1,", // the separator between the two arms
+			"0.075",
+		},
+		// Two lists plus a merged one would ask the question twice.
+		wantNotContains: []string{"algo-column", "3quality"},
+	},
+	{
+		// A merged list whose standings are empty says so, and the marker is
+		// where it belongs: on the empty branch, not on the list of works.
+		tpl:          "algo.html",
+		name:         "algo.html merged list with no standings yet",
+		hasEmptyList: true,
+		data: AlgoPage{
+			Base: sweepBase, Mode: "interleave", Seed: "ao3_work:1",
+			A: "default", B: "quality",
+			Merged: []rank.InterleavedItem{
+				{Candidate: rank.Candidate{ID: 7, Title: "One"}, Arm: "default", Slot: 0},
+			},
+			Exposure: map[string]int{"default": 1, "quality": 0},
+		},
+		wantContains: []string{"No impressions yet", `data-arm="default"`},
+	},
+	{
 		tpl:  "eval.html",
 		name: "eval.html with a stored run, votes and credits",
 		data: EvalPage{
