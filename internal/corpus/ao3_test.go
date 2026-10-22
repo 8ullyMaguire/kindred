@@ -253,7 +253,16 @@ func TestCountersMatchTheFixture(t *testing.T) {
 
 func TestDateParsing(t *testing.T) {
 	// Zero means "unknown" and must not be mistaken for "very old".
-	for _, in := range []string{"2026-01-15", "2026-01-15T10:00:00Z", "2026-01-15 10:00:00", "garbage", ""} {
+	// "17 Sep 2008" is the LIVE mirror's update_date format (AO3's own
+	// display date). It is first in the list on purpose: it was missing, so
+	// every real work parsed to 0 and the recency signal skipped all of
+	// them, and no test saw it because every fixture spoke ISO.
+	for _, in := range []string{
+		"17 Sep 2008",
+		"2026-01-15", "2026-01-15T10:00:00Z", "2026-01-15 10:00:00",
+		"2026-05-23T05:31:55.674942+00:00",
+		"garbage", "",
+	} {
 		if got := parseDate(in); got == 0 && in != "garbage" && in != "" {
 			t.Fatalf("parseDate(%q) = 0, want a real date", in)
 		}

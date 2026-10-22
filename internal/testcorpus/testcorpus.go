@@ -269,7 +269,14 @@ func New(nWorks int) *Corpus {
 			Complete:  fixtureComplete(i),
 			// A fixed date, NOT time.Now(): a relative recency assertion must
 			// not depend on when the suite runs.
-			UpdateDate: "2026-01-15",
+			//
+			// In the MIRROR's format ("2 Jan 2006"), not ISO. The live
+			// corpus stores "17 Sep 2008"; a fixture writing ISO dates
+			// passed a parser that rejected every real row, so the recency
+			// signal was silently inert in production while the suite was
+			// green. A fixture must reproduce the shape of the data under
+			// test, including its awkward formats.
+			UpdateDate: "15 Jan 2026",
 		})
 
 		// Fandom: a 70/30 split, NOT alternating. `i%6` gives 20/4 and starves

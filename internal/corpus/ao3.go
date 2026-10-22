@@ -432,10 +432,23 @@ func entityFromWork(w Work) Entity {
 	return e
 }
 
-// parseDate converts an ISO date to epoch days. Returns 0 for anything
+// parseDate converts a date to epoch days. Returns 0 for anything
 // unparseable, which the signals treat as "unknown" rather than "old".
+//
+// "2 Jan 2006" is AO3's own display format and is what the LIVE mirror stores
+// in works.update_date ("17 Sep 2008"); the ISO layouts cover first_seen /
+// last_updated (RFC3339 with microseconds) and any normalised export. It was
+// missing, and the consequence was silent: every live work parsed to 0, the
+// recency signal treated them all as undated and skipped them, and no test
+// noticed because the test fixture wrote ISO dates the parser accepted. A
+// fixture in the wrong format validates the wrong behaviour.
 func parseDate(s string) float64 {
-	for _, layout := range []string{"2006-01-02T15:04:05Z07:00", "2006-01-02 15:04:05", "2006-01-02"} {
+	for _, layout := range []string{
+		"2006-01-02T15:04:05Z07:00",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+		"2 Jan 2006",
+	} {
 		if t, err := time.Parse(layout, s); err == nil {
 			return float64(t.Unix() / 86400)
 		}
