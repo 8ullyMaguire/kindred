@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -402,8 +403,26 @@ func runServe(ctx context.Context, args []string) error {
 		MaxHeaderBytes:    1 << 16,
 	}
 
+	// Bind BEFORE claiming to listen.
+	//
+	// This used to log `msg=listening addr=...` and then start the server, so a
+	// port that was already taken printed a confident listening line and THEN
+	// "bind: address already in use" — a log that says the server is up
+	// followed by the reason it is not. Measured on a host where another
+	// service owned the port: the "listening" line is what an operator, a
+	// monitor grepping for readiness, and this session's own check all
+	// believe, and the healthz that answered was the other service's.
+	//
+	// Second error: the message named the address that was REQUESTED, which
+	// for `:0` is not the address that was bound. It now names the one the
+	// kernel gave us.
+	ln, err := net.Listen("tcp", c.Listen)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", c.Listen, err)
+	}
+
 	logger.Info("listening",
-		"addr", c.Listen, "mode", c.Mode, "lite", lite,
+		"addr", ln.Addr().String(), "mode", c.Mode, "lite", lite,
 		"corpus", c.CorpusDB, "index", g != nil,
 		"embeddings", embCount, "rss_cap_kib", capKiB,
 		"auto_crawl", !*noCrawl)
@@ -445,7 +464,7 @@ func runServe(ctx context.Context, args []string) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 			return
 		}

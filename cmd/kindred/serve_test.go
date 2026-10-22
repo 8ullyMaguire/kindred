@@ -3,8 +3,13 @@ package main
 import (
 	"context"
 	"database/sql"
+	"io"
+	"net"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -169,4 +174,67 @@ type ctxExec struct{ *sql.DB }
 
 func (e ctxExec) Exec(ctx context.Context, q string, args ...any) (sql.Result, error) {
 	return e.DB.ExecContext(ctx, q, args...)
+}
+
+// TestServeDoesNotClaimToListenWhenThePortIsTaken is the regression for a log
+// that lied.
+//
+// `serve` logged `msg=listening addr=...` and THEN started the server, so a
+// port already owned by another process printed a confident listening line
+// followed by `bind: address already in use`. An operator, a monitor grepping
+// for readiness, and this project's own checks all believe the listening line;
+// the healthz that answers belongs to whoever really owns the port. It cost a
+// live verification walk here: a demo instance printed "listening" on a port a
+// PieFed backend had taken, answered nothing, and the 200 the walk got back was
+// the PieFed backend's.
+//
+// The fix binds first and logs the address the KERNEL gave (`:0` was also
+// reported as `:0`). This test holds both halves: the error names the cause,
+// and the log contains no claim to be listening.
+func TestServeDoesNotClaimToListenWhenThePortIsTaken(t *testing.T) {
+	corpusPath := corpusFixture(t)
+	dir := t.TempDir()
+
+	// Hold a port and hand `serve` its address, so the bind must fail.
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("occupy a port: %v", err)
+	}
+	defer held.Close()
+	addr := held.Addr().String()
+
+	// The log is the artifact under test, so it is captured rather than
+	// asserted about from the outside.
+	old := os.Stderr
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = pw
+	defer func() { os.Stderr = old }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	serveErr := runServe(ctx, []string{
+		"--corpus", corpusPath,
+		"--db", filepath.Join(dir, "state.db"),
+		"--listen", addr,
+		"--no-crawl",
+	})
+
+	os.Stderr = old
+	pw.Close()
+	out, _ := io.ReadAll(pr)
+
+	if serveErr == nil {
+		t.Fatalf("serve on %s returned no error, but the port was taken; "+
+			"the process would look healthy and serve nothing", addr)
+	}
+	if !strings.Contains(serveErr.Error(), "address already in use") {
+		t.Fatalf("error %q does not name the cause (want \"address already in use\")", serveErr)
+	}
+	if strings.Contains(string(out), "msg=listening") {
+		t.Fatalf("serve logged that it was listening on a port it could not bind:\n%s", out)
+	}
 }
