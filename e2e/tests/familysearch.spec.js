@@ -106,9 +106,17 @@ test.describe('the family search, folded into /search', () => {
     await expect(err).toContainText('harry potter');
   });
 
-  test('/browse is gone and nothing links to it', async ({ page }) => {
-    const res = await page.goto('/browse');
-    expect(res.status(), '/browse status').toBe(404);
+  test('/browse redirects to /search and nothing links to it', async ({ page }) => {
+    // A bookmark outlives a redesign: the old address answers with a 301 that
+    // keeps the family selections, rather than a 404. The PAGE is gone (no
+    // template, no nav entry, no API); the ADDRESS still works.
+    const res = await page.goto('/browse?universe=harry+potter&concept=alternate+universe&recent=730&n=10');
+    expect(res.status(), '/browse status').toBe(200);
+    expect(page.url()).toContain('/search?universe=harry+potter');
+    expect(page.url()).toContain('concept=alternate+universe');
+    // And it landed on the answer, not on an empty page.
+    await expect(page.locator('[data-testid="family-counts"]')).toBeVisible();
+    await expect(page.locator('#universe')).toHaveValue('harry potter');
 
     await page.goto('/search');
     await expect(page.locator('a[href="/browse"]')).toHaveCount(0);

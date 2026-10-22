@@ -364,6 +364,17 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A page that was folded elsewhere still answers its old address. Before
+	// dispatch, because the destination is a page and this is not: see
+	// foldedPages.
+	if to, ok := foldedPages[r.URL.Path]; ok {
+		if r.URL.RawQuery != "" {
+			to += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, to, http.StatusMovedPermanently)
+		return
+	}
+
 	spec, arg, matched := findPage(r.URL.Path)
 
 	// Only GET and HEAD render a page. A POST to a page URL is not a page, and
@@ -401,6 +412,20 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	spec.Handler(d, w, r, arg)
+}
+
+// foldedPages are the routes whose PAGE was folded into another one and whose
+// old address still has to answer, because a bookmark outlives a redesign.
+//
+// /browse (2026-10-22) is the family intersection: its form and results now
+// live on /search. The redirect is not a page -- no template, no handler, no
+// nav entry, no API -- so it does not resurrect the surface the fold removed.
+// It preserves the query string, so a bookmarked
+// /browse?universe=worm&concept=isekai&recent=365 lands on the same answer
+// instead of a 404.
+var foldedPages = map[string]string{
+	"/browse":  "/search",
+	"/browse/": "/search",
 }
 
 // -- pages ------------------------------------------------------------------

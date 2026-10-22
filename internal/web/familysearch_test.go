@@ -149,14 +149,32 @@ func TestUnknownUniverseIsNamed(t *testing.T) {
 	}
 }
 
-// TestTheBrowseRouteIsGone is the other half of a FOLD: moving a page is not
-// removing it. A live /browse would keep the surface the owner objected to.
-func TestTheBrowseRouteIsGone(t *testing.T) {
+// TestTheBrowseRouteRedirectsToTheSearchPage is what a FOLD owes a bookmark.
+// Moving the page is not removing it: a live /browse PAGE would keep the
+// surface the owner objected to, but a 404 would break the link the owner
+// already has. A 301 to /search -- with the query string intact -- is neither.
+func TestTheBrowseRouteRedirectsToTheSearchPage(t *testing.T) {
 	d := familyDeps(t)
 	rec := httptest.NewRecorder()
-	d.route(rec, httptest.NewRequest(http.MethodGet, "/browse", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("GET /browse = %d, want 404 (the page was folded into /search)", rec.Code)
+	d.route(rec, httptest.NewRequest(http.MethodGet,
+		"/browse?universe=harry+potter&concept=alternate+universe&recent=730&n=5", nil))
+
+	if rec.Code != http.StatusMovedPermanently {
+		t.Fatalf("GET /browse = %d, want 301", rec.Code)
+	}
+	got := rec.Header().Get("Location")
+	want := "/search?universe=harry+potter&concept=alternate+universe&recent=730&n=5"
+	if got != want {
+		t.Fatalf("Location = %q, want %q (the family selections must survive the move)", got, want)
+	}
+
+	// And the destination answers with the family section, not an empty page.
+	code, body := arenaBody(t, d, got)
+	if code != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200", got, code)
+	}
+	if !strings.Contains(body, `data-testid="family-counts"`) {
+		t.Error("the redirect target did not render the family section")
 	}
 }
 
