@@ -566,6 +566,12 @@ and the comparison costs no comparison.
   number means B's slots were read more often.
 - Impressions are retained for 30 days, pruned on write. The window is part of
   the contract: "all time" would mean "since the last restart that pruned".
+- One sighting per work per owner per hour. A merged list is a page a reader
+  can reload, and every reload would otherwise add slots nobody could act on:
+  ten refreshes divide a real credit by sixty unacted impressions and report a
+  rate near zero, a number produced by the refresh key rather than by the
+  algorithms. A CREDITED row does not block a new sighting — once a reader has
+  acted, being shown it again is a new presentation with a new chance.
 
 Both surfaces are rendered by `/algo`: the side-by-side view and, with
 `?mode=interleave`, the merged list with its standings. The merged view is the

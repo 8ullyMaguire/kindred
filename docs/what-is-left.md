@@ -4,6 +4,41 @@ Status as of 2026-10-07. Every line below was verified by running it, not by
 reading the code. A line marked DONE names the test or the tool output that
 established it.
 
+## Tier 2 + the memory cap (2026-10-22, commit 9733c57)
+
+The owner removed the SPEC §6 memory cap and asked for the ideas worth having
+from the hundred-idea recommendation list. `docs/PLAN-recsurfaces-tier2.md`
+carries the audit (most of the list was already built; every "built" row names
+its code) and the two units that followed from it.
+
+- [x] **The 220 MiB cap is gone.** `budget.CapKiB` and `budget.Check` deleted;
+      `/healthz` always answers 200 and reports `peak_rss_kib`, `heap_mib`,
+      `sys_mib`, `goroutines`; `serve` logs the same figures every five
+      minutes. SPEC §6 rewritten around what to do when the number grows.
+      Live: a process using 264 MiB answers `{"status":"ok"}` where it used to
+      answer 503 and fail the deploy gate.
+- [x] **Interleaved ranking with attribution.** `rank.TeamDraft` (three tested
+      invariants), `interleave_impressions`, `GET /api/v1/interleave`,
+      `GET /api/v1/interleave/standings`, `/algo?mode=interleave`. A read mark
+      credits the arm that showed the work; only a read credits; one impression
+      earns one credit; one sighting per work per owner per hour; 30-day
+      retention. Live: 6 slots, 3/3 exposure, a read mark credited `default`
+      (3 slots / 1 read / 0.333) and not `quality` (3 / 0 / 0.000).
+- [x] **`/eval` dashboard.** `eval_runs` persists every `kindred eval` run with
+      `k` and `mode` as columns; the page shows the offline numbers beside the
+      algorithm votes and the interleaved credits, plus the corpus measured
+      across. Live run #1: recall@10 0.0067, NDCG@10 0.0096, coverage 0.0789
+      over 38 readers — low, and reported as measured.
+- [x] **Two alternate tunes exist on the deployment** (`quality`, `fresh`).
+      Without a second algorithm the comparison surfaces can only compare
+      `default` with itself, which they refuse by name. Created with
+      `kindred tune --name ... --set ...` (weights must sum to 1.0).
+
+Verified: `go test ./...` 26 packages; playwright 131 passed; goal-check
+COMPLETE 7/7; provenance IN SYNC at `9733c57`; live checks above. The merge
+and the sighting-dedupe are mutation-checked (each rule removed turns its own
+named test red and leaves its neighbours green).
+
 ## Tier 1 recommendation surfaces (2026-10-22, S1 closed 2026-10-22)
 
 The plan and spec are `docs/PLAN-recsurfaces-tier1.md` and

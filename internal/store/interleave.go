@@ -68,10 +68,27 @@ func (s *Store) RecordInterleave(ctx context.Context, ownerKey, seedKind string,
 	}
 	defer tx.Rollback() //nolint:errcheck // committed below
 
+	// One sighting per work per hour per owner.
+	//
+	// A merged list is a page a reader can reload, and every reload would
+	// otherwise add slots nobody had a chance to act on. Ten refreshes would
+	// divide a real credit by sixty unacted impressions and report a rate
+	// near zero -- a number produced by the refresh key, not by the
+	// algorithms. An hour is long enough that a genuine second look counts
+	// again and short enough that a reader cannot inflate the denominator by
+	// holding down F5.
+	//
+	// Credited rows do NOT block a new sighting: once a reader has acted on
+	// a work, being shown it again is a new presentation with a new chance.
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO interleave_impressions
 			(owner_key, seed_kind, seed_id, arm_a, arm_b, work_id, arm, slot)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM interleave_impressions
+			 WHERE owner_key = ? AND work_id = ? AND credited = 0
+			   AND shown_at > datetime('now', '-1 hour')
+		)`)
 	if err != nil {
 		return err
 	}
@@ -80,7 +97,8 @@ func (s *Store) RecordInterleave(ctx context.Context, ownerKey, seedKind string,
 		if sl.Side != "a" && sl.Side != "b" {
 			return fmt.Errorf("interleave: side %q is neither a nor b", sl.Side)
 		}
-		if _, err := stmt.ExecContext(ctx, ownerKey, seedKind, seedID, armA, armB, sl.WorkID, sl.Side, sl.Slot); err != nil {
+		if _, err := stmt.ExecContext(ctx, ownerKey, seedKind, seedID, armA, armB, sl.WorkID, sl.Side, sl.Slot,
+			ownerKey, sl.WorkID); err != nil {
 			return err
 		}
 	}

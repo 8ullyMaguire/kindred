@@ -104,6 +104,29 @@ Two design rules carried over from tier 1, both learned the expensive way:
   print slots and credits, not a bare percentage: the first version of the
   stats reported a rate over an unknown population, and the test that caught
   it compared the standing's impression count against the list's own exposure.
+- **A reload is not a measurement.** The live browser check found the exposure
+  sentence rendering "default contributed 3quality contributed 3" (a template
+  range over a map with no separator), and thinking about what a refresh does
+  turned up a worse problem: every reload added slots nobody could act on, so a
+  reader holding F5 could drive any rate to zero. Impressions are now one per
+  work per owner per hour, and a credited sighting does not block the next one.
+  Both rules have tests that fail when the rule is removed.
+
+## 3a. Live evidence (2026-10-22, kindred.polarisocial.xyz)
+
+- `/healthz` -> `{"status":"ok","peak_rss_kib":271240,...}` on a process that
+  used 264 MiB. Under the old cap this was a 503 and the deploy gate failed;
+  the same process now reports the number and is healthy.
+- `GET /api/v1/interleave?seed=ao3_work:10057010&a=default&b=quality&n=6` ->
+  6 slots, exposure `{default:3, quality:3}`, 6 shared ids.
+- A read mark on the item shown by `default` -> standings `default 3 slots / 1
+  read / 0.333`, `quality 3 / 0 / 0.000`, pair difference `+0.333`.
+- `kindred eval --users 40` recorded run #1: recall@10 **0.0067**, NDCG@10
+  **0.0096**, coverage **0.0789** over 38 readers and 495 held-out bookmarks.
+  That is a low number and it is reported as measured: the offline arm now has
+  a baseline, and any weight change can be compared against it. It is the first
+  honest answer to "is this recommender any good", and the answer is "not very,
+  at k=10, on this corpus" — which is a starting point rather than a verdict.
 
 ## 3. Verification (what to run)
 

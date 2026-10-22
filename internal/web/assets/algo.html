@@ -68,7 +68,8 @@
   <h2 data-testid="interleaved-heading">One list, both algorithms</h2>
   <p class="count" data-testid="interleaved-exposure">
     {{len .Merged}} slots &mdash;
-    {{range $arm, $n := .Exposure}}<code>{{$arm}}</code> contributed {{$n}}{{end}}.
+    <code>{{.A}}</code> contributed {{index .Exposure .A}},
+    <code>{{.B}}</code> contributed {{index .Exposure .B}}.
     Each work is credited to the algorithm that contributed it, and marking it
     read is the vote.
   </p>

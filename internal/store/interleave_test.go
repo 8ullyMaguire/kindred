@@ -150,3 +150,53 @@ func TestRecordInterleaveRefusesAnUnknownSide(t *testing.T) {
 		t.Fatal("recorded a slot from side \"c\"; only a and b exist")
 	}
 }
+
+// A reload is not a new measurement. Without this, holding down F5 divides a
+// real credit by sixty unacted slots and reports a rate near zero -- a number
+// produced by the refresh key rather than by the algorithms.
+func TestASecondRenderWithinTheHourAddsNoImpressions(t *testing.T) {
+	ctx := context.Background()
+	s := algoTestStore(t)
+	slots := []InterleaveSlot{
+		{WorkID: 10, Side: "a", Slot: 0},
+		{WorkID: 20, Side: "b", Slot: 1},
+	}
+	for i := 0; i < 3; i++ {
+		if err := s.RecordInterleave(ctx, "o", "ao3_work", 1, "alpha", "beta", slots); err != nil {
+			t.Fatal(err)
+		}
+	}
+	arms, _, err := s.InterleaveStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range arms {
+		if a.Impressions != 1 {
+			t.Fatalf("arm %q has %d impressions after three identical renders, want 1", a.Arm, a.Impressions)
+		}
+	}
+}
+
+// Once a reader HAS acted on a work, being shown it again is a new
+// presentation with a new chance, so the dedupe must not block it.
+func TestACreditedImpressionDoesNotBlockANewSighting(t *testing.T) {
+	ctx := context.Background()
+	s := algoTestStore(t)
+	slots := []InterleaveSlot{{WorkID: 10, Side: "a", Slot: 0}}
+	if err := s.RecordInterleave(ctx, "o", "ao3_work", 1, "alpha", "beta", slots); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, ok, err := s.CreditInterleave(ctx, "o", 10); err != nil || !ok {
+		t.Fatalf("credit: ok=%v err=%v", ok, err)
+	}
+	if err := s.RecordInterleave(ctx, "o", "ao3_work", 1, "alpha", "beta", slots); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM interleave_impressions WHERE work_id = 10`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("%d impressions for a credited work shown again, want 2", n)
+	}
+}
