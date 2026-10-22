@@ -35,7 +35,7 @@ the "high score" half of the list.
 | 13 | Author leaderboard in the arena | **built** | `ao3_author` is an arena kind (`arena_kinds_test.go`) |
 | 14 | "More like this" on every work card | **built** | `layout.html` workrow: "rank from this" → `/recommend?seed=` |
 | 15 | Cross-kind "tags you'd like from arena history" | not built | arena tag weights exist; the cross-kind surface does not |
-| 16 | `/eval` dashboard | **not built** | offline report prints to stdout; no persisted run, no page |
+| 16 | `/eval` dashboard | **shipped 2026-10-22** | `eval_runs` table, `internal/store/eval.go`, `internal/web/eval.go`, `/eval` in `registry.go`; every `kindred eval` run persists with k and mode |
 | 17 | Tag relationship types (rivals/complements) | not built | PMI edges only, unsigned |
 | 18 | Session "not interested" soft block | **built** (as blocks + seen) | `/block` page, `blocked_tags`, seen marks |
 | 19 | Fandom similarity matrix | not built | `/api/v1/ao3/tags/{id}/similar` covers co-occurrence, not fandom vectors |
@@ -75,6 +75,32 @@ grouping is the useful part:
   counterfactuals and causal inference need randomised assignment at a scale
   this deployment will never have). Building these would produce numbers
   nobody could act on.
+
+## 1a. What is left, counted (2026-10-22, after tier 2 shipped)
+
+Of the 30 ideas audited row by row: **18 built**, **1 partly built** (#10 —
+signals exist, no dampening exponent), **11 not built**. Ideas 31-100 are
+grouped rather than audited individually (see below); naming them one by one is
+itself the next unit of work, because a status per idea is a claim that needs
+the tree read, and a title-word grep proves nothing (measured: "follower",
+"gallery" and "voice" hit nearly every file).
+
+The 11 still open, with what each actually needs:
+
+| # | Idea | What is missing |
+|---|---|---|
+| 10 | Popularity-dampened default sort | a dampening exponent (`score * kudos^-0.3`) applied to the default sort; deliberately not built while the `quality` signal is unmeasured |
+| 11 | Tag embedding nearest neighbours | a bulk load path: `Engine.Embedding` reads one row per call, so a 634k x 32 scan needs a decision about loading the matrix, not a new surface |
+| 12 | Relationship recs via character co-occurrence | the corpus holds character and relationship tags in the same shape; telling them apart is a classification problem, not a query |
+| 15 | Cross-kind "tags you'd like from arena history" | a surface that reads arena tag weights for a different kind |
+| 17 | Tag relationship types (rivals/complements) | signed PMI: edges are unsigned today, so "rivals" cannot be expressed |
+| 19 | Fandom similarity matrix | fandom-level vectors (the existing endpoint is tag co-occurrence) |
+| 21 | Tag PageRank | one graph computation and a column to hold it |
+| 23 | "Surprise me within fandom" | a fandom parameter on `/surprise`; cheap, and the only open idea that is a template-plus-argument |
+| 24 | RRF instead of a weighted sum | a different ranking maths, which replaces the tune concept the whole site is built on |
+| 25 | Author tag entropy | the statistic plus a decision about where it shows |
+| 27 | Cross-kind arena "which tag fits this work" | heterogeneous arena pairs; every existing pair is same-kind |
+| 30 | Reader cohort clustering | ~100 sessions and a clustering step; the deployment has neither yet |
 
 ## 2. What tier 2 implements, and why these
 
