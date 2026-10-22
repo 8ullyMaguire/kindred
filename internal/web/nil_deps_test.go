@@ -95,6 +95,10 @@ func TestPagesDegradeInsteadOfPanickingWhenTheCorpusIsMissing(t *testing.T) {
 		// These four cannot work without the corpus, and each must say so.
 		{"/search?q=x", http.StatusServiceUnavailable, "a search that cannot search must not read as 'nothing matched'"},
 		{"/work/1", http.StatusServiceUnavailable, "must not 404: that claims the work does not exist"},
+		// The family half answers from the corpus too, and an empty result on a
+		// corpus-less deployment would read as "no work matched", which is a
+		// claim about data nobody has.
+		{"/search?universe=worm", http.StatusServiceUnavailable, "the family intersection needs the corpus"},
 		{"/fandoms", http.StatusServiceUnavailable, "corpus queries are not enabled"},
 		{"/underrated", http.StatusServiceUnavailable, "corpus queries are not enabled"},
 		{"/surprise", http.StatusServiceUnavailable, "corpus queries are not enabled"},
