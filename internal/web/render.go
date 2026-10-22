@@ -112,6 +112,10 @@ type SearchPage struct {
 	// reader acting on the first would be wrong about the second.
 	TagError  string
 	WorkError string
+	// FamError is set when the family intersection failed or named a family
+	// that does not exist. Its own field for the same reason as the two
+	// above: one section failing must not claim the others are empty.
+	FamError string
 
 	// N is the work-list limit this request asked for (?n=), and NextN is
 	// N doubled -- the "show more" target. They live here because the
@@ -134,6 +138,40 @@ type SearchPage struct {
 	// search term, not a broken link, and claiming otherwise would be a
 	// confident answer to a question that was never asked.
 	ExactMissing int64
+
+	// ---- the family intersection, folded in from the old /browse page ----
+	//
+	// A reader asking for "recent worm isekai" is asking a question that
+	// text search cannot answer: title matching finds nothing, and a tag
+	// page filters ONE tag. The intersection needs two declared families,
+	// which is why these controls live here rather than being expressible
+	// through the search box.
+	//
+	// It is a SECTION of this page and not a page of its own because the
+	// capability, not the surface, was worth keeping: /browse was a whole
+	// route, nav item, template and API endpoint for one form.
+	//
+	// UniverseOptions and ConceptOptions are the declared families as
+	// select options, so the form shows a label ("Worm (Parahumans)")
+	// while the URL carries the key ("worm").
+	UniverseOptions []SortOption
+	ConceptOptions  []SortOption
+	// Universe and Concept are the current selections, by key.
+	Universe string
+	Concept  string
+	// RecentDays is the recency window in days.
+	RecentDays int
+	// FamSearched is true once a family has been named. It separates "the
+	// reader has not asked yet" from "the reader asked and found nothing"
+	// -- two states that must not share a sentence.
+	FamSearched bool
+	// Fams are the matching works, as WorkHit rows so the shared workrow
+	// template renders them.
+	Fams []WorkHit
+	// FamsMeta reports the pool sizes, because a short list is otherwise
+	// unexplainable: "3 results" and "0 results" look identical until the
+	// reader can see how large each pool was.
+	FamsMeta tagfamily.Meta
 }
 
 // TagHit is one row of a tag search.
@@ -283,32 +321,6 @@ type TagInfo struct {
 }
 
 // WorkHit is one row of a work list.
-// BrowsePage is the "fandom x concept" browse page.
-type BrowsePage struct {
-	Base
-	// UniverseOptions and ConceptOptions are the declared families, as
-	// select options, so the form can show a label ("Worm (Parahumans)")
-	// while the URL carries the key ("worm").
-	UniverseOptions []SortOption
-	ConceptOptions  []SortOption
-	// Universe and Concept are the current selections, by key.
-	Universe string
-	Concept  string
-	// RecentDays is the recency window in days.
-	RecentDays int
-	// N is the page size.
-	N int
-	// Searched is true once a family has been named. It separates "the
-	// reader has not asked yet" from "the reader asked and found
-	// nothing" -- two states that must not share a sentence.
-	Searched bool
-	// Works are the matching works, as WorkHit rows so the shared
-	// workrow template renders them.
-	Works []WorkHit
-	// Meta reports the pool sizes.
-	Meta tagfamily.Meta
-}
-
 // boolToInt converts a bool to the int64 the workrow template reads.
 //
 // WorkHit.Complete is an int64 because the corpus stores completeness as a

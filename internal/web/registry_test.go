@@ -397,20 +397,3 @@ func TestTheEmptyStateIsSaidOnce(t *testing.T) {
 		})
 	}
 }
-
-func TestBrowsePageIsRegisteredAndRouted(t *testing.T) {
-	spec, _, ok := findPage("/browse")
-	if !ok {
-		t.Fatal("/browse is not in the page registry")
-	}
-	if spec.Nav == "" {
-		t.Error("/browse has no Nav, so no nav item can mark it current")
-	}
-	if spec.Handler == nil {
-		t.Error("/browse has no Handler")
-	}
-	if !spec.List {
-		t.Error("/browse renders a list of rows but does not declare List: true, " +
-			"so the two-sided empty-state contract is not applied to it")
-	}
-}

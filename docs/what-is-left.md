@@ -291,14 +291,35 @@ The one-off `worm-isekai` command is gone, replaced by a general capability:
 works carrying a tag from a **fandom family** AND a tag from a **concept
 family**, updated within N days.
 
-- [x] **`/browse` (page), `GET /api/v1/browse` (API), `kindred browse` (CLI).**
-      All three speak ONE vocabulary — the family key (`worm`, `isekai`) — so
-      a new fandom or a new idea is a data edit in
-      `internal/tagfamily/families.json`, not a code edit. The API extends
-      the existing `/api/v1/ao3/works` with `?universe=` and `?concept=`
-      rather than replacing it. The page is ONE new page inside the EXISTING
-      "Find something to read" nav group, reusing the shared workrow
-      template.
+- [x] **The query speaks ONE vocabulary — the family key (`worm`, `isekai`)**
+      — so a new fandom or a new idea is a data edit in
+      `internal/tagfamily/families.json`, not a code edit.
+- [x] **FOLDED INTO `/search` (2026-10-22), after the owner judged the
+      separate page too much surface for the function.** `/browse`, its nav
+      entry, its template and `GET /api/v1/browse` are GONE. The form is now
+      a fieldset on `/search` (a GET to `/search?universe=&concept=&recent=`),
+      and the results are a "Both families" section there. What survives:
+      the `kindred browse` verb (scriptable, no UI surface) and the families
+      vocabulary. The API capability was never unique — `/api/v1/ao3/works`
+      already answers `?universe=` + `?concept=` intersections, so the second
+      endpoint was a duplicate; the pool counts it alone reported now live on
+      the page and in the CLI. The fold keeps the CAPABILITY (nothing else can
+      answer "recent worm isekai": text search cannot, and a tag page filters
+      one tag) while removing the surface.
+- [x] **THE FOLD EXPOSED A REAL DEFECT IN PRODUCTION, and this is the part
+      worth keeping.** The new page-level tests matched NOTHING against the
+      40-work fixture, and the cause was not the fold: the live mirror stores
+      `works.update_date` as AO3's display date (`17 Sep 2008`), and
+      `internal/corpus`'s parser only accepted ISO layouts, so **every real
+      work parsed as undated and the `recency` signal skipped all of them** —
+      silently, at whatever weight the tune gave it. No test saw it because
+      the test fixture wrote `2026-01-15`: a fixture in the wrong format
+      validates the wrong behaviour. Fixed: the parser accepts `2 Jan 2006`
+      (plus RFC3339 with microseconds, the `first_seen` shape), the fixture
+      writes `15 Jan 2026`, and the date-format cases are asserted. Verified
+      against the live mirror: 112,935 works, `update_date` is display-format
+      in every sampled id range, so the recency signal was inert on the whole
+      corpus before this and contributes now.
 - [x] **The families are DECLARED, not derived, and that is a measured
       decision, not a shortcut.** The corpus cannot derive them: one
       franchise's spellings are near-disjoint populations (Worm's two biggest

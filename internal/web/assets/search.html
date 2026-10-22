@@ -1,4 +1,49 @@
 {{define "content"}}
+{{/* Two ways to look for something on one page.
+
+     The search box lives in the layout (it is on every page). The form below
+     is the FAMILY intersection, folded in from the old /browse page: a reader
+     asking for "recent worm isekai" cannot express that in the box, because
+     titles do not contain it and a tag page filters ONE tag.
+
+     It is a GET form for the same reason the tag page's filters are: a result
+     is a URL a reader can bookmark or share. */}}
+<form class="controls" method="get" action="/search" role="search"
+      aria-label="Find works in two tag families">
+  {{/* The search box's q rides along, so adding a family to an existing text
+       search narrows it rather than silently dropping it. */}}
+  {{if .Query}}<input type="hidden" name="q" value="{{.Query}}">{{end}}
+  <input type="hidden" name="n" value="{{.N}}">
+
+  <label for="universe">Fandom family</label>
+  <select id="universe" name="universe">
+    <option value="">any fandom</option>
+    {{$u := .Universe}}
+    {{range .UniverseOptions}}
+      <option value="{{.Value}}" {{if eq .Value $u}}selected{{end}}>{{.Label}}</option>
+    {{end}}
+  </select>
+
+  <label for="concept">Concept family</label>
+  <select id="concept" name="concept">
+    <option value="">any concept</option>
+    {{$c := .Concept}}
+    {{range .ConceptOptions}}
+      <option value="{{.Value}}" {{if eq .Value $c}}selected{{end}}>{{.Label}}</option>
+    {{end}}
+  </select>
+
+  <label for="recent">Updated within</label>
+  <select id="recent" name="recent">
+    <option value="30" {{if eq .RecentDays 30}}selected{{end}}>30 days</option>
+    <option value="90" {{if eq .RecentDays 90}}selected{{end}}>90 days</option>
+    <option value="365" {{if eq .RecentDays 365}}selected{{end}}>one year</option>
+    <option value="730" {{if eq .RecentDays 730}}selected{{end}}>two years</option>
+  </select>
+
+  <input type="submit" value="Search">
+</form>
+
 {{if .Query}}
   {{/* Two separate lists, never one merged ranking.
 
@@ -81,7 +126,37 @@
       so a shorter word finds more.
     </p>
   {{end}}
-{{else}}
+{{end}}
+
+{{if .FamSearched}}
+  <h2>Both families</h2>
+  {{if .FamError}}
+    <p class="note" data-testid="family-error">{{.FamError}}</p>
+  {{else}}
+    {{/* The pool counts are on the page because a short list is otherwise
+         unexplainable: "3 results" and "0 results" look identical until the
+         reader can see how large each pool was. */}}
+    <p class="count" data-testid="family-counts">
+      {{.FamsMeta.Matched}} work{{if ne .FamsMeta.Matched 1}}s{{end}} matched &mdash;
+      fandom pool {{commas .FamsMeta.UniverseWorks}},
+      concept pool {{commas .FamsMeta.ConceptWorks}},
+      window {{.FamsMeta.RecentDays}} days.
+    </p>
+
+    {{if .Fams}}
+      <div class="recommend" data-testid="family-works">
+        {{range .Fams}}{{template "workrow" .}}{{end}}
+      </div>
+    {{else}}
+      <p class="count" data-testid="family-empty" data-empty="true">
+        No work matched that combination. Widen the recency window, or pick
+        another concept &mdash; the counts above say how large each pool was.
+      </p>
+    {{end}}
+  {{end}}
+{{end}}
+
+{{if and (not .Query) (not .FamSearched)}}
   <p>
     Pick a tag, a work, or an author. A recommender needs somewhere to
     start: give it one or two works you liked and it ranks the things that

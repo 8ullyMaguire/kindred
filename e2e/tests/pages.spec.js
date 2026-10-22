@@ -56,9 +56,6 @@ const PAGES = [
   // both -- a route nothing visits cannot be broken by a change nobody makes.
   { path: '/mirror', link: '/mirror', name: 'mirror', title: /mirror/i, heading: true },
   { path: '/crawl', link: '/crawl', name: 'crawl', title: /crawl queue/i, heading: true },
-  // The family-browse page. It is in the nav, and a route nothing visits
-  // cannot be broken by a change nobody makes.
-  { path: '/browse', link: '/browse', name: 'browse', title: /browse/i, heading: true },
 ];
 
 test.describe('every reader page renders', () => {

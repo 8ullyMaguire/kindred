@@ -1176,7 +1176,11 @@ func (d Deps) renderSearch(w http.ResponseWriter, r *http.Request, q string) {
 	// an answer: "Find something to read" above an empty box would be a lie once
 	// a query is in it.
 	heading := "Find something to read"
-	if q != "" {
+	// A family query is an ANSWER too, even with an empty search box: the
+	// reader named two families and expects results, not an invitation.
+	famUniverse := strings.TrimSpace(r.URL.Query().Get("universe"))
+	famConcept := strings.TrimSpace(r.URL.Query().Get("concept"))
+	if q != "" || famUniverse != "" || famConcept != "" {
 		heading = "Search results"
 	}
 	base := d.baseOf(r, "kindred", heading)
@@ -1184,8 +1188,26 @@ func (d Deps) renderSearch(w http.ResponseWriter, r *http.Request, q string) {
 	page := SearchPage{Base: base}
 	page.N = clampInt(atoiDefault(r.URL.Query().Get("n"), 50), 1, 200)
 	page.NextN = page.N * 2
+	page.Universe, page.Concept = famUniverse, famConcept
+	page.RecentDays = clampInt(atoiDefault(r.URL.Query().Get("recent"), tagfamily.DefaultRecentDays), 1, 3650)
+	page.FamSearched = famUniverse != "" || famConcept != ""
 
-	if q != "" {
+	// The family controls are populated on EVERY visit, including the empty
+	// front page: a reader cannot name a family the form does not offer, and
+	// the options come from the same declared vocabulary the query resolves
+	// against.
+	if fams, err := tagfamily.LoadFamilies(); err == nil {
+		for _, u := range fams.Universes() {
+			page.UniverseOptions = append(page.UniverseOptions, SortOption{Value: u.Name, Label: u.Label})
+		}
+		for _, c := range fams.Concepts() {
+			page.ConceptOptions = append(page.ConceptOptions, SortOption{Value: c.Name, Label: c.Label})
+		}
+	} else {
+		page.FamError = err.Error()
+	}
+
+	if q != "" || page.FamSearched {
 		// The home page (q == "") needs no corpus, so this sits inside the
 		// branch rather than at the top: guarding earlier would turn a working
 		// front page into a 503 on a corpus-less server.
@@ -1193,22 +1215,31 @@ func (d Deps) renderSearch(w http.ResponseWriter, r *http.Request, q string) {
 			d.fail(w, r, http.StatusServiceUnavailable, errNoCorpus)
 			return
 		}
-		// An AO3 work id or work URL in the box is an ADDRESS, not a
-		// search term: resolve it first and render it above whatever the
-		// fuzzy match finds. A URL-shaped query that names an id this
-		// mirror does not hold also says so -- that is a reader holding a
-		// link, and "nothing matched" would hide a fact they need.
-		if id, fromURL := searchWorkID(q); id > 0 {
-			if hit, err := d.workHitByID(ctx, id); err != nil {
-				page.WorkError = err.Error()
-			} else if hit != nil {
-				page.Exact = hit
-			} else if fromURL {
-				page.ExactMissing = id
+		// The TEXT half runs only when there is a query. Guarding it is
+		// load-bearing: searchTags("") and searchWorks("") would match
+		// everything, so a family-only request must not reach them.
+		if q != "" {
+			// An AO3 work id or work URL in the box is an ADDRESS, not a
+			// search term: resolve it first and render it above whatever the
+			// fuzzy match finds. A URL-shaped query that names an id this
+			// mirror does not hold also says so -- that is a reader holding a
+			// link, and "nothing matched" would hide a fact they need.
+			if id, fromURL := searchWorkID(q); id > 0 {
+				if hit, err := d.workHitByID(ctx, id); err != nil {
+					page.WorkError = err.Error()
+				} else if hit != nil {
+					page.Exact = hit
+				} else if fromURL {
+					page.ExactMissing = id
+				}
 			}
+			d.searchTags(ctx, q, &page)
+			d.searchWorks(ctx, q, &page)
 		}
-		d.searchTags(ctx, q, &page)
-		d.searchWorks(ctx, q, &page)
+		// The FAMILY half, folded in from the old /browse page.
+		if page.FamSearched {
+			d.searchFamilies(ctx, &page)
+		}
 	}
 	d.page(w, "search.html", page, http.StatusOK)
 }
@@ -3176,70 +3207,70 @@ func clampInt(n, lo, hi int) int {
 	return n
 }
 
-// renderBrowse answers "recent works in this fandom that are this concept".
+// searchFamilies fills the family-intersection section of the search page.
 //
-// The page is a form over one query: a universe (a fandom family), a
-// concept (an idea family), and a recency window. Both families come from
-// the declared set in internal/tagfamily, so adding a fandom or a concept
-// to the site is a data edit, not a code edit.
-func (d Deps) renderBrowse(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	q := r.URL.Query()
-	page := BrowsePage{Base: d.baseOf(r, "Browse by fandom and concept", "Browse by fandom and concept")}
+// Folded in from the /browse page, which was a route, a nav item, a template
+// and an API endpoint for one form. The CAPABILITY is worth keeping: text
+// search cannot answer "recent worm isekai" (titles do not contain it) and a
+// tag page filters ONE tag, so the intersection of two declared families is a
+// question nothing else on the site can answer.
+//
+// It reports through FamError rather than failing the request: a broken family
+// query must not take the text half of the page down with it, and an empty
+// section must not be presented as "nothing matched" when the query failed.
+func (d Deps) searchFamilies(ctx context.Context, page *SearchPage) {
 	fams, err := tagfamily.LoadFamilies()
 	if err != nil {
-		d.fail(w, r, http.StatusInternalServerError, err)
+		page.FamError = err.Error()
 		return
 	}
-	for _, u := range fams.Universes() {
-		page.UniverseOptions = append(page.UniverseOptions,
-			SortOption{Value: u.Name, Label: u.Label})
-	}
-	for _, c := range fams.Concepts() {
-		page.ConceptOptions = append(page.ConceptOptions,
-			SortOption{Value: c.Name, Label: c.Label})
-	}
-	page.Universe = q.Get("universe")
-	page.Concept = q.Get("concept")
-	page.RecentDays = clampInt(atoiDefault(q.Get("recent"), tagfamily.DefaultRecentDays), 1, 3650)
-	page.N = clampInt(atoiDefault(q.Get("n"), 50), 1, 200)
-	page.Searched = page.Universe != "" || page.Concept != ""
 
-	if page.Searched {
-		var universeTags, conceptTags []string
-		if u, ok := fams.Universe(page.Universe); ok {
-			universeTags = u.Spellings
+	var universeTags, conceptTags []string
+	if page.Universe != "" {
+		u, ok := fams.Universe(page.Universe)
+		if !ok {
+			// Named rather than ignored: a filter that cannot fire and
+			// silently returns everything is the accepted-and-ignored
+			// shape this project refuses, and the API refuses it too.
+			page.FamError = fmt.Sprintf("unknown universe %q; known: %s",
+				page.Universe, strings.Join(fams.UniverseNames(), ", "))
+			return
 		}
-		if c, ok := fams.Concept(page.Concept); ok {
-			conceptTags = c.Tags
-		}
-		if len(universeTags) > 0 || len(conceptTags) > 0 {
-			res, err := tagfamily.Query(ctx, d.Engine.Corpus.DB, tagfamily.QueryOptions{
-				UniverseTags: universeTags,
-				ConceptTags:  conceptTags,
-				RecentDays:   page.RecentDays,
-				Limit:        page.N,
-			})
-			if err != nil {
-				d.fail(w, r, http.StatusInternalServerError, err)
-				return
-			}
-			page.Meta = res.Meta
-			// The rows are converted to WorkHit so the SHARED workrow
-			// template renders them. A second row markup for one page
-			// would be a second thing to keep in step with the first.
-			for _, it := range res.Items {
-				page.Works = append(page.Works, WorkHit{
-					ID:        it.ID,
-					Title:     it.Title,
-					Author:    it.Authors,
-					URL:       it.URL,
-					Kudos:     it.Kudos,
-					WordCount: it.Words,
-					Complete:  boolToInt(it.Complete),
-				})
-			}
-		}
+		universeTags = u.Spellings
 	}
-	d.page(w, "browse.html", page, http.StatusOK)
+	if page.Concept != "" {
+		c, ok := fams.Concept(page.Concept)
+		if !ok {
+			page.FamError = fmt.Sprintf("unknown concept %q; known: %s",
+				page.Concept, strings.Join(fams.ConceptNames(), ", "))
+			return
+		}
+		conceptTags = c.Tags
+	}
+
+	res, err := tagfamily.Query(ctx, d.Engine.Corpus.DB, tagfamily.QueryOptions{
+		UniverseTags: universeTags,
+		ConceptTags:  conceptTags,
+		RecentDays:   page.RecentDays,
+		Limit:        page.N,
+	})
+	if err != nil {
+		page.FamError = err.Error()
+		return
+	}
+	page.FamsMeta = res.Meta
+	// The rows become WorkHit so the SHARED workrow template renders them. A
+	// second row markup for one section would be a second thing to keep in
+	// step with the first.
+	for _, it := range res.Items {
+		page.Fams = append(page.Fams, WorkHit{
+			ID:        it.ID,
+			Title:     it.Title,
+			Author:    it.Authors,
+			URL:       it.URL,
+			Kudos:     it.Kudos,
+			WordCount: it.Words,
+			Complete:  boolToInt(it.Complete),
+		})
+	}
 }

@@ -995,23 +995,27 @@ var pageRenderCases = []pageRenderCase{
 		wantNotContains: []string{"Nothing is queued"},
 	},
 	{
-		name: "browse.html",
-		tpl:  "browse.html",
-		data: BrowsePage{
-			Base:            sweepBase,
-			Searched:        true,
+		// The family intersection lives on the search page now; these cases
+		// came across from browse.html with it.
+		name: "search.html with a family match",
+		tpl:  "search.html",
+		data: SearchPage{
+			// No Query: this is a FAMILY-only request, and the text
+			// sections must stay off rather than claim an empty search.
+			Base:            Base{Title: "T", Heading: "H"},
+			FamSearched:     true,
 			Universe:        "worm",
 			Concept:         "isekai",
 			UniverseOptions: []SortOption{{Value: "worm", Label: "Worm (Parahumans)"}},
 			ConceptOptions:  []SortOption{{Value: "isekai", Label: "isekai"}},
 			RecentDays:      365,
 			N:               50,
-			Works: []WorkHit{
+			Fams: []WorkHit{
 				{ID: 1, Title: "W1", Author: "A", Kudos: 10, Hits: 100,
 					WordCount: 5000, Language: "en", Complete: 1,
 					URL: "https://example.invalid/works/1"},
 			},
-			Meta: tagfamily.Meta{
+			FamsMeta: tagfamily.Meta{
 				UniverseWorks: 100, ConceptWorks: 20, Matched: 1, Returned: 1, RecentDays: 365,
 			},
 		},
@@ -1020,8 +1024,9 @@ var pageRenderCases = []pageRenderCase{
 			// "0 results" look identical until the reader can see
 			// how large each pool was.
 			"100", "20", "365",
-			// The form is a GET, so the result is a shareable URL.
-			`name="universe"`, `name="concept"`,
+			// The form is a GET to the SEARCH page -- /browse no longer
+			// exists -- so the result is still a shareable URL.
+			`action="/search"`, `name="universe"`, `name="concept"`,
 			// And the row is the SHARED row template.
 			"/work/1", "5,000 words",
 		},
@@ -1029,22 +1034,24 @@ var pageRenderCases = []pageRenderCase{
 		wantNotContains: []string{"data-empty"},
 	},
 	{
-		// A search that matched nothing says so, and names the pools
+		// A family search that matched nothing says so, and names the pools
 		// rather than claiming the fandom is empty.
-		name:         "browse.html with no matches",
-		tpl:          "browse.html",
+		name:         "search.html with no family matches",
+		tpl:          "search.html",
 		hasEmptyList: true,
-		data: BrowsePage{
-			Base:            sweepBase,
-			Searched:        true,
+		data: SearchPage{
+			// No Query: this is a FAMILY-only request, and the text
+			// sections must stay off rather than claim an empty search.
+			Base:            Base{Title: "T", Heading: "H"},
+			FamSearched:     true,
 			Universe:        "worm",
 			Concept:         "isekai",
 			UniverseOptions: []SortOption{{Value: "worm", Label: "Worm (Parahumans)"}},
 			ConceptOptions:  []SortOption{{Value: "isekai", Label: "isekai"}},
 			RecentDays:      365,
 			N:               50,
-			Works:           nil,
-			Meta: tagfamily.Meta{
+			Fams:            nil,
+			FamsMeta: tagfamily.Meta{
 				UniverseWorks: 100, ConceptWorks: 20, Matched: 0, Returned: 0, RecentDays: 365,
 			},
 		},

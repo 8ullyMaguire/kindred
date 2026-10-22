@@ -255,6 +255,11 @@ reason the web page shows a count beside every fandom rather than a ranking.
 
 ## `browse` — recent works matching a fandom family and a concept family
 
+The web surface for this is the family fieldset on `/search` (the standalone
+`/browse` page and `GET /api/v1/browse` were folded into it on 2026-10-22; the
+works endpoint answers `?universe=`+`?concept=` itself). This verb remains the
+scriptable path, and it is the only one that reports the pool counts as JSON.
+
 ```bash
 kindred browse --universe worm --concept isekai --recent 365 --n 50
 kindred browse --universe worm --concept isekai --json --out worm-isekai.json

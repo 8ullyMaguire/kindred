@@ -228,15 +228,6 @@ func allPages() []pageSpec {
 				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, _ string) { d.renderNeighbours(w, r) },
 			},
 			{
-				Template: "browse.html",
-				Paths:    []string{"/browse"},
-				Nav:      "/browse",
-				List:     true,
-				Handler: func(d Deps, w http.ResponseWriter, r *http.Request, _ string) {
-					d.renderBrowse(w, r)
-				},
-			},
-			{
 				Template: "algo.html",
 				Paths:    []string{"/algo"},
 				Nav:      "/algo",
