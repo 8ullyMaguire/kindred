@@ -211,7 +211,7 @@ Change `work.html` to link `/recommend?seed=ao3_work:{id}` on each work card. On
 
 ## M13 — Offline eval harness (S9, deferred but spec'd)
 
-A new command `kindred eval --corpus <db> --db <state> --ratio 0.2 --n 10`. Reads all works in the corpus, holds out 20% of bookmarks, scores recommendations on the held-out portion, computes recall@10 and NDCG@10. Pure computation, no web surface. Runs once per corpus rebuild.
+A new command `kindred eval --corpus ~/kindling-data/ao3_metadata.db --db ~/.local/share/kindred/kindred.db --ratio 0.2 --n 10`. Reads all works in the corpus, holds out 20% of bookmarks, scores recommendations on the held-out portion, computes recall@10 and NDCG@10. Pure computation, no web surface. Runs once per corpus rebuild.
 
 **Verification:** `go run ./cmd/kindred eval --help` prints usage; actual run on live DB returns JSON with recall≥0, ndcg≥0. Defers to next turn after S1–S11 ship.
 
