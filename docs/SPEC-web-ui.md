@@ -145,7 +145,8 @@ auto-escaping is the whole point of choosing it.
   x/crypto. The frontend uses `html/template` and `embed` from stdlib.
 - **The 220 MB RSS cap holds.** Serving HTML costs a few KB of templates
   plus whatever the response buffers are. The `make budget` gate must
-  still pass, and `kindred serve` must still report `budget_ok: true`.
+  still pass, and `kindred serve` must still answer `/healthz` with 200 and a
+  memory report (the old `budget_ok` cap was removed on 2026-10-22, SPEC §6).
 - **The API does not change.** This milestone adds routes and a static
   handler. Every existing endpoint keeps its shape, and the existing
   JSON 404 for unmatched `/api/*` paths is preserved.

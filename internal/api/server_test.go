@@ -49,8 +49,10 @@ func newTestServer(t *testing.T) *httptest.Server {
 // agreement column is one: what the batch does depends on it and no
 // endpoint sets it, so a test of the weighted batch has to reach the table.
 //
-// The returned client HAS a cookie jar, and that is load-bearing rather than
-// incidental. httptest.NewServer's own ts.Client() has Jar == nil, so the
+// Use jarClient(t, ts) WITH THIS SERVER, and note that ts.Client() has
+// Jar == nil: this comment used to claim the opposite and cost a debugging
+// cycle, because a test that reads the comment believes the cookie persists
+// when it does not. httptest.NewServer's own ts.Client() has Jar == nil, so the
 // kindred_arena cookie set by the first response is never sent back: every
 // request mints a fresh session, OwnerKey returns a different HMAC each time,
 // and a test that writes with one request and reads with another looks at two
@@ -222,50 +224,41 @@ func get(t *testing.T, ts *httptest.Server, path string) (int, map[string]any) {
 	return resp.StatusCode, body
 }
 
-// TestHealthzReportsOK checks the health surface, which is what a
-// supervisor polls.
+// A health check answers one question: is this process serving? The 220 MiB
+// cap that used to make a correct, serving process answer 503 was removed on
+// 2026-10-22 (owner's decision, SPEC §6 rewritten). So the assertion flips:
+// the memory NUMBERS must still be there, and the VERDICT must not.
 //
-// It asserts the SHAPE of the response and that the budget verdict is
-// internally consistent, rather than that the verdict is "under budget".
-//
-// That distinction is load-bearing. /healthz reports VmHWM, a monotonic
-// process high-water mark that no test can lower, so whether this package is
-// under the 220 MiB cap depends on which tests ran before it. Under `-race`
-// it consistently is not: the suite failed 3 runs out of 3 with `status 503,
-// want 200` while passing in isolation. Asserting "ok" here would make a
-// passing suite depend on test order and on whether the race detector was
-// enabled -- a test that reports a real regression as a failure, and a real
-// fix as a failure, depending on nothing.
-//
-// What IS asserted: the cap is present, budget_ok is present, and budget_ok is
-// true exactly when status is "ok". Those are the properties a supervisor
-// relies on, and they hold whatever the process peak happens to be.
+// The absence assertions are the load-bearing ones. `budget_ok` coming back
+// would restore a status the deploy gate treats as a product failure, and the
+// gate's whole purpose is that a measurement and a failure must not look
+// alike. Asserting only "200" would pass with the verdict quietly restored.
 func TestHealthzReportsOK(t *testing.T) {
 	ts := newTestServer(t)
 	status, body := get(t, ts, "/healthz")
-	if status != http.StatusOK && status != http.StatusServiceUnavailable {
-		t.Fatalf("status %d, want 200 or 503", status)
+	if status != http.StatusOK {
+		t.Fatalf("status %d, want 200: a process that answers is healthy", status)
 	}
-	for _, k := range []string{"rss_cap_kib", "budget_ok", "peak_rss_kib", "uptime_s"} {
+	for _, k := range []string{"peak_rss_kib", "heap_mib", "goroutines", "uptime_s"} {
 		if _, ok := body[k]; !ok {
-			t.Fatalf("healthz is missing %q; a health check that cannot report a "+
-				"field cannot be used to decide about it", k)
+			t.Fatalf("healthz is missing %q; the memory report is the only record "+
+				"of what the process reached", k)
 		}
 	}
-	// The two must agree: budget_ok false with status "ok" is exactly the
-	// inconsistency this endpoint exists to avoid.
-	budgetOK, _ := body["budget_ok"].(bool)
-	st, _ := body["status"].(string)
-	if budgetOK && st != "ok" {
-		t.Errorf("budget_ok is true but status is %q", st)
+	for _, k := range []string{"budget_ok", "rss_cap_kib", "over_budget"} {
+		if _, ok := body[k]; ok {
+			t.Fatalf("healthz reports %q again; the memory cap was removed and a "+
+				"health verdict for a number is what made a working service look broken", k)
+		}
 	}
-	if !budgetOK {
-		if st != "over_budget" {
-			t.Errorf("budget_ok is false but status is %q", st)
-		}
-		if status != http.StatusServiceUnavailable {
-			t.Errorf("over budget but status is %d, want 503", status)
-		}
+	if st, _ := body["status"].(string); st != "ok" {
+		t.Fatalf("status = %q, want ok", st)
+	}
+	// The measurement itself must be real: a zero here is the parse
+	// failing silently, which is how a health endpoint reports "0 KiB" on a
+	// process that is using 200 MiB.
+	if peak, _ := body["peak_rss_kib"].(float64); peak <= 1024 {
+		t.Fatalf("peak_rss_kib = %v, want > 1024 for a live process", body["peak_rss_kib"])
 	}
 }
 

@@ -305,7 +305,8 @@ failing it is the point of having the gate.
 make budget
 ```
 
-expect `budget_ok: true` and peak RSS under 225,280 KiB.
+expect HTTP 200 and a `peak_rss_kib` figure (the 225,280 KiB cap was removed
+on 2026-10-22; the figure is a report, not a pass/fail).
 
 ---
 

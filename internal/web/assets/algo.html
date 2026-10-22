@@ -37,11 +37,26 @@
   </fieldset>
 
   <input type="submit" value="Compare">
+  {{/* One form, two questions. The compare button asks the reader to judge
+       two lists; this one asks the SAME seed and the SAME two algorithms for
+       one merged list, where the reader's answer is what they read rather
+       than what they say. Two forms would duplicate three fields and drift. */}}
+  <button type="submit" name="mode" value="interleave">Interleave them</button>
+  <p class="hint">
+    Interleaving shows one list with both algorithms contributing. Marking a
+    work read credits the algorithm that showed it, so the comparison costs no
+    comparison &mdash; and no reader is shown the worse list.
+  </p>
 </form>
 
 {{if .Err}}
   <p class="error" data-testid="algo-error">{{.Err}}</p>
 {{end}}
+
+<p class="hint">
+  Both views feed <a href="/eval">/eval</a>, which shows how they and the
+  offline held-out measurement relate.
+</p>
 
 {{if .Judged}}
   <p class="note" data-testid="algo-judged">
@@ -49,7 +64,76 @@
   </p>
 {{end}}
 
-{{if .Left}}
+{{if eq .Mode "interleave"}}
+  <h2 data-testid="interleaved-heading">One list, both algorithms</h2>
+  <p class="count" data-testid="interleaved-exposure">
+    {{len .Merged}} slots &mdash;
+    {{range $arm, $n := .Exposure}}<code>{{$arm}}</code> contributed {{$n}}{{end}}.
+    Each work is credited to the algorithm that contributed it, and marking it
+    read is the vote.
+  </p>
+  <ol class="algo-items interleaved">
+    {{range .Merged}}
+      <li data-arm="{{.Arm}}" data-testid="interleaved-item">
+        <span class="arm">{{.Arm}}</span>
+        <a href="/work/{{.ID}}">{{.Title}}</a>
+        <span class="score">{{printf "%.2f" .Score}}</span>
+      </li>
+    {{end}}
+  </ol>
+
+  <h2>What readers did with it</h2>
+  {{if .Arms}}
+    <p class="count">
+      Slots are impressions, including the ones nobody acted on: a rate over
+      clicks alone would be a rate among clicks and every arm would look
+      equally good. Window: the last 30 days.
+    </p>
+    <table class="standings" data-testid="interleaved-arms">
+      <thead>
+        <tr><th>Algorithm</th><th class="num">Slots</th><th class="num">Read</th><th class="num">Rate</th></tr>
+      </thead>
+      <tbody>
+        {{range .Arms}}
+          <tr>
+            <td><code>{{.Arm}}</code></td>
+            <td class="num">{{.Impressions}}</td>
+            <td class="num">{{.Credits}}</td>
+            <td class="num">{{printf "%.3f" .CreditRate}}</td>
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{if .Pairs}}
+      <p class="count">Head to head. The difference is A minus B, so a negative
+      number means B's slots were read more often.</p>
+      <table class="standings" data-testid="interleaved-pairs">
+        <thead>
+          <tr><th>A</th><th>B</th><th class="num">Slots A</th><th class="num">Slots B</th>
+              <th class="num">Read A</th><th class="num">Read B</th><th class="num">A &minus; B</th></tr>
+        </thead>
+        <tbody>
+          {{range .Pairs}}
+            <tr>
+              <td><code>{{.ArmA}}</code></td>
+              <td><code>{{.ArmB}}</code></td>
+              <td class="num">{{.ImpressionsA}}</td>
+              <td class="num">{{.ImpressionsB}}</td>
+              <td class="num">{{.CreditsA}}</td>
+              <td class="num">{{.CreditsB}}</td>
+              <td class="num">{{printf "%+.3f" .Difference}}</td>
+            </tr>
+          {{end}}
+        </tbody>
+      </table>
+    {{end}}
+  {{else}}
+    <p class="count" data-testid="interleaved-empty" data-empty="true">
+      No impressions yet. This list is the first one; mark a work read and it
+      will appear here as a credit for the algorithm that showed it.
+    </p>
+  {{end}}
+{{else if .Left}}
   {{/* What differs, stated before the lists. A reader is being asked to
        judge two rankings and is entitled to know which signals moved. */}}
   <p class="count" data-testid="algo-delta">

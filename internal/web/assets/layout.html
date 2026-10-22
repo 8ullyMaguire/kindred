@@ -77,6 +77,11 @@
                wants them can find them. */}}
           <li><a href="/mirror"{{if eq .NavKey "/mirror"}} class="is-current" aria-current="page"{{end}}>This mirror</a></li>
           <li><a href="/crawl"{{if eq .NavKey "/crawl"}} class="is-current" aria-current="page"{{end}}>Crawl queue</a></li>
+          {{/* The evaluation dashboard. It lives with the mirror rather than
+               with the reader's taste because its subject is the recommender's
+               own quality: an operator reading /mirror wants to know what the
+               thing measured, and a reader does not need to see recall@10. */}}
+          <li><a href="/eval"{{if eq .NavKey "/eval"}} class="is-current" aria-current="page"{{end}}>Evaluation</a></li>
           <li><a href="/api/v1/stats">JSON API</a></li>
         </ul>
       </div>

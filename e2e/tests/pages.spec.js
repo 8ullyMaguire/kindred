@@ -56,6 +56,11 @@ const PAGES = [
   // both -- a route nothing visits cannot be broken by a change nobody makes.
   { path: '/mirror', link: '/mirror', name: 'mirror', title: /mirror/i, heading: true },
   { path: '/crawl', link: '/crawl', name: 'crawl', title: /crawl queue/i, heading: true },
+  // The evaluation dashboard: the offline runs, the algorithm votes and the
+  // interleaved credits on one page. Its numbers come from the state database,
+  // so the interesting browser failure is a page that renders its empty states
+  // while the store behind it has rows.
+  { path: '/eval', link: '/eval', name: 'eval', title: /evaluation/i, heading: true },
 ];
 
 test.describe('every reader page renders', () => {

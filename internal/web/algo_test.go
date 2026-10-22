@@ -261,3 +261,75 @@ func TestTheAlgoColumnsAreOrderedByTheirWeights(t *testing.T) {
 		}
 	}
 }
+
+// The merged view: one list, both arms in it, and the impressions recorded so
+// a read mark can be attributed to the arm that showed the work.
+//
+// The page is the ONLY place a reader can vote for an interleaved list, so a
+// merged view that renders but records nothing is a feature that looks
+// finished and produces no evidence at all. That is what this asserts against.
+func TestTheMergedAlgoPageShowsBothArmsAndRecordsThem(t *testing.T) {
+	d, st := algoDeps(t)
+	d.Interleave = st
+
+	code, body := arenaBody(t, d, "/algo?seed=ao3_work:1&a=default&b=quality&mode=interleave&n=10")
+	if code != http.StatusOK {
+		t.Fatalf("GET /algo?mode=interleave = %d: %s", code, body)
+	}
+	if n := strings.Count(body, `data-testid="interleaved-item"`); n == 0 {
+		t.Fatalf("the merged list rendered no items: %s", body)
+	}
+	// Both arms are in the one list, each item naming its contributor.
+	if !strings.Contains(body, `data-arm="default"`) || !strings.Contains(body, `data-arm="quality"`) {
+		t.Fatal("the merged list does not name both arms on its items")
+	}
+	// The side-by-side columns must NOT render: a reader shown two lists
+	// plus a merged one has been asked the question twice.
+	if strings.Contains(body, "algo-column") {
+		t.Fatal("the merged view rendered the two-column comparison as well")
+	}
+
+	arms, _, err := st.InterleaveStats(context.Background())
+	if err != nil {
+		t.Fatalf("InterleaveStats: %v", err)
+	}
+	if len(arms) == 0 {
+		t.Fatal("the page rendered a merged list and recorded no impressions; " +
+			"no read mark could ever be attributed to it")
+	}
+	for _, a := range arms {
+		if a.Impressions == 0 {
+			t.Fatalf("arm %q has an empty row in the standings", a.Arm)
+		}
+	}
+}
+
+// An odd slot count is refused in the page's own voice, because the reader can
+// fix it in the URL -- and because the merge's asymmetry is real.
+func TestTheMergedAlgoPageRefusesAnOddSlotCount(t *testing.T) {
+	d, st := algoDeps(t)
+	d.Interleave = st
+	code, body := arenaBody(t, d, "/algo?seed=ao3_work:1&a=default&b=quality&mode=interleave&n=9")
+	if code != http.StatusBadRequest {
+		t.Fatalf("GET with n=9 = %d, want 400", code)
+	}
+	if !strings.Contains(body, "even") {
+		t.Fatalf("the page does not say why an odd slot count is refused: %s", body)
+	}
+	if strings.Contains(body, `data-testid="interleaved-item"`) {
+		t.Fatal("the page rendered a merged list it says it cannot build")
+	}
+}
+
+// Without a state database there is nowhere to record an impression, so the
+// page refuses rather than showing a list whose result nobody could read.
+func TestTheMergedAlgoPageRefusesWithoutAStore(t *testing.T) {
+	d, _ := algoDeps(t)
+	code, body := arenaBody(t, d, "/algo?seed=ao3_work:1&a=default&b=quality&mode=interleave&n=10")
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("GET without an interleave store = %d, want 503", code)
+	}
+	if !strings.Contains(body, "attribute") {
+		t.Fatalf("the page does not explain that the list cannot be attributed: %s", body)
+	}
+}

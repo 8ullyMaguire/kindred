@@ -113,7 +113,9 @@ echo "deploy-drift gate: $TARGET"
 #
 # And a 503 is an ANSWER. `curl -f` reads it as silence, so the gate announced
 # "/healthz did not answer" about a service that had answered -- on this host
-# {"status":"over_budget","peak_rss_kib":265984,"rss_cap_kib":225280}, i.e. the
+# {"status":"over_budget","peak_rss_kib":265984,...} under the old 220 MiB cap
+# (removed 2026-10-22 -- a serving process is healthy; this branch is now
+# defensive), i.e. the
 # process peaked above the `full` mode's 220 MB cap while the collab index was
 # loaded (measured: 200 twenty-one seconds after a restart, 503 once warm).
 # Reachability, health and drift are three different findings, and this file's

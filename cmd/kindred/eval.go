@@ -158,6 +158,23 @@ func runEval(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// Store the run before printing it. A measurement that is not stored can
+	// only be compared with someone's memory of last week, and the whole
+	// reason this arm exists is comparing one run with the next. A failure to
+	// record is a WARNING, not an error: the numbers are already computed and
+	// a read-only state database must not make an evaluation impossible.
+	if id, rerr := s.RecordEvalRun(ctx, store.EvalRun{
+		K: rep.K, Readers: rep.Users, Bookmarks: rep.Bookmarks,
+		Evaluated: rep.Evaluated, Failures: rep.Failures,
+		HeldOut: rep.HeldOut, Hits: rep.Hits,
+		Recall: rep.RecallAtK, NDCG: rep.NDCGAtK, Coverage: rep.Coverage,
+		Mode: c.Mode,
+	}); rerr != nil {
+		fmt.Fprintf(os.Stderr, "eval: could not record this run (it was still measured): %v\n", rerr)
+	} else if !*asJSON {
+		fmt.Printf("recorded as run #%d\n", id)
+	}
+
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")

@@ -14,6 +14,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
+	"git.polarisocial.xyz/kindred/kindred/internal/store"
 	"git.polarisocial.xyz/kindred/kindred/internal/tagfamily"
 )
 
@@ -580,6 +581,26 @@ type NeighboursPage struct {
 // columns of fic that a reader is asked to judge without being told what
 // differed is a preference test whose answer cannot be explained. The
 // per-signal delta is the evidence behind the question.
+// EvalPage is the evaluation dashboard: what the recommender measured, both
+// offline (held-out bookmarks) and online (votes and read marks).
+type EvalPage struct {
+	Base
+	// Runs are the persisted offline evaluations, newest first.
+	Runs []store.EvalRun
+	// Algos are the global algorithm-vote standings.
+	Algos []store.AlgoStanding
+	// Arms and Pairs are the interleaving results.
+	Arms  []store.InterleaveArmStat
+	Pairs []store.InterleavePairStat
+	// Coverage: what the numbers above were measured across.
+	Works    int64
+	Tags     int64
+	WorkTags int64
+	Edges    int64
+	// Err is a named failure, rendered in the page's voice.
+	Err string
+}
+
 type AlgoPage struct {
 	Base
 	// Seed echoes what was ranked, so a typo comes back in the form.
@@ -603,6 +624,22 @@ type AlgoPage struct {
 	WeightsDiffer []string
 	// Shared is how many ids appear in both lists.
 	Shared int
+
+	// Mode is "" for the side-by-side comparison and "interleave" for the
+	// merged list. The two are the same question asked two ways, on ONE page
+	// because they share the seed, the tunes and the validation: a second
+	// page would duplicate every one of those and drift from this one.
+	Mode string
+	// Merged is the interleaved list: both arms' items in one order, each
+	// tagged with the arm that contributed it.
+	Merged []rank.InterleavedItem
+	// Exposure is slots per arm. Printed because a credit count without it
+	// is a count a reader cannot divide.
+	Exposure map[string]int
+	// Arms and Pairs are the online standings: per-arm rates, and the
+	// head-to-head differences.
+	Arms  []store.InterleaveArmStat
+	Pairs []store.InterleavePairStat
 
 	// Err is a named failure (an unknown algorithm, a bad seed). Rendered
 	// in the page's own voice rather than as a 500, because every one of

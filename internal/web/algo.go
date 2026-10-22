@@ -29,6 +29,10 @@ func (d Deps) renderAlgo(w http.ResponseWriter, r *http.Request) {
 		A:      strings.TrimSpace(q.Get("a")),
 		B:      strings.TrimSpace(q.Get("b")),
 		Judged: strings.TrimSpace(q.Get("judged")),
+		Mode:   strings.TrimSpace(q.Get("mode")),
+	}
+	if page.Mode != "interleave" {
+		page.Mode = ""
 	}
 	if page.A == "" {
 		page.A = "default"
@@ -110,7 +114,15 @@ func (d Deps) renderAlgo(w http.ResponseWriter, r *http.Request) {
 	// the only thing that differs between the two columns is the weights.
 	pool := intParamOr(r, "pool", 0)
 	n := intParamOr(r, "n", 5)
-	if n < 1 || n > 25 {
+	if page.Mode == "interleave" {
+		// A merged list is a list of slots each arm can win, so it wants to
+		// be long enough for the exposure to average out; the side-by-side
+		// view wants to be short enough to compare by eye.
+		n = intParamOr(r, "n", 20)
+		if n < 2 || n > 50 {
+			n = 20
+		}
+	} else if n < 1 || n > 25 {
 		n = 5
 	}
 
@@ -156,6 +168,11 @@ func (d Deps) renderAlgo(w http.ResponseWriter, r *http.Request) {
 	page.RightWeights = rightW
 	page.WeightsDiffer = differingWeights(leftW, rightW)
 	page.Shared = sharedCount(page.Left, page.Right)
+
+	if page.Mode == "interleave" {
+		d.renderAlgoMerged(w, r, page, n)
+		return
+	}
 
 	d.page(w, "algo.html", page, http.StatusOK)
 }
@@ -286,4 +303,74 @@ func AlgoStandingsContext(ctx context.Context, s AlgoStore, ownerKey string) ([]
 		return nil, fmt.Errorf("no algorithm registry")
 	}
 	return s.AlgoStandings(ctx, ownerKey)
+}
+
+// renderAlgoMerged renders the interleaved view: one list, both arms in it.
+//
+// It is the same question as the side-by-side view, asked so that the reader
+// does not have to answer it. Both columns are already ranked (and by the same
+// pool and the same weights as the comparison), so this function only merges,
+// records the impressions, and reads the standings back.
+func (d Deps) renderAlgoMerged(w http.ResponseWriter, r *http.Request, page AlgoPage, n int) {
+	// Odd n is refused rather than rounded. The merge starts with arm A, so
+	// an odd slot count hands A one more slot than B; a rate difference that
+	// small is exactly what this experiment is supposed to be able to see,
+	// and a bias the size of the effect is not a measurement.
+	if n%2 != 0 {
+		page.Err = fmt.Sprintf(
+			"n must be even: an odd slot count gives %q the extra slot, which is a bias "+
+				"the standings cannot separate from a preference (got %d)", page.A, n)
+		d.page(w, "algo.html", page, http.StatusBadRequest)
+		return
+	}
+
+	page.Merged = rank.TeamDraft(page.Left, page.Right, page.A, page.B, n)
+	page.Exposure = rank.ArmExposure(page.Merged)
+
+	if d.Interleave == nil {
+		page.Err = "this deployment has no state database, so an interleaved list " +
+			"cannot be attributed and would be a list whose result nobody could read"
+		d.page(w, "algo.html", page, http.StatusServiceUnavailable)
+		return
+	}
+
+	seed, err := engine.ParseSeed(page.Seed)
+	if err != nil {
+		page.Err = err.Error()
+		d.page(w, "algo.html", page, http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+	_, ownerKey, err := d.arenaSession(ctx, w, r)
+	if err != nil {
+		page.Err = err.Error()
+		d.page(w, "algo.html", page, http.StatusInternalServerError)
+		return
+	}
+
+	slots := make([]store.InterleaveSlot, 0, len(page.Merged))
+	for _, it := range page.Merged {
+		sideName := "a"
+		if it.Arm == page.B {
+			sideName = "b"
+		}
+		slots = append(slots, store.InterleaveSlot{WorkID: it.ID, Side: sideName, Slot: it.Slot})
+	}
+	if err := d.Interleave.RecordInterleave(ctx, ownerKey, seed.Kind, seed.ID, page.A, page.B, slots); err != nil {
+		// A merged list the server cannot attribute is worse than a
+		// failure: the reader would act on it and the act would be
+		// recorded against nothing.
+		page.Err = "could not record the impressions for this list: " + err.Error()
+		d.page(w, "algo.html", page, http.StatusInternalServerError)
+		return
+	}
+
+	arms, pairs, err := d.Interleave.InterleaveStats(ctx)
+	if err != nil {
+		page.Err = "the list was recorded, but the standings could not be read: " + err.Error()
+		d.page(w, "algo.html", page, http.StatusInternalServerError)
+		return
+	}
+	page.Arms, page.Pairs = arms, pairs
+	d.page(w, "algo.html", page, http.StatusOK)
 }

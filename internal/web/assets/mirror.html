@@ -102,7 +102,10 @@
   Every number on this page, and the memory and embedding counts that belong to
   an operator rather than a reader, are at
   <a href="/api/v1/stats"><code>/api/v1/stats</code></a>. Liveness is at
-  <a href="/healthz"><code>/healthz</code></a>. These pages are a front for that
-  API, not a second source of the same facts.
+  <a href="/healthz"><code>/healthz</code></a>. Health reports memory without
+  a verdict: peak RSS is a measurement, and the 220&nbsp;MiB cap that used to
+  turn it into a 503 is gone (SPEC §6). These pages are a front for that API,
+  not a second source of the same facts. What the recommender <em>measured</em>
+  is at <a href="/eval">/eval</a>.
 </p>
 {{end}}

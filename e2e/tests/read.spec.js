@@ -220,7 +220,14 @@ test.describe('error handling', () => {
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
     expect(body.status).toBe('ok');
-    expect(body.budget_ok).toBe(true);
+    // The memory cap was removed on 2026-10-22 (SPEC §6): the endpoint
+    // reports the measurement and no verdict. Asserting the measurement is
+    // real -- a zero would be a parse failing silently -- and asserting the
+    // verdict is GONE, because a `budget_ok` that came back would restore a
+    // status the deploy gate reads as a product failure.
+    expect(body.peak_rss_kib).toBeGreaterThan(1024);
+    expect(body.budget_ok).toBeUndefined();
+    expect(body.rss_cap_kib).toBeUndefined();
   });
 });
 

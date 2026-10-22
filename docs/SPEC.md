@@ -513,14 +513,79 @@ These endpoints serve the anonymous peer-ranking arena (see
   - Request body: JSON array of objects with `winner` and `loser`.
   - Response: empty JSON object on success.
 
-#### 3.2.6 Utility endpoints
+#### 3.2.6 Algorithm comparison and interleaving
+
+An **algorithm** in this document is a NAMED TUNE: a weight vector over the
+ranking signals (`kindred tune set`). There is no second notion of algorithm,
+and the evaluation surfaces below say so, because a registry that can disagree
+with the weights the engine actually uses would make every comparison a
+measurement of the registry.
+
+- `GET /api/v1/algo/list` — every algorithm name, with `default` (the built-in
+  weights) first and marked `builtin`.
+- `GET /api/v1/algo/compare?seed=kind:ID&a=NAME&b=NAME&n=N` — the same seed
+  ranked through two tunes, **side by side**. Both lists come from the same
+  seed and the same pool, so the only difference between the columns is the
+  weight vector. `n` is 1-50 (default 5). `a` and `b` may not be the same name:
+  two identical columns invite a vote about nothing. Each side carries its
+  weights, so a reader can see what differed.
+- `POST /api/v1/algo/judge` — `{"seed":"...","a":"...","b":"...","choice":
+  "a"|"b"|"neither"}`. Recorded in `algo_comparisons`, never in the work
+  arena's table: a preference between weight vectors is not evidence about the
+  tags on any work, and the arena's tag learner would read it as such. A draw
+  (`neither`) is stored rather than dropped, or every win rate inflates as
+  readers grow indifferent.
+- `GET /api/v1/algo/standings` — wins per algorithm and per pair.
+
+**Interleaving** asks the same question without asking it. Both algorithms
+contribute to ONE list, every item is tagged with the arm that contributed it,
+and what the reader does next is the vote. No reader is shown the worse list,
+and the comparison costs no comparison.
+
+- `GET /api/v1/interleave?seed=kind:ID&a=NAME&b=NAME&n=N` — a team-draft
+  interleaved list. `n` is **even**, 2-50, default 20. An odd count is refused
+  by name: the merge starts with arm `a`, so an odd list hands `a` a slot
+  before any reader acts, and that bias is the same size as the effect the
+  experiment is trying to see. Response: `items` (each with `arm` and `slot`),
+  `exposure` (slots per arm), `shared` (ids both lists ranked), and a `credit`
+  sentence stating the rule.
+- The merge holds three invariants, each tested: no item appears twice (a
+  duplicate would be two credits for one work); each arm contributes half the
+  slots whenever it has that many (equal exposure is what makes raw credit
+  counts comparable); and each arm's items keep that arm's own order (a merge
+  that reorders an arm's list is ranking for it).
+- **The vote is a READ mark** — the `read` action on the /seen form. A *shown*
+  mark does not credit: being shown a work is not evidence the reader wanted
+  it, and counting it would measure the recommender's own choice. `unread` is
+  a correction and credits nothing. One impression earns at most one credit; a
+  second read mark on the same sighting is a revisit.
+- `GET /api/v1/interleave/standings` — per-arm impressions, credits and
+  `credit_rate`, plus per-pair head-to-heads. Impressions are ALL slots shown,
+  credited or not: a rate over clicks alone is a rate among clicks, and every
+  arm would look equally good. `difference` is **A minus B**, so a negative
+  number means B's slots were read more often.
+- Impressions are retained for 30 days, pruned on write. The window is part of
+  the contract: "all time" would mean "since the last restart that pruned".
+
+Both surfaces are rendered by `/algo`: the side-by-side view and, with
+`?mode=interleave`, the merged list with its standings. The merged view is the
+only place a reader can vote for an interleaved list, so a merged render that
+records no impressions would be a feature that looks finished and produces no
+evidence — asserted against in `internal/web/algo_test.go`.
+
+#### 3.2.7 Utility endpoints
 
 - `GET /healthz`
-  - Returns the server's liveness and budget state.
-  - Response: `{"status":"ok"|"over_budget","budget_ok":bool,
-    "corpus_works":N,"heap_mib":F,"peak_rss_kib":N,"rss_cap_kib":N,
-    "lite":bool,"uptime_s":N,"version":"..."}`. `status` reflects
-    `budget_ok`; the deploy gate fails on any non-200.
+  - Returns the server's liveness and a memory report.
+  - Response: `{"status":"ok","corpus_works":N,"goroutines":N,"heap_mib":F,
+    "peak_rss_kib":N,"lite":bool,"uptime_s":N,"version":"..."}`.
+  - `status` is `ok` whenever the process answers. The 220 MiB cap and its
+    `over_budget` / `budget_ok` / `rss_cap_kib` fields were removed on
+    2026-10-22 (see §6): a serving process is healthy, and a health check
+    that fails on a number teaches its readers to ignore it.
+  - The numbers stay. `peak_rss_kib` is `VmHWM`, the kernel's high-water
+    mark, so a spike between samples cannot hide from it -- that is how
+    every memory figure in this document was measured.
 
 - `GET /stats`
   - Returns a JSON object with corpus and index statistics.
@@ -532,7 +597,7 @@ These endpoints serve the anonymous peer-ranking arena (see
 - `GET /`
   - Returns the web UI (see §4).
 
-#### 3.2.7 Deprecated or moved endpoints
+#### 3.2.8 Deprecated or moved endpoints
 
 The following endpoints existed in earlier versions but have been removed
 or moved:
@@ -887,23 +952,62 @@ Prints the help message.
 
 ## 6. Memory
 
-The design goal is to fit within the memory budget of a Raspberry Pi with
-512 MB of RAM (leaving 512 MB for the OS and other services) and a
-workstation with twenty other services resident.
+Memory is MEASURED and REPORTED, not capped. The 220 MiB service cap that
+used to live in this section (60 MiB in `lite` mode) was removed on
+2026-10-22, by the owner's decision, because it had become a gate that could
+not tell two different failures apart:
 
-The memory usage is dominated by the index (see §2). Measured with
-`scripts/budget.sh` against the real 112,935-work mirror (full mode,
-graph loaded, `VmHWM`): **184 MiB of the 220 MiB cap, PASS** — the
-per-stage trace tops out after the wide-pool recommend and the arena
-pages. `lite` mode targets a 60 MiB cap. Note `/healthz` reports
-`VmHWM`, a monotonic high-water mark: a burst of `n=100` blended tag
-pages can push it past the cap and it stays `over_budget` until the
-process restarts, even though steady-state RSS is far lower.
+- It made `/healthz` answer **503 `over_budget`** for a process that was
+  serving every request correctly. A supervisor, or the deploy gate, then
+  read "the product is broken" where the truth was "the product is bigger
+  than a number a spec line predicted".
+- `VmHWM` is a monotonic high-water mark. Once any page pushed the peak over
+  the line, the process reported itself unwell until it RESTARTED, even at
+  steady-state RSS far below the cap. That is a verdict about history
+  masquerading as a verdict about now.
+- The cap therefore blocked deploys that were otherwise green, and the
+  honest reading of a blocked deploy was never "the service is unhealthy".
 
-The `ingest` and `embed` commands are separate because their peak RSS
-(181.6 MB and 203.2 MB, respectively) would exceed the budget if run in
-the same process as the `serve` command.
+What replaces it:
 
+- `/healthz` always answers 200 when the process is serving, and reports
+  `peak_rss_kib` (`VmHWM`), `heap_mib`, `sys_mib` and `goroutines`. There is
+  no pass/fail field, because there is no pass/fail.
+- `serve` logs those same numbers at startup and every five minutes, at INFO.
+  The reading is the record; the log line does not accuse anything.
+- `scripts/budget.sh` remains the measurement tool (per-stage `VmHWM`), and
+  the numbers below are what it reports.
+
+Measured on the real 112,935-work mirror, full mode with the graph loaded
+(`VmHWM`, `scripts/budget.sh`): **peak 184 MiB for a quiet process, 238-302
+MiB under sustained wide-pool work (`n=100` blended tag pages, arena,
+`/recommend` with large pools)**. The lite mode target of 60 MiB remains a
+DESIGN GOAL for the Pi deployment -- it is a statement about what the
+program should allocate, not a gate that fails the service.
+
+The `ingest` and `embed` commands are separate processes because their peak
+RSS (181.6 MB and 203.2 MB) is larger than `serve`'s, and running them in the
+same process would add those peaks together. `kindred embed --budget-mib`
+keeps its default of 220: that flag is a Go soft memory limit
+(`debug.SetMemoryLimit`) for one batch run, which keeps the embedder frugal
+while it streams the corpus. It is an operational knob on a build-time job,
+NOT the removed service cap, and it does not affect `/healthz`.
+
+What to do when the number grows (the honest sequence, and the one that was
+never available while everything failed on the same status code):
+
+1. Read `/healthz` and the `memory` block of `/stats` to see peak vs heap.
+   Heap far below peak means the allocation is in Go's heap and the number is
+   a real allocation; heap close to peak with a small live set means garbage,
+   not a leak.
+2. Compare against a restart (`VmHWM` resets). A number that only grows with
+   uptime is a leak or a cache with no bound; a number that jumps with the
+   first wide request is a working set.
+3. The two known contributors, in order, are the CSR index and the tag-name
+   table loaded at startup (one string per node), and the per-request pools
+   for wide `n`. `--lite` reduces the first; `pool=` reduces the second.
+
+---
 ---
 
 ## 7. Security

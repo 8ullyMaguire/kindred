@@ -140,6 +140,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/algo/compare", s.handleAlgoCompare)
 	mux.HandleFunc("POST /api/v1/algo/judge", s.handleAlgoJudge)
 	mux.HandleFunc("GET /api/v1/algo/standings", s.handleAlgoStandings)
+	// Interleaved ranking: one list, both algorithms contributing, and a read
+	// mark as the vote. /standings is the online counterpart of the arena's
+	// /api/v1/algo/standings: same question, no side-by-side.
+	mux.HandleFunc("GET /api/v1/interleave", s.handleInterleave)
+	mux.HandleFunc("GET /api/v1/interleave/standings", s.handleInterleaveStandings)
 	mux.HandleFunc("GET /api/v1/ao3/tags", s.handleAO3Tags)
 	mux.HandleFunc("GET /api/v1/ao3/tags/{id}", s.handleAO3Tag)
 	mux.HandleFunc("GET /api/v1/ao3/tags/{id}/works", s.handleAO3TagWorks)
@@ -234,6 +239,13 @@ func (s *Server) Routes() http.Handler {
 	// page's "no queue here" text rather than a broken table.
 	if s.Store != nil {
 		pages.Queue = s.Store
+		// The merged-list experiment: the page records which arm showed which
+		// work, and a read mark on a shown work credits that arm.
+		pages.Interleave = s.Store
+		pages.Eval = s.Store
+		pages.CreditInterleave = func(ctx context.Context, ownerKey string, workID int64) {
+			s.creditReadMark(ctx, ownerKey, workID)
+		}
 	}
 	// /algo reads the tune registry and records A/B votes in their own table.
 	// Wired from the same Store: a read-only deployment gets the page's "no
@@ -1363,17 +1375,14 @@ func (s *Server) handleCrawlQueue(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	snap := budget.Snapshot("healthz")
-	capKiB := budget.CapKiB(s.mode())
-	overBudget := snap.PeakRSSKiB > capKiB
 	body := map[string]any{
 		"status":       "ok",
 		"version":      s.Version,
 		"lite":         s.Lite,
 		"uptime_s":     int(time.Since(s.StartedAt).Seconds()),
 		"peak_rss_kib": snap.PeakRSSKiB,
-		"rss_cap_kib":  capKiB,
 		"heap_mib":     snap.HeapAllocMiB,
-		"budget_ok":    !overBudget,
+		"goroutines":   snap.Goroutines,
 	}
 	if s.Store != nil {
 		// work_count is the key the ingest writes. The first version of
@@ -1384,15 +1393,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			body["corpus_works"] = n
 		}
 	}
-	// A process that has blown its budget says so, and returns 503: a
-	// health check that reports ok while the RSS is 2x the cap is worse
-	// than no health check.
-	status := http.StatusOK
-	if overBudget {
-		body["status"] = "over_budget"
-		status = http.StatusServiceUnavailable
-	}
-	writeJSON(w, status, body)
+	// A service that answers is healthy. The 220 MiB cap that used to turn
+	// a big process into a 503 was removed on 2026-10-22: it made a working
+	// service report itself unwell, and it taught the deploy gate to call a
+	// product failure and a measurement the same thing. The numbers stay in
+	// the body -- a memory report you can read is worth more than a verdict
+	// you cannot argue with.
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -1415,14 +1422,11 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	snap := budget.Snapshot("stats")
-	capKiB := budget.CapKiB(s.mode())
 	out["memory"] = map[string]any{
-		"peak_rss_kib":  snap.PeakRSSKiB,
-		"cap_kib":       capKiB,
-		"heap_mib":      snap.HeapAllocMiB,
-		"sys_mib":       snap.SysMiB,
-		"goroutines":    snap.Goroutines,
-		"within_budget": snap.PeakRSSKiB <= capKiB,
+		"peak_rss_kib": snap.PeakRSSKiB,
+		"heap_mib":     snap.HeapAllocMiB,
+		"sys_mib":      snap.SysMiB,
+		"goroutines":   snap.Goroutines,
 	}
 	if s.Store != nil {
 		if emb, err := s.Store.EmbeddingStats(ctx); err == nil {
@@ -1430,15 +1434,6 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
-}
-
-// mode names the budget tier, so the cap follows the build flag rather
-// than being configured twice.
-func (s *Server) mode() string {
-	if s.Lite {
-		return "lite"
-	}
-	return "full"
 }
 
 // --- helpers --------------------------------------------------------------

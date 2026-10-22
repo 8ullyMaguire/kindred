@@ -119,6 +119,32 @@ type Deps struct {
 	// is no algorithm registry here rather than rendering two empty columns
 	// that read as "these algorithms agree on nothing".
 	Algo AlgoStore
+
+	// Interleave is the merged-list experiment: recording which arm showed
+	// which work, and the standings over those impressions.
+	//
+	// Optional for the same reason as Algo: a read-only deployment has no
+	// state database, and the page says so rather than rendering a list it
+	// could not attribute.
+	Interleave InterleaveStore
+
+	// CreditInterleave records that a reader acted on a work an interleaved
+	// list showed them. A hook rather than a method because the page form
+	// that records reads lives here and the store is the API's: the web layer
+	// must not learn to reach the state database directly.
+	CreditInterleave func(ctx context.Context, ownerKey string, workID int64)
+
+	// Eval is the stored offline measurements, for the /eval dashboard.
+	// Optional like the rest: a read-only deployment has nothing to show and
+	// the page says so rather than rendering an empty table that reads as
+	// "every evaluation scored zero".
+	Eval EvalStore
+}
+
+// InterleaveStore is what /algo's merged view needs from storage.
+type InterleaveStore interface {
+	RecordInterleave(ctx context.Context, ownerKey, seedKind string, seedID int64, armA, armB string, slots []store.InterleaveSlot) error
+	InterleaveStats(ctx context.Context) ([]store.InterleaveArmStat, []store.InterleavePairStat, error)
 }
 
 // AlgoStore is the algorithm registry: named tunes, and the A/B votes cast

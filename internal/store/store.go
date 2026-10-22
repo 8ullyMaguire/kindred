@@ -627,6 +627,83 @@ CREATE TABLE IF NOT EXISTS algo_comparisons (
 CREATE INDEX IF NOT EXISTS idx_algo_comparisons_algo
 	ON algo_comparisons (algo_a, algo_b, winner);
 
+/* Interleaved impressions: the online half of the evaluation loop.
+
+   The arena above asks a reader to compare two lists SIDE BY SIDE, which costs
+   a comparison and shows them one list that is, by construction, the worse
+   one. Interleaving asks the same question with one list: both algorithms
+   contribute, every item is tagged with the arm that contributed it, and what
+   the reader does next (marks it seen, opens it) is the vote.
+
+   One row per SHOWN item per arm, which is what makes the attribution exact:
+   the credit is a flag on the row that carried it, not a guess about which
+   experiment was running when the click arrived.
+
+   arm_a/arm_b are the labels the caller used ("default", a tune name), and
+   arm is which SIDE contributed this row. The label on every row is redundant
+   with the pair and deliberate: the standings query groups by name without a
+   join, and a rename in the caller cannot make two rows disagree.
+
+   credited is 0/1 rather than a counter because one impression earns at most
+   one credit. Without the index below the credit lookup is a scan per seen
+   mark; with it the lookup is the primary key of the work on the page. */
+CREATE TABLE IF NOT EXISTS interleave_impressions (
+	id        INTEGER PRIMARY KEY AUTOINCREMENT,
+	owner_key TEXT NOT NULL,
+	seed_kind TEXT NOT NULL,
+	seed_id   INTEGER NOT NULL,
+	arm_a     TEXT NOT NULL,
+	arm_b     TEXT NOT NULL,
+	work_id   INTEGER NOT NULL,
+	arm       TEXT NOT NULL CHECK (arm IN ('a','b')),
+	slot      INTEGER NOT NULL,
+	credited  INTEGER NOT NULL DEFAULT 0,
+	shown_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_interleave_credit
+	ON interleave_impressions (owner_key, work_id, credited);
+
+CREATE INDEX IF NOT EXISTS idx_interleave_arms
+	ON interleave_impressions (arm_a, arm_b, arm);
+
+-- Retention. An impression log with no window grows for the life of the
+-- deployment at one row per slot per render, and the standings it feeds are
+-- about what readers are doing NOW. Thirty days is the window: RecordInterleave
+-- prunes anything older, so the table has a bound and the standings have a
+-- stated period rather than "all time", which would mean "since the last
+-- restart that happened to prune".
+CREATE INDEX IF NOT EXISTS idx_interleave_shown
+	ON interleave_impressions (shown_at);
+
+/* Offline evaluation runs.
+
+   The eval command measures recall@K and NDCG@K against held-out bookmarks and
+   used to print them and exit. The numbers are the offline half of the
+   evaluation loop -- the arena answers "which algorithm does a reader prefer
+   today", this answers "did the last change make the recommender better" --
+   and a number that is not stored can only be compared with a memory.
+
+   k is a column, not a constant: recall@10 and recall@50 are different
+   measurements, and a table that puts them in one column invites a comparison
+   that is not one. mode is a column for the same reason: a lite run skips the
+   embedding signal, so lite and full are two recommenders. */
+CREATE TABLE IF NOT EXISTS eval_runs (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	ran_at      TEXT NOT NULL DEFAULT (datetime('now')),
+	k           INTEGER NOT NULL,
+	readers     INTEGER NOT NULL,
+	bookmarks   INTEGER NOT NULL,
+	evaluated   INTEGER NOT NULL,
+	failures    INTEGER NOT NULL DEFAULT 0,
+	held_out    INTEGER NOT NULL,
+	hits        INTEGER NOT NULL,
+	recall_at_k REAL NOT NULL,
+	ndcg_at_k   REAL NOT NULL,
+	coverage    REAL NOT NULL DEFAULT 0,
+	mode        TEXT NOT NULL DEFAULT 'full'
+);
+
 /* Works a reader has already been shown or has marked as read.
 
    The id is stored as TEXT because the same store serves several kinds

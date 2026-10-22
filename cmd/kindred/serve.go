@@ -62,7 +62,6 @@ func runServe(ctx context.Context, args []string) error {
 	c = c2
 
 	lite := c.Mode == "lite"
-	capKiB := budget.CapKiB(c.Mode)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	s, err := store.Open(ctx, c.DB, c.CorpusDB)
@@ -424,7 +423,7 @@ func runServe(ctx context.Context, args []string) error {
 	logger.Info("listening",
 		"addr", ln.Addr().String(), "mode", c.Mode, "lite", lite,
 		"corpus", c.CorpusDB, "index", g != nil,
-		"embeddings", embCount, "rss_cap_kib", capKiB,
+		"embeddings", embCount, "peak_rss_kib", budget.Snapshot("startup").PeakRSSKiB,
 		"auto_crawl", !*noCrawl)
 
 	// The auto-crawler: the mirror grows while it is used. Its whole
@@ -437,13 +436,19 @@ func runServe(ctx context.Context, args []string) error {
 		go runAutoCrawl(ctx, s, c, logger)
 	}
 
-	// The budget gate is a periodic check, not a one-off: the memory this
-	// project exists to control is not a constant, and a service that
-	// only checks at startup will happily drift.
+	// Memory is watched, not gated. The 220 MiB cap this ticker used to
+	// enforce was removed on 2026-10-22: a number a spec line predicted is
+	// not a health verdict, and a log line that says "over the memory
+	// budget" when nothing is wrong is a log line people learn to skip.
+	//
+	// The reading stays because it is the only record of what the process
+	// actually reached: VmHWM is a high-water mark, so a spike between
+	// samples is still in the number. Every five minutes is enough to see
+	// a leak grow and quiet enough to leave in.
 	stopWatch := make(chan struct{})
 	defer close(stopWatch)
 	go func() {
-		t := time.NewTicker(30 * time.Second)
+		t := time.NewTicker(5 * time.Minute)
 		defer t.Stop()
 		for {
 			select {
@@ -453,11 +458,11 @@ func runServe(ctx context.Context, args []string) error {
 				return
 			case <-t.C:
 				snap := budget.Snapshot("serve")
-				if snap.PeakRSSKiB > capKiB {
-					logger.Error("over the memory budget",
-						"peak_rss_kib", snap.PeakRSSKiB, "cap_kib", capKiB,
-						"phase", snap.Phase)
-				}
+				logger.Info("memory",
+					"peak_rss_kib", snap.PeakRSSKiB,
+					"heap_mib", snap.HeapAllocMiB,
+					"sys_mib", snap.SysMiB,
+					"goroutines", snap.Goroutines)
 			}
 		}
 	}()

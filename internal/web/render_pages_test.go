@@ -39,6 +39,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
+	"git.polarisocial.xyz/kindred/kindred/internal/store"
 	"git.polarisocial.xyz/kindred/kindred/internal/tagfamily"
 )
 
@@ -944,6 +945,37 @@ var pageRenderCases = []pageRenderCase{
 		},
 		wantContains:    []string{"12,345", "9,012", "3,456", "25.0 MiB", "12 works waiting"},
 		wantNotContains: []string{"No co-occurrence graph is loaded"},
+	},
+	{
+		tpl:  "eval.html",
+		name: "eval.html with a stored run, votes and credits",
+		data: EvalPage{
+			Base: sweepBase,
+			Runs: []store.EvalRun{{
+				ID: 7, RanAt: "2026-10-22 19:00:00", K: 10, Mode: "full",
+				Readers: 214, Bookmarks: 5100, Evaluated: 199, HeldOut: 1020,
+				Hits: 143, Recall: 0.1402, NDCG: 0.0931, Coverage: 0.6120,
+			}},
+			Algos: []store.AlgoStanding{{Algo: "default", Judged: 30, Wins: 17, Losses: 11, Ties: 2}},
+			Arms: []store.InterleaveArmStat{{
+				Arm: "default", Impressions: 200, Credits: 14, CreditRate: 0.07,
+			}},
+			Works: 112935, Tags: 634231, WorkTags: 2884447, Edges: 2884447,
+		},
+		wantContains: []string{
+			"#7", "0.1402", "0.0931", "0.6120", "default", "112,935",
+			"held-out", "30 days",
+		},
+	},
+	{
+		tpl:          "eval.html",
+		name:         "eval.html with no store and no corpus",
+		hasEmptyList: true,
+		data:         EvalPage{Base: sweepBase, Err: "no state database here"},
+		wantContains: []string{"no state database here", "No offline runs recorded yet"},
+		// A metric table with no corpus under it must not print zeros as if
+		// they were measurements.
+		wantNotContains: []string{"Co-occurrence edges"},
 	},
 	{
 		tpl:          "mirror.html",

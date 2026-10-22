@@ -252,7 +252,8 @@ Suite: `gofmt`/`vet`/`build` clean, `go test ./...` green (all packages),
 **115 Playwright tests** (`make e2e`, was 96). Deployed to thinkcentre:
 behaviour gate `BEHAVIOUR IN SYNC: all 46 checks pass`,
 `check-provenance.sh` `IN SYNC` (built from HEAD `86e5e89`),
-`/healthz` `budget_ok: true` after restart.
+`/healthz` 200 with its memory report (the `budget_ok` field was removed on
+2026-10-22 with the cap itself).
 
 ### Open — found by this session's verification
 
@@ -271,19 +272,20 @@ behaviour gate `BEHAVIOUR IN SYNC: all 46 checks pass`,
       `kindred crawl`. Until then the queue is honest but inert in
       production; it works under test (stub client) and outside the
       sandbox.
-- [ ] **Live `/healthz` flips to `over_budget` under sustained tag
-      traffic.** `VmHWM` is monotonic: a fresh restart sits at ~150 MB,
-      but a burst of `n=100` blended tag pages pushed the peak past the
-      220 MiB cap (measured 251-257 MB; the blend itself contributes
-      ~10-15 MB per burst on an isolated instance — most of the headroom
-      loss predates it and tracks serving the real 112,935-work mirror).
-      The gate then reports `over_budget` and `check-deploy.sh` fails at
-      `/healthz` until the service restarts. Either bound the blend's
-      transient allocations (pool size for the tag page), raise the cap
-      deliberately (SPEC's number, not by default), or accept the flapping
-      and have the gate tolerate a documented peak. Verified by A/B:
-      `--no-crawl` vs `crawl` instances on a state-db copy both idle at
-      38-45 MB RSS; the jump is request-driven, not startup-driven.
+- [x] **`/healthz` no longer flips to `over_budget` — the cap is GONE
+      (2026-10-22, owner's decision).** `VmHWM` is monotonic: a fresh restart
+      sat at ~150 MB, and a burst of `n=100` blended tag pages pushed the peak
+      past the 220 MiB line (measured 251-257 MB, and 298 MB on the deployed
+      instance), after which the service reported itself unhealthy until it
+      restarted. The gate did exactly what it was built to do and the verdict
+      was still wrong: a process serving every request correctly is healthy.
+      `budget.CapKiB` and `budget.Check` are deleted, `/healthz` always answers
+      200, and the memory numbers are still reported (`peak_rss_kib`,
+      `heap_mib`, `goroutines`) and logged every five minutes. SPEC §6 was
+      rewritten to say memory is measured, not gated. The transient allocation
+      itself was never fixed, and that is now a MEASUREMENT to act on rather
+      than a deploy blocker: the next unit is to persist the collab index at
+      ingest and mmap the CSR instead of parsing 28 MiB into heap.
 
 ## Session 2026-10-21: the family-intersection query, generalised
 
@@ -409,10 +411,12 @@ three things were still wrong. Each was found by a check rather than by reading.
 
 ### Still open, with the measurement
 
-The deployed `serve` runs **over its own memory budget**: peak RSS 298,416 KiB
-against the `full` cap of 225,280 KiB, so `/healthz` answers 503
-`over_budget` and `scripts/check-deploy.sh` exits 2 — correctly, as a SERVICE
-problem rather than a drift one (provenance is in sync).
+The deployed `serve` reached **298,416 KiB peak RSS** against what was then the
+`full` cap of 225,280 KiB, so `/healthz` answered 503 `over_budget` and
+`scripts/check-deploy.sh` exited 2. As of 2026-10-22 that cap no longer exists:
+`/healthz` reports the number and answers 200, so the gate can see a product
+failure and a large process as the different things they are. The number is
+still the number — it is a measurement now, not a verdict.
 
 This pre-dates the round: the same host logged 266,436 KiB on a binary two
 commits older, and `deploy.sh` has recorded 265,984 KiB since 2026-10-16. What

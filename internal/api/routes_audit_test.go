@@ -46,10 +46,15 @@ var routeTable = map[string]routeAudit{
 	// The algorithm A/B surface. An algorithm is a named tune; the page
 	// shows one seed ranked through two of them, side by side, and records
 	// which list the reader preferred.
-	"GET /api/v1/algo/list":              {Page: "/algo"},
-	"GET /api/v1/algo/compare":           {Page: "/algo"},
-	"POST /api/v1/algo/judge":            {Page: "/algo"},
-	"GET /api/v1/algo/standings":         {Page: "/algo"},
+	"GET /api/v1/algo/list":      {Page: "/algo"},
+	"GET /api/v1/algo/compare":   {Page: "/algo"},
+	"POST /api/v1/algo/judge":    {Page: "/algo"},
+	"GET /api/v1/algo/standings": {Page: "/algo"},
+	// The merged-list experiment. Both routes are the /algo page seen
+	// through its other mode: the page renders the merged list and records
+	// the impressions, and the standings are the same table the page prints.
+	"GET /api/v1/interleave":             {Page: "/algo?mode=interleave"},
+	"GET /api/v1/interleave/standings":   {Page: "/algo?mode=interleave"},
 	"GET /api/v1/ao3/tags":               {Page: "/search"},
 	"GET /api/v1/ao3/tags/{id}":          {Page: "/tag/{id}"},
 	"GET /api/v1/ao3/tags/{id}/works":    {Page: "/tag/{id}"},

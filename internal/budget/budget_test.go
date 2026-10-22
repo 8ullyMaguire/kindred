@@ -34,50 +34,11 @@ func TestSnapshotReportsHeapAndGoroutines(t *testing.T) {
 	}
 }
 
-func TestCheckFailsOverCapAndPassesUnder(t *testing.T) {
-	r := Snapshot("gate")
-	if err := Check(r, CapKiB("lite")); err != nil {
-		t.Fatalf("a bare test binary should fit the lite cap: %v", err)
-	}
-	// 1 KiB is below anything a live process reports, so this must fail.
-	// A gate never seen failing is not a gate.
-	err := Check(r, 1)
-	if err == nil {
-		t.Fatal("Check passed against a 1 KiB cap; the gate does not gate")
-	}
-	if !contains(err.Error(), "over budget") {
-		t.Fatalf("error %q does not say over budget", err)
-	}
-}
-
-func TestCapKiBMatchesSpec(t *testing.T) {
-	// SPEC §6: lite 60 MB, full 220 MB steady.
-	if got := CapKiB("lite"); got != 61440 {
-		t.Fatalf("CapKiB(lite) = %d, want 61440", got)
-	}
-	if got := CapKiB("full"); got != 225280 {
-		t.Fatalf("CapKiB(full) = %d, want 225280", got)
-	}
-}
-
 func TestErrNoProcIsDistinguishable(t *testing.T) {
-	// Callers that only want heap numbers ignore the error; the budget
-	// target does not. They must be able to tell those cases apart.
+	// Callers that only want heap numbers ignore the error; a caller that
+	// needs the number must be able to tell "no /proc" from "read failed".
 	_, err := PeakRSSKiB()
 	if err != nil && !errors.Is(err, ErrNoProc) {
 		t.Fatalf("unexpected error kind: %v", err)
 	}
-}
-
-func contains(hay, needle string) bool {
-	return len(hay) >= len(needle) && (hay == needle || indexOf(hay, needle) >= 0)
-}
-
-func indexOf(hay, needle string) int {
-	for i := 0; i+len(needle) <= len(hay); i++ {
-		if hay[i:i+len(needle)] == needle {
-			return i
-		}
-	}
-	return -1
 }

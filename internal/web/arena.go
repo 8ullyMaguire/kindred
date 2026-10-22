@@ -507,6 +507,13 @@ func (d Deps) postSeen(w http.ResponseWriter, r *http.Request) {
 	switch r.PostFormValue("action") {
 	case "read":
 		opErr = d.Engine.Store.MarkRead(ctx, ownerKey, entity)
+		// The interleave vote. Only a READ credits: being shown a work is
+		// not evidence the reader wanted it, and counting a shown mark
+		// would measure the recommender's own choice. "unread" is a
+		// correction, not a vote, and credits nothing.
+		if opErr == nil && d.CreditInterleave != nil {
+			d.CreditInterleave(ctx, ownerKey, workID)
+		}
 	case "unread":
 		opErr = d.Engine.Store.UnmarkRead(ctx, ownerKey, entity)
 	default:

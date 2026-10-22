@@ -90,7 +90,8 @@ say "4. waiting for health"
 # provenance and behaviour gates, had not run for as long as that drift lasted.
 # The failure mode is the one this whole script is written against: a deploy that
 # reports nothing looks exactly like a deploy that passed. Measured on
-# 2026-10-16: :8010 refuses, :8019 answers {"budget_ok":true,...}.
+# 2026-10-16: :8010 refuses, :8019 answers with a health body. (The
+# budget_ok field was removed on 2026-10-22 with the memory cap.)
 #
 # A second hard-coded copy of the port would drift again, so the port is read
 # from the running unit, and if it cannot be read this refuses to continue
@@ -125,7 +126,8 @@ for i in $(seq 1 90); do
   # are not the same finding").
   #
   # Measured on this host (2026-10-16): /healthz answers 503 with
-  # {"status":"over_budget","peak_rss_kib":265984,"rss_cap_kib":225280} because
+  # {"status":"over_budget","peak_rss_kib":265984,...} because the old 220 MiB
+  # cap was exceeded (that cap and this 503 are gone as of 2026-10-22), and
   # the process peaks above the `full` mode's 220 MB cap while the collab index is
   # loaded. That is a real condition of this deployment and it pre-dates the
   # round: the previous binary logged a 285,248 KiB peak against the same cap. It

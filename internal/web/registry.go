@@ -294,6 +294,18 @@ func allPages() []pageSpec {
 				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, _ string) { d.renderMirror(w, r) },
 			},
 			{
+				// The evaluation dashboard: the offline numbers (persisted
+				// eval runs), the online ones (algorithm votes and
+				// interleaved credits) and what they are measuring across.
+				// Read-only, and it is the only page whose subject is how
+				// good the recommender is rather than what it recommends.
+				Template: "eval.html",
+				Paths:    []string{"/eval"},
+				Nav:      "/eval",
+				List:     true,
+				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, _ string) { d.renderEval(w, r) },
+			},
+			{
 				// No path: fail() renders it for any handler error that can be
 				// described to a reader.
 				Template: "error.html",

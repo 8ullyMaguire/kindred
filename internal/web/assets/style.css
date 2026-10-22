@@ -403,6 +403,22 @@ a.tag:hover {
   gap: 0.6rem;
   align-items: center;
 }
+/* The arm badge in a merged list. It has to be readable at a glance, because
+   the badge IS the attribution: a reader who cannot tell which algorithm
+   showed them a work cannot tell what their read mark voted for. */
+.algo-items.interleaved li {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+}
+.algo-items .arm {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid currentColor;
+  border-radius: 1rem;
+  color: var(--muted);
+}
 .arena-card {
   flex: 1 1 20rem;
   border: 1px solid var(--arena-border);
