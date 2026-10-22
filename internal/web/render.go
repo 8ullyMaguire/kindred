@@ -149,6 +149,21 @@ type WorkPage struct {
 	Work    corpus.Entity
 	Tags    []corpus.TagPair
 	Similar []rank.Candidate
+	// CoBookmarked are works that share readers with this one. It is
+	// separate from Similar because it answers a different question: Similar
+	// is "ranked like this" (tags, graph, quality), while this is the
+	// checkable item-to-item claim "these readers kept both".
+	CoBookmarked []rank.Candidate
+	// CoBookmarkErr is set when the co-bookmark lookup failed while the
+	// work and its recommendations loaded. Shown rather than swallowed for
+	// the same reason RecommendErr is: a missing half is not an empty half.
+	CoBookmarkErr string
+	// Bridges are works that carry this work's fandom and at least one other.
+	// They are a different list again: the extra fandom is a tag this work
+	// does not carry, so neither similarity nor co-bookmarking finds it.
+	Bridges    []engine.Bridge
+	BridgeNote string
+	BridgeErr  string
 	// RecommendErr is set when the recommendation half failed while the
 	// work half succeeded. Rendering the work without the recommendations
 	// is strictly better than a 500, but it must be visible: a page that
@@ -349,6 +364,11 @@ type AuthorPage struct {
 	// was used, and the doubled target of the "show more" link.
 	N     int
 	NextN int
+	// Similar are authors whose works carry the same distinguishing tags.
+	// Best-effort: a failure is rendered beside the works rather than
+	// replacing them, because the works are what the reader asked for.
+	Similar    []engine.SimilarAuthor
+	SimilarErr string
 }
 
 // AuthorLink is one parsed byline name and where it goes.

@@ -85,6 +85,24 @@ func (s *Server) handleArenaPair(w http.ResponseWriter, r *http.Request) {
 	tagID := int64(0)
 	if v := r.URL.Query().Get("tag_id"); v != "" {
 		tagID, _ = strconv.ParseInt(v, 10, 64)
+	} else if v := r.URL.Query().Get("fandom"); v != "" {
+		// `fandom` is the reader-facing spelling of tag_id. It accepts a
+		// numeric id or a tag name, because a reader scoping the arena knows
+		// the fandom's name and not its row id. An unresolvable name is a
+		// 400 rather than a silently unscoped arena: showing global pairs
+		// after a reader asked for one fandom is a wrong answer that looks
+		// like a right one.
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			tagID = n
+		} else if s.Engine != nil && s.Engine.Corpus != nil {
+			id, err := s.Engine.Corpus.TagIDByName(r.Context(), v)
+			if err != nil {
+				writeErr(w, http.StatusBadRequest,
+					fmt.Errorf("fandom %q is not a tag in this mirror", v))
+				return
+			}
+			tagID = id
+		}
 	}
 
 	res, err := svc.Pair(r.Context(), w, r, tagID)

@@ -37,9 +37,12 @@ var routeTable = map[string]routeAudit{
 	// --- reached by a page ---
 	"GET /api/v1/recommend":                {Page: "/recommend"},
 	"GET /api/v1/tags/{id}/similar":        {Page: "/neighbours"},
+	"GET /api/v1/authors/similar":          {Page: "/author"},
 	"GET /api/v1/ao3/works":                {Page: "/search"},
 	"GET /api/v1/ao3/works/{id}":           {Page: "/work/{id}"},
 	"GET /api/v1/ao3/works/{id}/recommend": {Page: "/work/{id}"},
+	"GET /api/v1/works/{id}/co-bookmarked": {Page: "/work/{id}"},
+	"GET /api/v1/works/{id}/bridges":       {Page: "/work/{id}"},
 	"GET /api/v1/ao3/tags":                 {Page: "/search"},
 	"GET /api/v1/ao3/tags/{id}":            {Page: "/tag/{id}"},
 	"GET /api/v1/ao3/tags/{id}/works":      {Page: "/tag/{id}"},

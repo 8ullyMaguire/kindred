@@ -39,12 +39,23 @@ func fandomGroup(tags []string) string { return fandom.GroupKey(tags) }
 // graph load, signal set, diversity — was unverified by anything.
 func newFixtureEngine(t *testing.T) *Engine {
 	t.Helper()
+	return newFixtureEngineFrom(t, testcorpus.New(60))
+}
+
+// newFixtureEngineFrom builds an engine over a caller-supplied fixture.
+//
+// A separate entry point because some behaviours need rows the shared fixture
+// does not have -- co-bookmark interactions, a crossover work -- and the
+// corpus is attached READ-ONLY once the store opens, so those rows have to be
+// present before this function writes it.
+func newFixtureEngineFrom(t *testing.T, c *testcorpus.Corpus) *Engine {
+	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 	corpusPath := filepath.Join(dir, "corpus.db")
 	statePath := filepath.Join(dir, "state.db")
 
-	if _, err := testcorpus.New(60).Write(corpusPath); err != nil {
+	if _, err := c.Write(corpusPath); err != nil {
 		t.Fatalf("build fixture: %v", err)
 	}
 	s, err := store.Open(ctx, statePath, corpusPath)

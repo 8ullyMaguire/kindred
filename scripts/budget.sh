@@ -126,6 +126,39 @@ curl -fsS --max-time 20 "http://127.0.0.1:$PORT/api/v1/ao3/works?limit=50" >/dev
 step "ao3 work by id"
 curl -fsS --max-time 20 "http://127.0.0.1:$PORT/api/v1/ao3/works/$SEED" >/dev/null
 
+step "co-bookmarked works"
+# The item-to-item collab read. It answers an empty list with 200 when the
+# mirror has interactions but no shared reader for this work, and 503 when
+# the table is missing; both are answers, so only a transport error or a 5xx
+# that is not 503 is a failure.
+code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+  "http://127.0.0.1:$PORT/api/v1/works/$SEED/co-bookmarked?limit=5" || echo 000)
+case "$code" in
+  200|503) ;;
+  *) echo "co-bookmarked answered $code" >&2; exit 1 ;;
+esac
+
+step "bridges across fandoms"
+# Every answer this route gives is a 200 with a note: bridges, or a note that
+# the seed has no fandom-shaped tag. A 503 means the lookup itself failed, so
+# -f (which only rejects 4xx/5xx) is the right assertion.
+curl -fsS --max-time 30 \
+  "http://127.0.0.1:$PORT/api/v1/works/$SEED/bridges?limit=5" >/dev/null
+
+step "similar authors"
+# The author route is addressed by NAME because the mirror has no author
+# table, so the probe reads the seed work's byline rather than inventing one.
+# A corpus with an empty byline cannot exercise it; that is a corpus defect,
+# not something to silently skip.
+AUTHOR=$(sqlite3 "$CORPUS" "SELECT COALESCE(authors,'') FROM works WHERE id=$SEED;" 2>/dev/null || true)
+if [ -z "$AUTHOR" ]; then
+  echo "budget: FAIL seed work $SEED has no byline; cannot probe author similarity" >&2
+  exit 1
+fi
+curl -fsS --max-time 30 -G \
+  --data-urlencode "name=$AUTHOR" \
+  "http://127.0.0.1:$PORT/api/v1/authors/similar?limit=5" >/dev/null
+
 step "ao3 tags"
 curl -fsS --max-time 20 "http://127.0.0.1:$PORT/api/v1/ao3/tags?limit=50" >/dev/null
 

@@ -608,9 +608,27 @@ func (d Deps) renderArena(w http.ResponseWriter, r *http.Request) {
 
 	// A tag filter scopes the arena to a fandom, which is the only way to
 	// make a comparison meaningful across a corpus this heterogeneous.
+	//
+	// `fandom` is accepted as well as `tag_id`, and it may be a name: the
+	// link a reader follows comes from a tag page and carries the id, but
+	// someone typing the URL knows the fandom's name. A name this mirror
+	// does not have is a 400, not an unscoped arena -- showing global pairs
+	// after a request for one fandom is the wrong answer that looks right.
 	var tagID int64
 	if v := r.URL.Query().Get("tag_id"); v != "" {
 		tagID, _ = strconv.ParseInt(v, 10, 64)
+	} else if v := r.URL.Query().Get("fandom"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			tagID = n
+		} else if d.Engine != nil && d.Engine.Corpus != nil {
+			id, err := d.Engine.Corpus.TagIDByName(ctx, v)
+			if err != nil {
+				d.fail(w, r, http.StatusBadRequest,
+					fmt.Errorf("fandom %q is not a tag in this mirror", v))
+				return
+			}
+			tagID = id
+		}
 	}
 
 	// Which arena. ParseKind sends anything unknown to works rather than

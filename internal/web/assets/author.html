@@ -48,5 +48,40 @@
       Bylines are matched as substrings, so a shorter name finds more.
     </p>
   {{end}}
+
+  {{/* "Why this author?" — the same tag-profile similarity the JSON endpoint
+       serves, with the shared tags named. It is a DIFFERENT claim from the
+       list above: that is this author's works, this is other authors whose
+       works carry the same distinguishing tags. Its own empty state because a
+       missing panel reads as a failed load. */}}
+  <h2>Authors who write like this</h2>
+  {{if .SimilarErr}}
+    <p class="note" data-testid="similar-authors-error">
+      The author-similarity lookup failed while the works above loaded:
+      {{.SimilarErr}}
+    </p>
+  {{else if .Similar}}
+    <ul class="similar-authors">
+      {{range .Similar}}
+      <li>
+        <a href="/author?q={{urlquery .Name}}">{{.Name}}</a>
+        <span class="count">
+          {{if .Evidence}}{{(index .Evidence 0).Reason}}{{end}}
+        </span>
+      </li>
+      {{end}}
+    </ul>
+    <p class="count">
+      Similarity is a cosine over the rarest tags both authors use. Common
+      tags are weighted down, so agreement on <em>fluff</em> counts for almost
+      nothing and agreement on an unusual tag counts for a lot.
+    </p>
+  {{else}}
+    <p class="count" data-empty="true">
+      No other author shares enough distinguishing tags with
+      &ldquo;{{.Query}}&rdquo;. A byline with one work, or with only very common
+      tags, has no profile to compare.
+    </p>
+  {{end}}
 {{end}}
 {{end}}

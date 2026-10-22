@@ -36,6 +36,7 @@ import (
 
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
+	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 	"git.polarisocial.xyz/kindred/kindred/internal/tagfamily"
@@ -323,9 +324,24 @@ var pageRenderCases = []pageRenderCase{
 			Limited: true,
 			N:       500,
 			NextN:   1000,
+			// A populated author page renders the similar-author panel
+			// too, so its populated direction has to be populated here:
+			// TestListPagesEmptyStateIsTwoSided forbids any data-empty
+			// marker in this case.
+			Similar: []engine.SimilarAuthor{{
+				Name:        "someone-else",
+				SharedWorks: 3,
+				Score:       0.4,
+				Evidence: []rank.Evidence{{
+					Signal: "author_tag_profile",
+					Value:  0.4,
+					Reason: `shares 2 distinguishing tags with "Deydralinne": slow burn, epistolary`,
+				}},
+			}},
 		},
 		wantContains: []string{"Deydralinne", "501", "/work/7",
-			"Ask for 1000 instead"},
+			"Ask for 1000 instead", "Authors who write like this",
+			"someone-else", "epistolary"},
 	},
 	{
 		tpl:          "neighbours.html",
@@ -599,12 +615,21 @@ var pageRenderCases = []pageRenderCase{
 			},
 			Tags:    []corpus.TagPair{{ID: 1, Name: "dark"}, {ID: 2, Name: "angst"}},
 			Similar: sampleCandidates(2),
+			// The co-bookmark panel is populated too, or its empty marker
+			// would appear on a page that has rows -- which is the two-sided
+			// marker failure the sweep exists to catch.
+			CoBookmarked: sampleCandidates(2),
+			Bridges: []engine.Bridge{{
+				Candidate:    sampleCandidates(1)[0],
+				OtherFandoms: []string{"another fandom (anime)"},
+			}},
 			// The half-failure must be VISIBLE, or the page is a lie about
 			// what the recommender can do.
 			RecommendErr: "no co-occurrence index",
 		},
 		// 1,234,567 is the assertion that commas() ran on a map value.
-		wantContains: []string{"1,234,567", "45,000", "dark", "no co-occurrence index"},
+		wantContains: []string{"1,234,567", "45,000", "dark", "no co-occurrence index",
+			"Readers who bookmarked this", "Bridges into other fandoms"},
 	},
 	{
 		name: "tag.html",

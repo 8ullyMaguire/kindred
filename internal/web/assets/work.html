@@ -76,4 +76,64 @@
     predicts, and a work nobody shares tags with has no such pair.
   </p>
 {{end}}
+
+{{/* The co-bookmark panel is a DIFFERENT claim from the ranking above: not
+     "these are similar" but "these readers kept both". It has its own empty
+     state because a work with no co-readers is a real answer too, and leaving
+     the section out entirely would read as a page that failed to load it. */}}
+<h2>Readers who bookmarked this also bookmarked</h2>
+{{if .CoBookmarkErr}}
+  <p class="note" data-testid="co-bookmark-error">
+    The co-bookmark lookup failed while the rest of the page loaded:
+    {{.CoBookmarkErr}}
+  </p>
+{{else if .CoBookmarked}}
+  <ul class="cobookmarks">
+    {{range .CoBookmarked}}
+    <li>
+      <a href="/work/{{.ID}}">{{.Title}}</a>
+      {{if .Evidence}}<span class="count">{{(index .Evidence 0).Reason}}</span>{{end}}
+    </li>
+    {{end}}
+  </ul>
+  <p class="count">
+    Counts are distinct readers of this mirror who kept both works. They are
+    evidence, not a score: this is the one recommendation here you can check
+    by hand.
+  </p>
+{{else}}
+  <p class="count" data-empty="true">
+    No other work in this mirror shares a reader with this one. A work that
+    only one reader kept has no co-bookmark evidence, which is a fact about
+    the mirror rather than a failure to compute.
+  </p>
+{{end}}
+
+{{/* Cross-fandom bridges. A crossover carries a fandom this work does not,
+     which is a tag DIFFERENCE rather than a match, so it needs its own
+     section: the similarity ranking above cannot surface it. */}}
+<h2>Bridges into other fandoms</h2>
+{{if .BridgeErr}}
+  <p class="note" data-testid="bridge-error">
+    The bridge lookup failed while the rest of the page loaded: {{.BridgeErr}}
+  </p>
+{{else if .Bridges}}
+  <ul class="bridges">
+    {{range .Bridges}}
+    <li>
+      <a href="/work/{{.ID}}">{{.Title}}</a>
+      <span class="count">also in {{range $i, $f := .OtherFandoms}}{{if $i}}, {{end}}{{$f}}{{end}}</span>
+    </li>
+    {{end}}
+  </ul>
+  <p class="count">
+    A bridge is a work this fandom shares with another. Crossovers are how a
+    reading habit grows, and they are invisible to a ranking that only counts
+    tags the seed already has.
+  </p>
+{{else}}
+  <p class="count" data-empty="true">
+    {{if .BridgeNote}}{{.BridgeNote}}{{else}}No crossover work was found for this fandom.{{end}}
+  </p>
+{{end}}
 {{end}}

@@ -13,6 +13,9 @@ GET /v1/version
 GET /v1/stats
 GET /v1/kinds
 GET /v1/works?per_page=2
+GET /api/v1/works/{id}/co-bookmarked?limit=5
+GET /api/v1/works/{id}/bridges?limit=5
+GET /api/v1/authors/similar?name={byline}&limit=5
 GET /v1/tags?q=&per_page=5
 GET /v1/recommend?kind=ao3_work&seed=ao3_work:1&n=5
 # The arena. The pair page is the heaviest read in the UI -- it loads the

@@ -111,12 +111,25 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/recommend", s.handleRecommend)
 	mux.HandleFunc("GET /api/v1/recommend", s.handleRecommend)
 	mux.HandleFunc("GET /api/v1/tags/{id}/similar", s.handleSimilarTags)
+	// Author similarity by tag profile. A query parameter, not a path id,
+	// because the mirror has no author table: an author is a byline string
+	// and /author already addresses one that way.
+	mux.HandleFunc("GET /api/v1/authors/similar", s.handleSimilarAuthors)
 
 	// The unofficial AO3 read API. Same shape as the endpoints a client
 	// would use against ao3.org, so a caller can point at kindred instead.
 	mux.HandleFunc("GET /api/v1/ao3/works", s.handleAO3Works)
 	mux.HandleFunc("GET /api/v1/ao3/works/{id}", s.handleAO3Work)
 	mux.HandleFunc("GET /api/v1/ao3/works/{id}/recommend", s.handleAO3Recommend)
+	// The item-to-item half of collaborative filtering, asked about one work.
+	// "Readers who bookmarked this also bookmarked" is the recommendation a
+	// reader can verify by hand, because it is a count of shared readers
+	// rather than a blended score.
+	mux.HandleFunc("GET /api/v1/works/{id}/co-bookmarked", s.handleCoBookmarked)
+	// Cross-fandom bridges: works in this fandom AND another. The extra
+	// fandom is a tag the seed does not carry, which is why neither overlap
+	// nor item-to-item collab surfaces it.
+	mux.HandleFunc("GET /api/v1/works/{id}/bridges", s.handleBridges)
 	mux.HandleFunc("GET /api/v1/ao3/tags", s.handleAO3Tags)
 	mux.HandleFunc("GET /api/v1/ao3/tags/{id}", s.handleAO3Tag)
 	mux.HandleFunc("GET /api/v1/ao3/tags/{id}/works", s.handleAO3TagWorks)

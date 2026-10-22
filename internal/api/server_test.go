@@ -134,7 +134,6 @@ func newTestServerFull(t *testing.T) (*httptest.Server, *store.Store) {
 	// One work whose text fields are hostile to CSV framing: a comma, a double
 	// quote and a newline inside the title, a newline inside the summary, and
 	// NULLs for the columns this fixture otherwise fills in.
-	//
 	// It is seeded HERE, in the one place a corpus row can be written, rather
 	// than by a helper opening the file afterwards -- the corpus is attached
 	// read-only once the server starts, so a post-hoc insert would fail with a
@@ -157,6 +156,27 @@ func newTestServerFull(t *testing.T) (*httptest.Server, *store.Store) {
 		 VALUES(9002,'https://example.com/9002','plain title','author',
 			'',10,5,5,NULL,NULL,1,'2026-06-01','2026-06-01')`); err != nil {
 		t.Fatal(err)
+	}
+
+	// Co-bookmark evidence for /api/v1/works/{id}/co-bookmarked. Readers 1
+	// and 2 kept works 1 and 2; readers 2 and 3 kept works 1 and 3. The
+	// duplicate row reproduces the live table's shape (it has no primary
+	// key), so the handler must count DISTINCT readers.
+	for i := 1; i <= 3; i++ {
+		if _, err := seed.Exec(
+			`INSERT INTO users(id,url,username,bookmark_count,first_seen,last_updated)
+			 VALUES(?,?,?,?,?,?)`,
+			i, "https://example.invalid/users/"+string(rune('0'+i)),
+			"reader"+string(rune('0'+i)), 2, "2026-01-01", "2026-01-01"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, pair := range [][2]int64{{1, 1}, {2, 1}, {2, 2}, {3, 1}, {3, 3}, {2, 2}} {
+		if _, err := seed.Exec(
+			`INSERT INTO user_work_interactions(user_id,work_id,interaction_type)
+			 VALUES(?,?,'bookmarked')`, pair[0], pair[1]); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Co-occurrence edges so the graph can load.

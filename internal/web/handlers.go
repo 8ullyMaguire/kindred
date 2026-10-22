@@ -1466,6 +1466,18 @@ func (d Deps) renderAuthor(w http.ResponseWriter, r *http.Request) {
 		}
 		page.Limited = page.Total > int64(len(page.Works))
 	}
+
+	if q != "" {
+		// Best-effort, like every other secondary panel: the author's works
+		// are the answer to the URL, and a similarity failure must not turn
+		// that into an error page.
+		if sim, serr := d.Engine.SimilarAuthors(ctx, q, 10); serr != nil {
+			d.log().Warn("similar authors failed", "author", q, "err", serr)
+			page.SimilarErr = serr.Error()
+		} else {
+			page.Similar = sim
+		}
+	}
 	d.page(w, "author.html", page, http.StatusOK)
 }
 
@@ -1568,6 +1580,25 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 		}
 	} else {
 		page.Similar = res.Items
+	}
+
+	// Co-bookmarks are best-effort for the same reason recommendations are:
+	// the work is what the reader asked for, and a mirror without an
+	// interaction table must still serve the work rather than 500. The
+	// failure is rendered, not hidden.
+	if co, cerr := d.Engine.CoBookmarked(ctx, id, engine.CoBookmarkLimit); cerr != nil {
+		d.log().Warn("co-bookmark lookup failed", "work", id, "err", cerr)
+		page.CoBookmarkErr = cerr.Error()
+	} else {
+		page.CoBookmarked = co
+	}
+
+	if br, berr := d.Engine.Bridges(ctx, id, engine.CoBookmarkLimit); berr != nil {
+		d.log().Warn("bridge lookup failed", "work", id, "err", berr)
+		page.BridgeErr = berr.Error()
+	} else {
+		page.Bridges = br.Items
+		page.BridgeNote = br.Note
 	}
 
 	d.page(w, "work.html", page, http.StatusOK)

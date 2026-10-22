@@ -109,6 +109,14 @@
   <p class="note">Works carrying this tag are excluded from your rankings.</p>
 {{end}}
 
+{{/* The scoped arena. A tag page is where a reader knows which fandom they
+     are in, and the arena already accepts a tag filter; without this link the
+     filter was URL-only and the feature was unreachable by clicking. */}}
+<form method="get" action="/arena" class="block-form">
+  <input type="hidden" name="tag_id" value="{{.Tag.ID}}">
+  <button type="submit">Compare works on this tag</button>
+</form>
+
 {{if .FilterErr}}
   <p class="note" data-testid="filter-error">
     {{.FilterErr}} Showing every work on this tag instead.
