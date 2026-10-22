@@ -289,6 +289,43 @@ rows, because "3 results" and "0 results" are indistinguishable without
 them. Each row carries the concept tags it matched and the other fandom it
 crosses into, when it has one.
 
+## `eval` — score the recommender against held-out bookmarks
+
+```bash
+kindred eval --corpus ~/kindling-data/ao3_metadata.db \
+  --db ~/.local/share/kindred/kindred.db --ratio 0.2 --n 10
+kindred eval --ratio 0.2 --n 10 --users 200 --json
+```
+
+| flag | default | meaning |
+|---|---|---|
+| `--ratio` | `0.2` | fraction of each reader's bookmarks held out; must be between 0 and 1 exclusive |
+| `--n` | `10` | recommendation depth (K) for recall and NDCG |
+| `--users` | `0` | evaluate at most this many readers, in id order; `0` means every reader |
+| `--json` | off | print the report as JSON instead of the summary |
+| `--pool` | `0` | candidate pool size; `0` uses the mode's default |
+| `--lite` | from `--mode` | skip the embedding signal, as `--mode lite` does for the server |
+
+This is the offline arm of the evaluation loop. It reads every bookmark in
+the mirror, holds out `--ratio` of each reader's bookmarks, recommends from
+the rest, and scores the held-out works with **recall@K** and binary
+**NDCG@K**. The split is deterministic per reader id, so two runs over the
+same corpus and state database score the same held-out set; a random split
+would turn every comparison into noise.
+
+The state database is read as well as the corpus because the arena's learned
+tag weights and ratings live there. A missing co-occurrence index or collab
+index is reported on stderr and the corresponding signals skip, exactly as
+they do for `recommend`; the report is still a measurement of the dimensions
+that were live. `coverage` is the share of evaluated readers who received at
+least one recommendation, which is the counterweight to recall: a recommender
+that answers every reader with the same popular works can score well on
+recall while covering nothing.
+
+A full run walks every bookmarking reader and takes minutes, so `--users`
+exists for a quick sample. The sample is the first readers by id, not the
+readers who happened to rank well.
+
 ## `stats` — corpus and index statistics
 
 ```bash

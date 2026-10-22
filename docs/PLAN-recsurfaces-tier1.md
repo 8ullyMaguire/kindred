@@ -5,6 +5,57 @@ S4 (implicit measure), then S2/S3/S7 (tag surfaces), then S5/S8/S11 (extra
 reading surfaces), then S9 (offline arm, CLI only). Each step ends in one command
 and its expected output.
 
+## Status (2026-10-22)
+
+| # | State | Where it lives | Evidence |
+|---|---|---|---|
+| S1 | **DEFERRED** — see below | — | — |
+| S2 | already built (verified, not rewritten) | `tag.html`, `GET /api/v1/tags/{id}/similar` | existing tests + render sweep |
+| S3 | shipped | `Engine.SimilarAuthors`, `GET /api/v1/authors/similar?name=` | `internal/engine/authors_test.go`, `internal/api/authors_test.go` |
+| S4 | shipped in `0c6b2b7` | `session_taste` signal, `Request.SessionTaste` | `internal/engine/session_taste_test.go` |
+| S5 | shipped | `Engine.CoBookmarked`, `GET /api/v1/works/{id}/co-bookmarked`, work panel | `cobookmark_test.go`, `cobookmark_test.go` (API), render sweep |
+| S6 | shipped | `?fandom=` alias in the arena API and web, tag-page link | `internal/api/arena_fandom_test.go` |
+| S7 | shipped with S3 | `author_tag_profile` evidence naming the shared tags | `authors_test.go` |
+| S8 | already built (verified, not rewritten) | work cards link `/recommend?seed=` | existing browser suite |
+| S9 | shipped | `kindred eval`, `internal/eval` | `internal/eval/eval_test.go`, `docs/CLI.md` |
+| S10 | shipped in `b4397a9` | `idf_overlap` signal | `internal/signal/idf_overlap_test.go` |
+| S11 | shipped | `Engine.Bridges`, `GET /api/v1/works/{id}/bridges`, work panel | `bridges_test.go`, `bridges_test.go` (API), render sweep |
+
+Two implementations deliberately differ from this plan, because the plan named
+symbols the tree does not have:
+
+- **S3/S7 are addressed by author NAME, not `/authors/{id}/similar`.** The mirror
+  has no author table and a byline is free text, so there is no id to put in a
+  path. `/author?q=` already addresses a person that way; inventing a hashed id
+  would give one person two names. The profile is a cosine over the seed's
+  rarest tags (IDF-weighted, binary candidate vector), and the evidence string
+  names the shared tags, which is S7's "why this author?".
+- **S11 recognises fandoms by name shape, not `tag_type = 'fandoms'`.** Measured
+  on the live mirror, 3,890,504 of 3,891,300 tag rows are `freeforms`, fandom
+  tags included. A tag-type query finds 51 works out of 113,995 and would
+  report "no crossovers" on a corpus full of them.
+
+### Why S1 is deferred rather than half-shipped
+
+The plan's own M1 is internally inconsistent: it adds an `algo_comparison`
+`SignalKindName` to a "match-definer" that does not exist (`signals()` builds
+scoring signals, not entity kinds), then says no web change is needed, then M3
+requires a two-column template. More importantly, the arena's candidate and
+rating machinery is built over corpus entities: a pair is chosen from
+`entity_candidates`, rated with Glicko, and work judgements feed tag learning.
+An "algorithm" is not a corpus entity, there is no algorithm registry, and
+recording algorithm votes in `arena_comparisons` with work ids would make the
+tag learner treat an algorithm preference as evidence about two works' tags.
+
+Shipping that shape would produce a comparison page whose votes mean something
+other than what the page says, which is the failure this project spends most of
+its tests preventing. The honest version needs a design pass first: an algorithm
+registry, a kind whose candidates come from it, and a judgement path that does
+not touch work tag weights. The offline arm (S9) and the existing work arena
+already give the two measurements that exist today; S1 remains open rather than
+pretending otherwise.
+
+
 ## Before you start
 
 **Read the conventions from the source, not the spec.** The signal module is `internal/signal/signal.go`;

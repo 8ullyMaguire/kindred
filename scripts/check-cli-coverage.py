@@ -80,7 +80,7 @@ EXEMPT = {
 
 COMMANDS = [
     "serve", "ingest", "recommend", "crawl", "profile", "rate",
-    "corpus-query", "browse", "stats", "dump", "verify", "fetch", "tune",
+    "corpus-query", "browse", "eval", "stats", "dump", "verify", "fetch", "tune",
 ]
 
 

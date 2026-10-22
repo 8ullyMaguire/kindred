@@ -4,6 +4,34 @@ Status as of 2026-10-07. Every line below was verified by running it, not by
 reading the code. A line marked DONE names the test or the tool output that
 established it.
 
+## Tier 1 recommendation surfaces (2026-10-22)
+
+The plan and spec are `docs/PLAN-recsurfaces-tier1.md` and
+`docs/SPEC-recsurfaces-tier1.md`; the status table there is authoritative.
+Ten of the eleven surfaces are live: IDF-weighted tag overlap (`idf_overlap`),
+the reader's learned taste in ranking (`session_taste`), co-bookmarked works,
+cross-fandom bridges, author similarity with shared-tag evidence, the
+fandom-scoped arena, the tag-page reachable alias, `kindred eval`, and the two
+surfaces that were already built (tag sidebar, "rank from this").
+
+**S1, the algorithm A/B arena, is deliberately open.** The plan's proposed
+`algo_comparison` kind does not fit the arena's candidate/rating model, and
+reusing `arena_comparisons` would feed algorithm votes into work tag learning.
+The rationale is written down at the top of the plan so the next attempt starts
+from the constraint rather than rediscovering it.
+
+Verification for the shipped set:
+
+    go build ./... && go vet ./... && go test ./... -count=1
+    python3 docs/goal-check.py
+    python3 scripts/check-cli-coverage.py
+    bash -n scripts/budget.sh
+
+The budget probes for the three new API routes are in `scripts/budget.sh` and
+`routes.txt`; they have not been run against the live mirror since the last
+deploy, so `scripts/check-provenance.sh` still reports the deployed binary as
+behind HEAD until `scripts/deploy.sh` runs.
+
 ## Done and verified
 
 - [x] **collab package.** `internal/collab` builds an item-item co-bookmark
