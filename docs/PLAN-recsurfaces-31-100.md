@@ -69,7 +69,7 @@ Four statuses:
 | 64 | "Tag DNA" distinctive tags | **BUILT** | `internal/web/distinctive.go` + the work page's "What makes this work distinctive" block: rarest by document frequency, a tag on every work dropped (zero evidence), a zero-frequency tag dropped (the table and the work disagree). |
 | 65 | "New since your last visit" | OPEN | `seen_works` is a set, not a cursor; no `first_seen` comparison per reader. |
 | 66 | Author recs from a single work | PARTIAL | `/api/v1/authors/similar` exists (`engine/authors.go`); the work page does not link to it and no template renders it (`grep` for `authors/similar` in `work.html`/`handlers.go`: 0). |
-| 67 | Smart default seeds for new readers | **BUILT** | `/recommend` with no seed ranks from the three most-kudosed works (`corpus.AO3.TopByKudos`, `defaultSeedCount`) and names them as popularity in `data-testid="seed-origin"`; no corpus still renders the empty form. |
+| 67 | Smart default seeds for new readers | **BUILT** | `/recommend` with no seed ranks from the most-kudosed work (`corpus.AO3.TopByKudos`; ONE, because three from three fandoms measured 4.2 s a page against 2.6 s for one) and names it as popularity in `data-testid="seed-origin"`; no corpus still renders the empty form. |
 | 68 | Tag "temperature" (contested tags) | OPEN | No per-tag variance over comparisons. |
 | 69 | Work controversy score | OPEN | `arena_entity_history` holds per-entity history; nothing computes a divisiveness score from it. |
 | 70 | Batch arena with keyboard shortcuts | **BUILT** | `/api/v1/arena/batch` + the speed round in the arena UI. |

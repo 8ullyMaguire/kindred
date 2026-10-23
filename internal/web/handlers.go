@@ -2289,10 +2289,19 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 				seeds = append(seeds, engine.Seed{Kind: k, ID: id})
 				echo = append(echo, SeedRef{Kind: k, ID: id, Raw: fmt.Sprintf("%s:%d", k, id)})
 			}
-			seedOrigin = fmt.Sprintf(
-				"No seed was given, so this starts from the most-kudosed work in the mirror "+
-					"(%d of them: %s). That is popularity, not your taste — give it a work you "+
-					"liked and the ranking becomes about you.", len(def), seedList(echo))
+			// The note names the work, singular when there is one. "(1 of them:
+			// ao3_work:1)" was the first draft and reads like a debugging line.
+			if len(def) == 1 {
+				seedOrigin = fmt.Sprintf(
+					"No seed was given, so this starts from the most-kudosed work in the mirror "+
+						"(%s). That is popularity, not your taste — give it a work you liked and "+
+						"the ranking becomes about you.", seedList(echo))
+			} else {
+				seedOrigin = fmt.Sprintf(
+					"No seed was given, so this starts from the %d most-kudosed works in the "+
+						"mirror (%s). That is popularity, not your taste — give it a work you "+
+						"liked and the ranking becomes about you.", len(def), seedList(echo))
+			}
 		} else {
 			if derr != nil {
 				d.log().Warn("no default seeds", "err", derr)

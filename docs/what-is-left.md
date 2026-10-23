@@ -474,8 +474,10 @@ session starts from the number rather than from "it seems slow".
 ## Session 2026-10-23: four ideas off the 31-100 audit, and what the slices showed
 
 - [x] **67 — an unseeded `/recommend` ranks from the mirror's most-kudosed
-      works.** Three seeds, id tie-break so a reload is stable, and the page
-      names them as popularity in `seed-origin` — a default presented as a
+      work.** One seed (three from three fandoms measured 4.2 s a page against
+      2.6 s for one, and the page's own hint says seeds average each other
+      away), id tie-break so a reload is stable, and the page names the id as
+      popularity in `seed-origin` — a default presented as a
       taste match would be a claim nothing measured. No corpus still renders
       the empty form. Pinned by
       `TestAnUnseededRecommendStartsFromTheMostKudosedWorks`, whose first
