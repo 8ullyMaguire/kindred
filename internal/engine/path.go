@@ -54,6 +54,11 @@ type PathStep struct {
 	// carry, rarest first. Empty when the hop was made in embedding space alone,
 	// which is the case the path exists to reach.
 	SharedWithPrev []string `json:"shared_with_prev,omitempty"`
+	// SimToSeed is the cosine between this work's centroid and the SEED's. It is
+	// what makes drift visible: a path whose steps sit at 0.95 from the seed at
+	// every step is the "more like this" list in sequence, however much each
+	// individual hop reads like movement.
+	SimToSeed float64 `json:"sim_to_seed"`
 	// SharesSeedTag is false once the walk has left the seed's own tags behind,
 	// which is the point at which the path is telling the reader something the
 	// "more like this" list cannot.
@@ -78,6 +83,26 @@ type ReadingPath struct {
 	// Missing names the axes that could not run. A path without embeddings is
 	// not a path: there is no space to walk.
 	Missing []string `json:"missing,omitempty"`
+}
+
+// pathDriftWeight is how much a candidate's distance from the SEED counts
+// against its distance from the previous step.
+//
+// Zero is greedy nearest-neighbour, which on the live mirror produced eight steps
+// all sitting 0.95 from the seed: a path in name only. One would ignore the last
+// step and re-rank the seed's neighbourhood, which is the fan this feature
+// exists to avoid. A half keeps both terms audible: a hop has to be reachable
+// from where the walk IS, and has to be further out than the work it left.
+const pathDriftWeight = 0.5
+
+// pathRank is how a step is chosen: reachable from the previous work, and
+// further from the seed.
+//
+// It is a separate function so the decision RULE has a test of its own. A walk
+// test cannot pin it — the fixture's geometry decides which candidate wins long
+// before the weight matters — and a rule nobody tests is a rule that drifts.
+func pathRank(simToPrev, simToSeed float64) float64 {
+	return simToPrev - pathDriftWeight*simToSeed
 }
 
 // pathCandidateLimit bounds how many works each hop considers. A hop only needs
@@ -124,6 +149,7 @@ func (e *Engine) ReadingPath(ctx context.Context, seedID int64, steps int) (*Rea
 
 	visited := map[int64]bool{seedID: true}
 	curTags := seed.TagIDs
+	seedCentroid := idx.centroid(seed.TagIDs)
 	seedTags := make(map[int32]bool, len(seed.TagIDs))
 	for _, t := range seed.TagIDs {
 		seedTags[t] = true
@@ -166,8 +192,15 @@ func (e *Engine) ReadingPath(ctx context.Context, seedID int64, steps int) (*Rea
 		}
 
 		type scored struct {
-			cand rankCandidate
-			sim  float64
+			cand      rankCandidate
+			sim       float64
+			simToSeed float64
+			// rank is what the step is CHOSEN by: close to the previous work,
+			// and further from the seed. Measured on the live mirror, plain
+			// nearest-neighbour produced a list whose every step sat 0.93-0.96
+			// from the step before and 0.95 from the SEED — movement that is not
+			// going anywhere. The penalty is what makes a hop a departure.
+			rank float64
 		}
 		best := make([]scored, 0, len(cands))
 		for _, c := range cands {
@@ -179,18 +212,24 @@ func (e *Engine) ReadingPath(ctx context.Context, seedID int64, steps int) (*Rea
 			if !ok || sim <= 0 {
 				continue
 			}
+			toSeed, okSeed := cosine32(v, seedCentroid)
+			if !okSeed {
+				toSeed = 1
+			}
 			best = append(best, scored{cand: rankCandidate{ID: c.ID, Title: c.Title, URL: c.URL,
-				TagIDs: c.TagIDs, TagNames: c.TagNames}, sim: sim})
+				TagIDs: c.TagIDs, TagNames: c.TagNames},
+				sim: sim, simToSeed: toSeed,
+				rank: pathRank(sim, toSeed)})
 		}
 		if len(best) == 0 {
 			out.Note = fmt.Sprintf("The walk stopped after %d steps: every work within reach has "+
 				"already been visited.", step-1)
 			break
 		}
-		// Deterministic order: similarity desc, then id asc.
+		// Deterministic order: the drift-aware rank desc, then id asc.
 		sort.SliceStable(best, func(i, j int) bool {
-			if best[i].sim != best[j].sim {
-				return best[i].sim > best[j].sim
+			if best[i].rank != best[j].rank {
+				return best[i].rank > best[j].rank
 			}
 			return best[i].cand.ID < best[j].cand.ID
 		})
@@ -212,6 +251,7 @@ func (e *Engine) ReadingPath(ctx context.Context, seedID int64, steps int) (*Rea
 			WorkRef:        WorkRef{ID: chosen.cand.ID, Title: chosen.cand.Title, URL: chosen.cand.URL, Tags: len(chosen.cand.TagIDs)},
 			Step:           step,
 			SimToPrev:      chosen.sim,
+			SimToSeed:      chosen.simToSeed,
 			SharedWithPrev: sharedTagNames(curTags, chosen.cand),
 			SharesSeedTag:  sharesSeed,
 		})

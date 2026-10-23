@@ -227,6 +227,29 @@ func TestAPathNeedsARealSeed(t *testing.T) {
 	}
 }
 
+// TestTheStepRulePrefersADeparture pins the selection rule itself.
+//
+// Plain nearest-neighbour would take the work at 0.90 from the previous step and
+// 0.95 from the SEED — the "more like this" list in sequence, which is what the
+// live mirror produced before this weight existed. The rule has to prefer the
+// work at 0.85/0.40, and the assertion is stated as that preference rather than
+// as a constant, so retuning the weight cannot silently invert it.
+func TestTheStepRulePrefersADeparture(t *testing.T) {
+	nearSeed := pathRank(0.90, 0.95)
+	departure := pathRank(0.85, 0.40)
+	if departure <= nearSeed {
+		t.Fatalf("a work 0.85 from the previous step and 0.40 from the seed ranks "+
+			"%.4f, and one 0.90/0.95 ranks %.4f: the rule prefers staying near the "+
+			"seed, which is the failure this feature exists to avoid",
+			departure, nearSeed)
+	}
+	// The other side: a work that is barely reachable must not win on distance
+	// alone. 0.20 from the previous step and 0.05 from the seed is not a hop.
+	if pathRank(0.20, 0.05) >= pathRank(0.85, 0.40) {
+		t.Fatal("a nearly unreachable work outranked a real hop")
+	}
+}
+
 func stepIDs(p *ReadingPath) []int64 {
 	out := make([]int64, 0, len(p.Steps))
 	for _, s := range p.Steps {
