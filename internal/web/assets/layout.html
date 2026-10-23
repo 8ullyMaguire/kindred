@@ -9,6 +9,7 @@
          future page whose title is the site name would hit the same thing. */}}
     <title>{{if and .Title (ne .Title "kindred")}}{{.Title}} &middot; kindred{{else}}kindred{{end}}</title>
     <link rel="stylesheet" href="/static/style.css">
+    {{if .FeedPath}}<link rel="alternate" type="application/rss+xml" title="kindred feed" href="{{.FeedPath}}">{{end}}
   </head>
   <body>
     <div id="header">

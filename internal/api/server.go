@@ -168,6 +168,16 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/arena/my-ranking", s.handleArenaMyRanking)
 	mux.HandleFunc("POST /api/v1/arena/batch", s.handleArenaBatch)
 
+	// Feeds (#61) and the search descriptor (#62).
+	//
+	// Both are XML and both are for a client that is not a browser page: a
+	// reader's subscription list, a browser's search-engine list. They live on
+	// this mux rather than with the pages because nothing here renders HTML, and
+	// guardAPI sends them here for the same reason.
+	mux.HandleFunc("GET /feed/tag/{id}", s.handleFeedTag)
+	mux.HandleFunc("GET /feed/seed/{kind}/{id}", s.handleFeedSeed)
+	mux.HandleFunc("GET /opensearch.xml", s.handleOpenSearch)
+
 	// Operations.
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /stats", s.handleStats)

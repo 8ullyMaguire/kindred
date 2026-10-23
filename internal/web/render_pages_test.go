@@ -1353,6 +1353,59 @@ func TestTagPageShowsTheEmbeddingNeighbourhood(t *testing.T) {
 	}
 }
 
+// renderLayout executes a page through its LAYOUT, so assertions can see the
+// <head> as well as the body. renderOne runs only "content": the layout is
+// where <link rel="alternate"> lives, and a test that renders the body cannot
+// see a discovery link at all.
+func renderLayout(t *testing.T, name string, data any) string {
+	t.Helper()
+	tpl, ok := pages[name]
+	if !ok {
+		t.Fatalf("no template set for %s", name)
+	}
+	var buf bytes.Buffer
+	if err := tpl.ExecuteTemplate(&buf, "layout", data); err != nil {
+		t.Fatalf("rendering %s through its layout: %v", name, err)
+	}
+	return buf.String()
+}
+
+// TestTagPageOffersItsFeed: a subscription is a thing a reader does once, so
+// the page both DISCOVERS the feed (the layout's rel=alternate, which is what
+// makes a browser offer it) and links it in words. Both halves matter: the head
+// link is invisible, and the visible link is what a reader who does not know
+// the scheme can find.
+func TestTagPageOffersItsFeed(t *testing.T) {
+	page := TagPage{
+		Base: Base{Title: "coffee shop", FeedPath: "/feed/tag/1"},
+		Tag:  TagInfo{ID: 1, Name: "coffee shop", WorkCount: 40},
+	}
+	body := renderLayout(t, "tag.html", page)
+
+	if !strings.Contains(body, `type="application/rss+xml"`) {
+		t.Fatal("the page head carries no rel=alternate link, so a browser cannot " +
+			"offer the feed")
+	}
+	if !strings.Contains(body, `href="/feed/tag/1"`) {
+		t.Fatalf("the feed path is missing from the page; got:\n%s", body)
+	}
+	if !strings.Contains(body, "Follow this tag") {
+		t.Fatal("the visible subscription link is missing: the head link is invisible")
+	}
+}
+
+// TestApageWithoutAFeedEmitsNoFeedLink: the layout must not advertise a feed
+// every page lacks — a rel=alternate pointing at a 404 is worse than none.
+func TestAPageWithoutAFeedEmitsNoFeedLink(t *testing.T) {
+	body := renderLayout(t, "tag.html", TagPage{
+		Base: Base{Title: "coffee shop"},
+		Tag:  TagInfo{ID: 1, Name: "coffee shop"},
+	})
+	if strings.Contains(body, "application/rss+xml") {
+		t.Fatal("a page with no feed still emitted a rel=alternate link")
+	}
+}
+
 // TestTagPageHidesTheEmbeddingSectionWhenThereIsNothingToSay: a deployment
 // with no embeddings must not render a heading over an empty list.
 func TestTagPageHidesTheEmbeddingSectionWhenThereIsNothingToSay(t *testing.T) {

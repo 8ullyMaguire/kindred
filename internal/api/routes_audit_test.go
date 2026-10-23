@@ -34,6 +34,19 @@ type routeAudit struct {
 }
 
 var routeTable = map[string]routeAudit{
+	// --- feeds and the search descriptor ---
+	// No page, because these are not a reader's route THROUGH the site: a feed
+	// is read by a reader's client, and the descriptor by a browser's search
+	// settings. The page half exists and is tested where it lives — the tag page
+	// discovers its feed with rel=alternate and links it in words
+	// (TestTagPageOffersItsFeed).
+	"GET /feed/tag/{id}": {Why: "read by a subscriber's client; /tag/{id} carries " +
+		"the discovery link and the words"},
+	"GET /feed/seed/{kind}/{id}": {Why: "read by a subscriber's client; /work/{id} " +
+		"is the page it ranks from"},
+	"GET /opensearch.xml": {Why: "read by a browser's search-engine settings, " +
+		"not by a reader"},
+
 	// --- reached by a page ---
 	"GET /api/v1/recommend":                {Page: "/recommend"},
 	"GET /api/v1/tags/{id}/similar":        {Page: "/neighbours"},

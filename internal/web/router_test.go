@@ -36,6 +36,11 @@ func TestGuardAPISendsTheAPIPathsToTheAPIHandler(t *testing.T) {
 	// still gets the API's JSON 404, not an HTML page it cannot parse.
 	for _, path := range []string{
 		"/api/", "/api/v1/", "/api/v1/recommend", "/api/v1/nonexistent",
+		// Feeds and the search descriptor are XML served by the API mux. Sent to
+		// the page router they fall through to an HTML 404, so a working feed
+		// reads as a missing one.
+		"/feed/tag/29", "/feed/tag/29.xml", "/feed/seed/ao3_work/17249318",
+		"/opensearch.xml",
 		"/healthz", "/stats",
 	} {
 		api, pages := &markerHandler{}, &markerHandler{}

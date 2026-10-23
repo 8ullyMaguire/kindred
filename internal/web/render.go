@@ -36,6 +36,14 @@ type Base struct {
 	// a template bug rather than a struct one.
 	Query string
 
+	// FeedPath is the RSS feed this page offers, when it offers one. It is a
+	// path rather than a full URL because the page does not know the public
+	// hostname (the deployment sits behind a tunnel); the browser resolves it
+	// against the address the reader actually used, which is the only correct
+	// one. Empty means "this page has no feed", and the layout then emits
+	// nothing rather than a link to a 404.
+	FeedPath string
+
 	// IndexBuiltAt is when the co-occurrence index was built, RFC3339, or
 	// empty if unknown.
 	//

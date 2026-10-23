@@ -477,6 +477,20 @@ func entityFromWork(w Work) Entity {
 // noticed because the test fixture wrote ISO dates the parser accepted. A
 // fixture in the wrong format validates the wrong behaviour.
 func parseDate(s string) float64 {
+	if t, ok := ParseDate(s); ok {
+		return float64(t.Unix() / 86400)
+	}
+	return 0
+}
+
+// ParseDate reads a corpus date in any of the layouts the mirror uses, and is
+// the single list they all go through.
+//
+// Exported because a consumer that needs the DATE rather than epoch days — an
+// RSS pubDate, say — must not carry its own copy: two copies drift, and the
+// drift is silent. One would parse "31 Oct 2025" and the other would not, and
+// only the surface built on the second copy would show it.
+func ParseDate(s string) (time.Time, bool) {
 	for _, layout := range []string{
 		"2006-01-02T15:04:05Z07:00",
 		"2006-01-02 15:04:05",
@@ -484,10 +498,10 @@ func parseDate(s string) float64 {
 		"2 Jan 2006",
 	} {
 		if t, err := time.Parse(layout, s); err == nil {
-			return float64(t.Unix() / 86400)
+			return t, true
 		}
 	}
-	return 0
+	return time.Time{}, false
 }
 
 // Placeholders renders n comma-separated bind markers. Exported because

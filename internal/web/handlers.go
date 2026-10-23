@@ -369,6 +369,12 @@ func (d Deps) guardAPI(api http.Handler, pages http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/api/"),
+			// Feeds and the search descriptor are XML documents served by the
+			// API mux. Without this they fell through to the PAGE router, which
+			// answered them as an HTML 404 — a subscriber would see a page
+			// saying "not found" for a feed that works.
+			strings.HasPrefix(r.URL.Path, "/feed/"),
+			r.URL.Path == "/opensearch.xml",
 			r.URL.Path == "/healthz",
 			r.URL.Path == "/stats":
 			api.ServeHTTP(w, r)
@@ -1764,6 +1770,10 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	// blended half grows with it.
 	n := clampInt(atoiDefault(r.URL.Query().Get("n"), 20), 1, 200)
 	page := TagPage{Base: d.baseOf(r, name, name), Tag: TagInfo{ID: id, Name: name}}
+	// The feed this page offers. Discoverable in the browser via the layout's
+	// rel=alternate link, and visible as a link below, because a subscription is
+	// a thing a reader does ONCE and should not have to know a URL scheme for.
+	page.FeedPath = fmt.Sprintf("/feed/tag/%d", id)
 	page.N = n
 	page.NextN = n * 2
 
