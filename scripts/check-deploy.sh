@@ -802,7 +802,7 @@ check "the mirror page reports drift"     "$TARGET/mirror" 'Embedding drift'
 check "and refuses to call absence zero"  "$TARGET/mirror" 'data-testid="drift-(none|verdict)"|no comparison at all'
 check "the drift endpoint answers"        "$TARGET/api/v1/embed/drift" '"runs"'
 check_absent "and does not claim a drift it never measured" "$TARGET/api/v1/embed/drift" '"centroid_cosine":0'
-status "drift endpoint: $(curl -sS --max-time 20 "$TARGET/api/v1/embed/drift" | head -c 160)"
+echo "  drift endpoint: $(curl -sS --max-time 20 "$TARGET/api/v1/embed/drift" | tr -d '\n' | head -c 160)"
 
 echo
 echo "works you keep skipping"
