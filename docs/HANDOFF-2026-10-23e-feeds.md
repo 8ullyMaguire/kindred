@@ -120,6 +120,37 @@ bookmarks instead of 495. Two eval runs are only comparable at the same
 `--users`. The eval's own split is deterministic per reader (PCG seeded by user
 id) — the sampling above it is not.
 
+## #40 — reading paths (commits 3297257 + f28f02f)
+
+    GET /api/v1/works/{id}/path?steps=N
+    /path/{id}?steps=N
+
+Each step is chosen against the PREVIOUS work, so the list drifts. Every step
+publishes `sim_to_prev` AND `sim_to_seed`; `drift_from_seed` names the first step
+that shares no tag with the seed.
+
+**The finding this session will be remembered for.** The first version passed
+every test and produced, on the live mirror, eight steps sitting 0.93-0.96 from
+the SEED at every step: "more like this" in sequence, which is the exact thing
+the feature exists not to be. The fixture was too small for the defect — its
+nearest work was the right one. The fix is a selection rule,
+`sim_to_prev - 0.5*sim_to_seed`, on the same seed:
+
+    weight 0    seed distance 0.966 0.966 0.966 0.966
+    weight 0.5  seed distance 0.966 0.896 0.798 0.701   (hops stay 0.89-0.97)
+
+The rule lives in `pathRank` so it has a test stated as a PREFERENCE (a 0.85/0.40
+work must outrank a 0.90/0.95 one) rather than as a constant.
+
+**No fandom cap, and that is a finding.** The obvious rule — no fandom more than
+twice — cannot fire on this corpus: `work_tags` is 3,890,504 `freeforms` rows of
+3,891,300, so a cap keyed on `tag_type='fandoms'` would match nothing, exclude
+nothing and report success. That is the dead-column defect the diversify package
+already documents. The path measures drift instead of forcing it.
+
+Also: a work never appears twice, and no embeddings is a zero-step path with the
+axis named and a note saying where to go instead.
+
 ## Next
 
 Untouched rows with a real input behind them: 60 (`interleave_impressions` now
