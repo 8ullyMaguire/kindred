@@ -32,11 +32,17 @@ established it.
       even when the parameter is absent ("no opinion" and "tags only" had been
       the same request at both layers). Re-run on the shipped default (run #12)
       reproduces 0.1050 / 0.2113 / 0.6579 exactly.
-- [x] **The pool is topped up.** The reserves left it short (measured live: 848
-      candidates of 1000); the tag half is now called twice, the second time
-      with the admitted ids excluded in SQL. Seeds are excluded in SQL too, so a
-      20-item pool is no longer 19 whenever a seed ranks in its own results.
-      The top-up does not move recall — it fills the pool.
+- [x] **The pool is filled, from one query.** The reserves left it short
+      (measured live: 848 candidates of 1000). The tag half is fetched once for
+      the whole budget and admitted in two parts — the reserved part before the
+      extra sources, the tail after them — because a second query for the tail
+      cost as much as the first (4.6 s vs 2.45 s on a 55k-work seed) for a
+      byte-identical pool. The cap now lives in `admit()`: measured live after
+      the two-part admit, a 1000-item request returned 1061 candidates. Seeds
+      are excluded in SQL too, so a 20-item pool is no longer 19 whenever a seed
+      ranks in its own results. Live now: 902 tags + 1 collab + 97 embedding =
+      1000, overlap 180 counted separately, 2.8 s against 2.5 s for tags-only.
+      The tail does not move recall — it fills the pool.
 - [x] **#11's surface: `GET /api/v1/tags/{id}/similar?space=embed`** plus a
       "Tags that sit near it" section on the tag page, with `center_sim` and a
       note when the tag is too central for "nearest" to mean anything.

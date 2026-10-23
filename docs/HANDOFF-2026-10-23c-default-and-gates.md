@@ -11,7 +11,7 @@ mattered more than the measurement.
 | repo | `~/code-local/go/kindred`, branch `main` |
 | code | `9dec664` (engine + api + web + gates) |
 | tests | `go test ./... -count=1` — 26 packages green |
-| deployed | see the deploy log; both gates run by `scripts/deploy.sh` |
+| deployed | `163078c`, both gates green (provenance IN SYNC, 48/48 behaviour) |
 | default pool mode | **`tags+collab+embed`** (was `tags` via the zero value) |
 
 ## The measurement
@@ -28,8 +28,8 @@ did not move (3.3-3.8 s for every mode; the embedding source adds ~97 candidates
 per 1000-item pool). The rule was written down before the numbers existed, so
 the default moved.
 
-Re-run after the top-up (run #12, the new default with no flag at all) is
-**identical to the row above** — recall@10 0.1050, pool recall@1000 0.2113,
+Re-run after the top-up, and again on the final deployed binary (runs #12 and
+#13, the new default with no flag at all) is **identical to the row above** — recall@10 0.1050, pool recall@1000 0.2113,
 coverage 0.6579. That is worth stating plainly: the top-up fills the pool from
 848 to 1000 candidates and does NOT move recall, because the 152 tag candidates
 it adds did not contain a held-out work for these readers. Its value is a pool
@@ -88,6 +88,10 @@ from a gate that passed**, which is the failure `deploy.sh` was written to end.
   answered in 4.6 s against 2.45 s for tags-only — for a byte-identical pool.
   The tag half is now fetched once for the whole budget and admitted in two
   parts: the reserved part before the extra sources, the tail after them.
+  That tail then overran the pool — measured live, a 1000-item request returned
+  1061 candidates, because the outer `len(out) < limit` test was evaluated
+  before the extras and the tail was admitted in full after them. The cap now
+  lives in `admit()`, where every source passes through it.
 - **Seeds are excluded in SQL too.** Exclusive pools dropped the seed after the
   LIMIT, so a 20-item pool came back as 19 whenever a seed ranked in its own tag
   results.
@@ -123,6 +127,7 @@ Mutations, each restored afterwards:
 |---|---|
 | `DefaultPoolMode` back to `PoolTags` | `TestRecommendDefaultsToTheMeasuredPoolMode` |
 | tail not admitted after the extras | `TestTheReserveDoesNotShortenThePool` (pool 6 of 10) |
+| no cap in `admit` | `TestThePoolNeverExceedsItsLimit` (11 candidates for a limit of 10) |
 | `embedCandidates` returns nothing | `TestEmbedPoolReachesAWorkTheTagPoolCannot` |
 | `filterSQL` dropped from the embed query | `TestEmbedPoolHonoursFiltersInTheQuery` |
 | old renormalise branch | `TestEmbeddingSignalContributesOnEveryItem` |
@@ -132,13 +137,31 @@ test, because no fixture in the tree gives the seed the top position in its own
 tag ordering (the exclusion is observable only as "the pool is one short"). The
 code carries the comment; a fixture that ranks the seed first would close it.
 
+## Live checks after the final deploy
+
+    GET /api/v1/recommend?seed=ao3_work:17249318&n=20
+      pool_sources {tags: 902, collab: 1, embedding: 97, overlap: 180}
+      candidates 1000                              (the cap holds)
+      latency 2.8 s                                (tags-only: 2.5 s)
+    GET /api/v1/tags/29/similar?space=embed          tag "f/m", center_sim 0.38, note
+    GET /api/v1/tags/61461/similar?space=embed       tag "jasmine (disney)", 0.005, no note
+      -> aurora 0.938, aladdin 0.928, phillip 0.926
+    GET /tag/29?sort=kudos                           0.36 s, section + central note
+    GET /tag/61461?sort=kudos                        section, no note
+    kindred eval (deployed binary)                   recall@10 0.1050, pool@1000 0.2113
+
+The `/tag/{id}` page's 3.7 s in the earlier session was the cgroup throttle, not
+the page: it answers in 0.36 s now.
+
 ## Next
 
-1. **`kindred eval` on the new default** (in flight at the time of writing) to
-   confirm the top-up did not change the picture — the numbers above were
-   measured BEFORE the top-up.
-2. `docs/PLAN-recsurfaces-31-100.md` rows 59 (2-D projection of the tag space),
-   76 (drift) and 72 (width search) all read the same index and are now cheap.
-   #11 is BUILT, not partial, once the page section is deployed and walked.
-3. The `/tag/{id}` page still renders in ~3.7 s on a 55k-work tag. Measured but
-   not investigated; it is the largest single latency in the product.
+1. `docs/PLAN-recsurfaces-31-100.md` rows 59 (2-D projection of the tag space),
+   76 (drift) and 72 (width search) all read the same resident index and are now
+   cheap. #11 is BUILT and walked.
+2. The embed pool source's reserve is an eighth of the pool; with the tail
+   filling the rest, the reserve is now only about ORDER, not capacity. Worth
+   re-measuring whether a larger reserve (more embed-only works ranked) helps —
+   the current +11.5% came from 97 candidates in a 1000-item pool.
+3. `idf_overlap` and `seed_agreement` still name themselves degraded on a fresh
+   mirror until `kindred ingest` builds the doc-freq table; that is by design and
+   is reported, not silent.
