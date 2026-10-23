@@ -471,6 +471,51 @@ collab index at ingest, as the graph index and `.docfreq` already are. That is
 a unit of work, not a tail-end edit, and it is recorded here so the next
 session starts from the number rather than from "it seems slow".
 
+## Session 2026-10-23: four ideas off the 31-100 audit, and what the slices showed
+
+- [x] **67 — an unseeded `/recommend` ranks from the mirror's most-kudosed
+      works.** Three seeds, id tie-break so a reload is stable, and the page
+      names them as popularity in `seed-origin` — a default presented as a
+      taste match would be a claim nothing measured. No corpus still renders
+      the empty form. Pinned by
+      `TestAnUnseededRecommendStartsFromTheMostKudosedWorks`, whose first
+      version was VACUOUS: it asserted the id string appeared in the body, and
+      the result rows carry their own `ao3_work:` links, so an ASC ordering
+      (three wrong seeds) still passed. It now asserts the seed INPUT and the
+      number of work-id inputs; ASC reddens it.
+- [x] **64 — "What makes this work distinctive" on the work page.** The
+      work's rarest tags by document frequency: the same table the IDF signal
+      reads, read the other way round. A tag on every work is dropped (zero
+      evidence), and so is a tag the table reports on zero works — this work
+      carries it, so the table and the work disagree, and calling a stale row
+      the rarest thing here would make the strongest claim in the block on the
+      one row whose evidence contradicts itself.
+- [x] **46 + 71 — per-fandom and per-tag eval slices.** `eval.Report` now
+      carries one `Placement` per held-out work (rank, 0 = not found);
+      `eval.ByGroup` groups them (a crossover counts in both fandoms, groups
+      under 20 held-out works are dropped); `kindred eval` stores both axes in
+      `eval_slices`; `/eval` prints the newest run's weakest groups first.
+
+**The live run, and the number it explains.** Run #2 on the 112,937-work
+mirror, 38 readers, 495 held-out works: **recall@10 0.0067, ndcg@10 0.0096,
+coverage 0.0789** — the same aggregate as before this work, so slices did not
+move the ranking; they made its failure legible. The weakest groups are not
+long-tail noise: *my hero academia* 0 of 40 found, *naruto* 1 of 42, and the
+relationship tags **f/m 0 of 232** and **f/f 0 of 113**. The recommender is
+failing on the archive's largest, most ordinary corners, which is a different
+fact from "recall is low" and points at the candidate pool / signal weights
+rather than at sparsity.
+
+### Still open after this session
+
+Two `degraded` signals on an anonymous API request are NOT faults and should
+not be "fixed": `owner_taste` reports degraded because no owner is configured
+(the service log says so at startup) and `session_taste` because an anonymous
+request carries no weights. `collab` is built (12,812 pairs, gate 2) and
+reports degraded only for a seed work with no co-bookmark neighbours — the
+index covers 9,365 of 112,937 works. Worth stating because the three appear
+together in `meta.degraded` and read like three broken signals.
+
 ## Standing caveat
 
 `complete=true` means COMPLETE ONLY, not "no filter". It reads like a vacuous
