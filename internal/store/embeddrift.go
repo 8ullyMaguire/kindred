@@ -187,13 +187,14 @@ func (s *Store) EmbedRuns(ctx context.Context, limit int) ([]EmbedRun, error) {
 
 // EmbedDrift compares two fingerprints.
 type EmbedDrift struct {
-	FromID, ToID int64  `json:"from_run"`
-	FromAt       string `json:"from_at"`
-	ToAt         string `json:"to_at"`
-	RowsBefore   int    `json:"rows_before"`
-	RowsAfter    int    `json:"rows_after"`
-	DimBefore    int    `json:"dim_before"`
-	DimAfter     int    `json:"dim_after"`
+	FromID     int64  `json:"from_run"`
+	ToID       int64  `json:"to_run"`
+	FromAt     string `json:"from_at"`
+	ToAt       string `json:"to_at"`
+	RowsBefore int    `json:"rows_before"`
+	RowsAfter  int    `json:"rows_after"`
+	DimBefore  int    `json:"dim_before"`
+	DimAfter   int    `json:"dim_after"`
 	// CentroidCosine is the similarity of the two centroids: 1.0 means the
 	// average position did not move at all.
 	CentroidCosine float64 `json:"centroid_cosine"`

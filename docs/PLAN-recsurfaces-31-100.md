@@ -45,7 +45,7 @@ Four statuses:
 | 40 | Ordered "reading path" | **BUILT** | `GET /api/v1/works/{id}/path?steps=N` and `/path/{id}`. Each step is chosen against the PREVIOUS work (`sim_to_prev - 0.5*sim_to_seed`), so the list drifts instead of describing the seed N times; every step publishes both distances. Measured on work 17249318: seed distance falls 0.966 -> 0.896 -> 0.798 -> 0.701 over four steps while hops stay 0.89-0.97, against 0.966 flat for plain nearest-neighbour. |
 | 41 | Length binning for similar-length recs | PARTIAL | `MinWords`/`MaxWords` filter and a `words` sort exist; no same-quartile boost inside a ranking. |
 | 42 | Calibrated recommendation confidence | PARTIAL | Every hit carries `Evidence{Signal, Value, Weight, Reason}` and the page prints it; there is no calibrated probability and no speculative/strong label. |
-| 43 | Anti-recommendations | OPEN | Nothing negates the taste vector. |
+| 43 | Anti-recommendations | BUILT | The premise was FALSE as of this session: negatives flow from two writers, and both were verified on the deployed binary. (1) An arena pair judgement calls `arena.LearnTags(byWorks, winners, losers, …)`, which gives the losing work's tags NEGATIVE deltas (`api/arena.go:326`), and (2) the new `/skipped` page's "Not interested" writes polarity −1 through `LearnFromFeedback` (`store/feedback.go:231`). `session_taste` accepts a negative value by construction (`signal/session_taste.go` clamps to [−1,1] and its own comment says a negative must not be clamped away). MEASURED on the live binary: after one "Not interested" on work 17249318 the reader held 74 tag weights at −0.081, and `/api/v1/recommend?seed=ao3_work:17249318` returned five candidates whose session_taste evidence was value −0.732/−0.448/−0.529 · weight 0.14 = **−0.1025 / −0.0627 / −0.0740** — the ranking is actively reduced, not merely unattributed. What is NOT built: a *magnitude* measurement (the eval harness has no session-taste user model, so demotion is proven to exist and not proven to be enough) and work-level negation independent of tags. |
 | 44 | Seasonal/temporal context | OPEN | No tag→month mapping and no calendar term. |
 | 45 | Tag canonical form resolution | PARTIAL | `tagfamily` (embedded `families.json`) plus `fandom.base()` collapse variants; there is no alias table and the index is never merged. |
 | 46 | Per-fandom quality tracking | **BUILT** | `eval_slices` + `eval.ByGroup` from per-work `Placements`; `/eval` prints the newest run's weakest fandoms first (groups of ≥20 held-out works). |
@@ -62,7 +62,7 @@ Four statuses:
 | 57 | Cross-fandom bridge works | **BUILT** | `engine/bridges.go` + `/api/v1/works/{id}/bridges`, kudos-capped scan, other-fandom names as the reason. |
 | 58 | Productivity vs quality scatter | OPEN | No scatter surface; `/fandoms` and `/author` print numbers, not a plot. |
 | 59 | t-SNE/UMAP tag map | OPEN | No projection and no `/tag-map`. |
-| 60 | "Works you keep avoiding" | OPEN | `interleave_impressions` now records what was shown (`store/interleave.go`), so the input exists; nothing reads it as "shown, never marked". |
+| 60 | "Works you keep avoiding" | BUILT | `/skipped` + `store.SkippedWorks`. Reads `interleave_impressions` (one row per work per showing) — and does NOT read `algo_impressions`, which stores a whole list as CSV per row, so grouping it by work would mean parsing CSV in SQL. Three exclusions, each a claim that would otherwise be false: shown ≥3 separate times (one unclicked list is a coincidence), no credited showing, and not already marked read (a read from the bookmark screen never touches this log). Two actions per row: "Not interested" (polarity −1 through `LearnFromFeedback`, the one path that can make a work rank LOWER) and "I read it". LIVE: seeded 3 staggered showings for a real owner → the row rendered "shown 3 times, last on 2026-10-23 18:45:15"; the POST wrote polarity −1 and 74 tag weights, and the row disappeared from the list. Mutants killed: threshold ignored, credited showing still counted, read works offered, owner filter dropped. |
 | 61 | RSS feed of recommendations | **BUILT** | `/feed/tag/{id}` (works under a tag, newest first) and `/feed/seed/{kind}/{id}` (the ranking for one seed), both RSS 2.0 with absolute guids. Ordering is `corpus.ChronologicalUpdateDateDesc`, because the mirror stores AO3's "31 Oct 2025" and a string sort names 31 Oct 2025 the newest work when 26 Jun 2026 is. The tag page discovers its feed via `rel=alternate` and links it in words. Two defects the DEPLOYED feed showed: the seed came first in its own feed (`Request.Exclude` defaults false; only the API handler set it), and a work with an empty `update_date` rendered `<pubDate></pubDate>`, which readers parse as a date. `internal/api/feed.go`, `feed_test.go`. |
 | 62 | OpenSearch descriptor | **BUILT** | `/opensearch.xml`, OpenSearch 1.1, one Url pointing at `/search?q={searchTerms}`. A second `format=rss` Url was removed: `/search` has no format parameter, so the browser offered a subscription that returned HTML — a promise the reader sees broken. The test counts the Urls. |
 | 63 | Jaccard co-occurrence similarity | **BUILT** | `signal.go` computes and prints a Jaccard ratio; `TagNeighbours` ranks by PMI; `idf_overlap.go` is the weighted variant. |
@@ -78,7 +78,7 @@ Four statuses:
 | 73 | Multi-objective Pareto ranking | OPEN | One scalar score; no dominance relation. |
 | 74 | Random walks (personalised PageRank) | OPEN | No walk; ranking is overlap/affinity/collab signals. |
 | 75 | Cross-fandom trope transfer | OPEN | Bridges surface works that **are** in both fandoms; "same non-fandom tags, a different fandom" is a different query and no runner does it. |
-| 76 | Embedding drift monitoring | OPEN | `embedcmd` rewrites `embeddings`; nothing compares old and new vectors. |
+| 76 | Embedding drift monitoring | BUILT | `embed_runs` + `store.RecordEmbedRun`, written by `kindred embed` after the table lands; `/mirror` prints the verdict; `GET /api/v1/embed/drift`. A fingerprint, NOT a hash: a hash says "something changed" and cannot say whether the space moved or merely reshuffled. Each run stores rows, width, mean L2 norm, the centroid, and a SAMPLE of 64 tag vectors — the sample is load-bearing, because two tags moving in opposite directions leave the centroid exactly where it was (`TestAnAverageCanHideOppositeMovements`; the centroid-only mutant dies on it). Floor 0.98, not 0.9: a deterministic solver over an unchanged corpus landing at 0.95 has moved positions rather than re-rolled a seed. Two refusals: the page will not print "0% drift" when fewer than two fingerprints exist (no comparison ≠ good result), and a failed fingerprint does not fail the build (the embeddings are correct; a monitoring gap must not become a broken deploy) — it is printed by name. Mutants killed: floor 0, centroid-instead-of-sample, width change not its own verdict, sample compared against itself. |
 | 77 | Tag suggestions for writers | OPEN | No writer surface. |
 | 78 | Work-pair similarity API | **BUILT** | `GET /api/v1/works/{id}/similarity/{other}` and `/work/{id}?compare={other}`. Two components, published separately: IDF-weighted Jaccard over the tag sets and the cosine between the works' tag centroids; the shared tags travel rarest-first, and every axis that could not run is named in `missing`. Popularity/recency are deliberately NOT components. Live: works 17249318 vs 65141041 share 18 tags, overlap 0.111, cosine 0.869, score 0.490. |
 | 79 | Recommendation diversity metric | PARTIAL | `diversify` enforces MMR and per-group caps and reports what it dropped; `eval_runs` stores recall/NDCG only, so intra-list diversity is not tracked over time. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 14 | 33, 40, 46, 56, 57, 61, 62, 63, 64, 65, 67, 70, 71, 78 |
+| BUILT | 17 | 33, 40, 43, 46, 56, 57, 60, 61, 62, 63, 64, 65, 67, 70, 71, 76, 78 |
 | PARTIAL | 12 | 32, 38, 41, 42, 45, 49, 50, 54, 66, 72, 79, 89 |
-| OPEN | 40 | 31, 34, 35, 36, 37, 39, 43, 44, 47, 48, 52, 53, 55, 58, 59, 60, 68, 69, 73, 74, 75, 76, 77, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 37 | 31, 34, 35, 36, 37, 39, 44, 47, 48, 52, 53, 55, 58, 59, 68, 69, 73, 74, 75, 77, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
@@ -124,8 +124,14 @@ the search descriptor, the work-pair report, the reading path and the
 new-since-visit list, all verified on the deployed binary; 2026-10-23g added the
 per-kind algorithm registry and its live A/B, which is infrastructure for every
 row below rather than one of them -- see
-`docs/HANDOFF-2026-10-23g-per-kind-algorithms.md`)
-for. The measurement that matters more than the count: **pool recall@1000 was
+`docs/HANDOFF-2026-10-23g-per-kind-algorithms.md`).
+2026-10-23h shipped #60 ("works you keep skipping"), #76 (embedding drift
+fingerprints) and settled #43 by MEASUREMENT rather than by building: negatives
+already flowed from arena pair judgements, and the new "Not interested" action
+gives a reader a direct one. The total is now **35 built, 14 partial, 47 open,
+4 without a premise** -- see `docs/HANDOFF-2026-10-23h-skip-drift.md`.
+
+The measurement that matters more than the count: **pool recall@1000 was
 0.0284** (run #8) and is **0.2113** after the candidate work (run #13), i.e. even a perfect ranking of the 1000 candidates could
 find at most 2.8% of held-out works, and the current recall@10 of 0.0056 is a
 fifth of that ceiling. The remaining ideas are worth less than candidate
