@@ -236,6 +236,10 @@ type TagPage struct {
 	// 25 MiB back. The names are fetched from the corpus here, which is
 	// the only place they still exist at request time.
 	Neighbours []Neighbour
+	// VectorNeighbours is the embedding-space neighbourhood -- tags whose
+	// vectors are nearest this tag's. Empty when the deployment holds no
+	// embeddings, which is why the template tests the slice and not a flag.
+	VectorNeighbours []EmbedNeighbour
 
 	// Sort is the order the works are listed in, as one of "kudos",
 	// "recent", "words". It is on the page so the control can render the
@@ -319,6 +323,18 @@ type Neighbour struct {
 	Name  string
 	PMI   float64
 	Count int64
+}
+
+// EmbedNeighbour is a tag near this one in the 32-dimensional tag space.
+//
+// It is a different claim from Neighbour, and the page says so: PMI says "these
+// two appear together more than chance", this says "these two mean similar
+// things". A tag with three works has no PMI neighbour worth the name and still
+// has a position, which is why both lists exist.
+type EmbedNeighbour struct {
+	ID   int64
+	Name string
+	Sim  float64
 }
 
 // TagInfo is a tag as the corpus holds it.

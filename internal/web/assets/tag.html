@@ -29,6 +29,21 @@
 </p>
 {{end}}
 
+{{if .VectorNeighbours}}
+<h2>Tags that sit near it</h2>
+<p class="count">
+  Nearest in the tag-embedding space &mdash; a statement about meaning, not
+  about appearing together. It is the list that can still answer for a tag
+  too rare to co-occur with anything above.
+</p>
+<ul class="tags">
+  {{range .VectorNeighbours}}
+  <li><a class="tag" href="/tag/{{.ID}}">{{.Name}}</a>
+      <span class="note">{{printf "%.2f" .Sim}}</span></li>
+  {{end}}
+</ul>
+{{end}}
+
 <h2>Works</h2>
 
 {{/* Sort and length controls. A GET form, so the result is a URL a reader

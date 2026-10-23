@@ -375,10 +375,39 @@ func availableTunes(ctx context.Context, s *store.Store) []string {
 	return out
 }
 
+// DefaultPoolMode is what an absent pool_mode means.
+//
+// It was PoolTags until 2026-10-23, and it changed on a measurement rather
+// than on an argument. Same 38 readers, same 495 held-out bookmarks, the same
+// corpus, one flag apart:
+//
+//	                      pool recall@1000   recall@10   nDCG@10   coverage
+//	tags+collab                  0.1895        0.1031    0.1947     0.6579
+//	tags+collab+embed            0.2113        0.1050    0.1959     0.6579
+//
+// The rule was written down before the numbers existed: the default moves only
+// if pool recall rises materially and recall@10 does not fall. Pool recall rose
+// 11.5% relative, recall@10 rose with it, coverage was unchanged, and the
+// request cost did not move (3.3-3.8 s on the live instance for every mode —
+// the embedding source adds ~97 candidates and one join against a resident
+// index).
+//
+// The gains are small in absolute terms. They are reported as measured, and
+// the mode stays a parameter: a mirror with no embeddings and no bookmarks
+// answers this default by falling back to tags alone and naming the missing
+// dimensions in meta.degraded.
+const DefaultPoolMode = PoolTagsCollabEmbed
+
 // ParsePoolMode validates a pool mode name.
+//
+// The empty string is DefaultPoolMode, NOT PoolTags: "no opinion" and "tags
+// only" are different requests, and conflating them meant the measured default
+// could never be anything but the zero value.
 func ParsePoolMode(s string) (PoolMode, error) {
 	switch strings.TrimSpace(strings.ToLower(s)) {
-	case "", "tags", "tag":
+	case "":
+		return DefaultPoolMode, nil
+	case "tags", "tag":
 		return PoolTags, nil
 	case "tags+collab", "collab", "tags_or_collab":
 		return PoolTagsOrCollab, nil
@@ -912,20 +941,20 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 		}
 	}
 
-	if len(tagIDs) > 0 {
-		args := make([]any, 0, len(tagIDs)+16)
-		// Sorted tag ids rather than map order: the argument list is part of
-		// the cache key and the pool must not depend on Go's randomised map
-		// iteration.
-		tagList := make([]int32, 0, len(tagIDs))
-		for id := range tagIDs {
-			tagList = append(tagList, id)
-		}
-		sort.Slice(tagList, func(a, b int) bool { return tagList[a] < tagList[b] })
-		for _, id := range tagList {
-			args = append(args, id)
-		}
+	// Sorted tag ids rather than map order: the argument list is part of the
+	// cache key and the pool must not depend on Go's randomised map iteration.
+	tagList := make([]int32, 0, len(tagIDs))
+	for id := range tagIDs {
+		tagList = append(tagList, id)
+	}
+	sort.Slice(tagList, func(a, b int) bool { return tagList[a] < tagList[b] })
 
+	// Declared here, assigned below: the top-up after the extra sources needs
+	// the same query, and a closure declared inside the `if` cannot be reached
+	// from there.
+	var runTagPool func(budget int, excludeIDs []int64) ([]int64, error)
+
+	if len(tagIDs) > 0 {
 		where := `wt.tag_id IN (` + corpus.Placeholders(len(tagList)) + `)`
 		// The filter predicates are appended BEFORE the limit argument,
 		// because the limit's placeholder is the last one in the statement.
@@ -965,57 +994,86 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 			// corpus they are the half that can actually rank.
 			tagBudget = 1
 		}
-		q := `SELECT wt.work_id, COUNT(*) AS shared FROM work_tags wt
-		      JOIN works w ON w.id = wt.work_id
-		      WHERE ` + where
-		q += filterSQL(f, &args)
-		// Blocks are applied HERE, inside the same pool query, for the same
-		// reason the filters are. Filtering the finished ranking would return
-		// a subset of a ranking rather than a ranking over the works the
-		// reader is willing to see: ask for 20 and get 8, with no way to tell
-		// that 60 eligible works sat below the cut-off behind blocked ones.
-		q += blockSQL(req.BlockedTagIDs, &args)
-		q += seenSQL(req.SeenIDs, &args)
-		// ORDER BY shared DESC, work_id ASC. The work_id tiebreak is what
-		// makes two identical requests rank identical candidates.
-		q += ` GROUP BY wt.work_id
-		       ORDER BY shared DESC, wt.work_id ASC
-		       LIMIT ?`
-		args = append(args, tagBudget)
+		// runTagPool is the tag half, callable twice: once for the reserved
+		// budget and once to TOP UP whatever the extra sources left unused.
+		//
+		// The top-up exists because a reserve that is not filled shortens the
+		// pool. Measured on the live mirror with the reserve alone: pool_mode=all
+		// returned 848 candidates against 1000 for tags-only — the tag half was
+		// capped at 750, collab found 1 and embedding 97, and 152 slots went
+		// unused. Ranking 848 candidates instead of 1000 is not a bug the
+		// recall figure would report (it went UP, because the added candidates
+		// were better), and it is still 152 chances to lose the one work a
+		// reader wanted. The pool is a union: it should be as full as its
+		// sources can make it.
+		runTagPool = func(budget int, excludeIDs []int64) ([]int64, error) {
+			args := make([]any, 0, len(tagList)+16+len(excludeIDs))
+			for _, id := range tagList {
+				args = append(args, id)
+			}
+			q := `SELECT wt.work_id, COUNT(*) AS shared FROM work_tags wt
+			      JOIN works w ON w.id = wt.work_id
+			      WHERE ` + where
+			q += filterSQL(f, &args)
+			// Blocks are applied HERE, inside the same pool query, for the same
+			// reason the filters are. Filtering the finished ranking would
+			// return a subset of a ranking rather than a ranking over the works
+			// the reader is willing to see: ask for 20 and get 8, with no way
+			// to tell that 60 eligible works sat below the cut-off behind
+			// blocked ones.
+			q += blockSQL(req.BlockedTagIDs, &args)
+			q += seenSQL(req.SeenIDs, &args)
+			// The seeds themselves are excluded in SQL, not after the LIMIT.
+			// Dropping them from the scanned rows shortened the pool by one
+			// every time a seed landed in its own tag results, which on a
+			// 20-item pool is 5% and on the fixture's 10 is 10% -- visible
+			// as "the pool is always one short", never as an error.
+			if exclude && len(seedIDs) > 0 {
+				ph := corpus.Placeholders(len(seedIDs))
+				q += ` AND wt.work_id NOT IN (` + ph + `)`
+				for _, id := range seedIDs {
+					args = append(args, id)
+				}
+			}
+			if len(excludeIDs) > 0 {
+				// Already-admitted ids are excluded in SQL rather than filtered
+				// after the LIMIT: a post-filter would hand back fewer rows than
+				// asked for on every top-up, which is the same off-by-repeats
+				// bug the dedupe above exists to prevent.
+				ph := corpus.Placeholders(len(excludeIDs))
+				q += ` AND wt.work_id NOT IN (` + ph + `)`
+				for _, id := range excludeIDs {
+					args = append(args, id)
+				}
+			}
+			// ORDER BY shared DESC, work_id ASC. The work_id tiebreak is what
+			// makes two identical requests rank identical candidates.
+			q += ` GROUP BY wt.work_id
+			       ORDER BY shared DESC, wt.work_id ASC
+			       LIMIT ?`
+			args = append(args, budget)
 
-		rows, err := e.Corpus.DB.QueryContext(ctx, q, args...)
+			rows, err := e.Corpus.DB.QueryContext(ctx, q, args...)
+			if err != nil {
+				return nil, fmt.Errorf("pool query: %w", err)
+			}
+			defer rows.Close()
+			out := make([]int64, 0, budget)
+			for rows.Next() {
+				var id int64
+				var shared int
+				if err := rows.Scan(&id, &shared); err != nil {
+					return nil, err
+				}
+				out = append(out, id)
+			}
+			return out, rows.Err()
+		}
+
+		tagRows, err := runTagPool(tagBudget, nil)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("pool query: %w", err)
-		}
-		excluded := map[int64]bool{}
-		if exclude {
-			for _, id := range seedIDs {
-				excluded[id] = true
-			}
-		}
-		tagRows := make([]int64, 0, tagBudget)
-		for rows.Next() {
-			var id int64
-			var shared int
-			if err := rows.Scan(&id, &shared); err != nil {
-				rows.Close()
-				return nil, nil, nil, err
-			}
-			if excluded[id] {
-				continue
-			}
-			tagRows = append(tagRows, id)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
 			return nil, nil, nil, err
 		}
-		rows.Close()
-		// Most-shared-first, then by id so the pool is reproducible. SQL
-		// already ordered and limited this; re-sorting a truncated slice
-		// would be harmless but would suggest the ordering was not
-		// guaranteed, and a reader could not then tell whether the LIMIT is
-		// trustworthy.
 		admit(tagRows, &src.Tags)
 	}
 
@@ -1042,6 +1100,34 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 			} else {
 				admit(extra, &src.Embedding)
 			}
+		}
+	}
+	// Top up whatever the reserves left unused, with the source that is
+	// strongest on this corpus. This runs AFTER the extra sources, so their
+	// slots are never taken by tags: the reserve guarantees the works that
+	// only they can reach, and the top-up only fills what remains.
+	if len(out) < limit && len(tagIDs) > 0 && runTagPool != nil {
+		// Seeds as well as admitted ids: the top-up asks the same query again,
+		// and a query that could return a seed would let the one work a reader
+		// already has back into the pool through the second call.
+		already := make([]int64, 0, len(out)+len(seedIDs))
+		for _, id := range out {
+			already = append(already, id)
+		}
+		if exclude {
+			for _, id := range seedIDs {
+				already = append(already, id)
+			}
+		}
+		sort.Slice(already, func(a, b int) bool { return already[a] < already[b] })
+		more, err := runTagPool(limit-len(out), already)
+		if err != nil {
+			// The pool is usable: report the shortfall in the sources and
+			// carry on. Failing the request here would trade a smaller pool
+			// for no ranking at all.
+			slog.Warn("tag top-up failed; the pool is short", "err", err)
+		} else {
+			admit(more, &src.Tags)
 		}
 	}
 	return out, collabVotes, src, nil

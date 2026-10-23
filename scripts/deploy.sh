@@ -81,6 +81,22 @@ echo "  installed and re-read: $INSTALLED"
 ssh "$DEPLOY_HOST" "sudo systemctl restart $UNIT"
 echo "  restarted $UNIT"
 
+say "3b. resource limits (the cgroup must not be tighter than the binary)"
+# MemoryHigh/MemoryMax were 400M/512M, sized for the 220 MB self-cap that was
+# deleted on 2026-10-22. Measured 2026-10-23: the new tag-embedding index
+# (+81 MiB resident) took anon to 409 MB, so the service sat permanently above
+# MemoryHigh. The kernel does not kill it -- it stalls every allocation while it
+# reclaims -- and the result was 19 s page loads with /healthz still answering
+# 200 and memory.events reporting 594,411 high-watermark hits. Nothing in the
+# test suite can see this, and the deploy gate below would have reported the
+# service "up".
+#
+# A deploy that ships a binary the cgroup cannot hold must raise the cgroup, or
+# it ships a service that is up and unusable. set-property persists a drop-in,
+# so this is reproducible on a fresh host rather than a hand-edit on this one.
+ssh "$DEPLOY_HOST" "sudo systemctl set-property $UNIT MemoryHigh=768M MemoryMax=1G MemorySwapMax=0"
+echo "  $UNIT: MemoryHigh=768M MemoryMax=1G (was 400M/512M, sized for a cap that no longer exists)"
+
 say "4. waiting for health"
 # The port comes from the UNIT, not from a default in this file.
 #

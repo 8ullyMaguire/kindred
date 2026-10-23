@@ -176,3 +176,42 @@ func TestPoolSourcesReportedOnTheResult(t *testing.T) {
 			res.Meta.PoolSources, res.Meta.PoolSize)
 	}
 }
+
+// TestTheReserveDoesNotShortenThePool: a reserve that is not filled must not
+// cost the pool slots.
+//
+// Measured on the live mirror before the top-up: pool_mode=all returned 848
+// candidates against 1000 for tags-only, because the tag half was capped at
+// 750 and the extra sources found 98 between them. The recall figure went UP
+// (better candidates), so no recall assertion would ever have reported the 152
+// missing slots -- which is exactly why they need their own check.
+func TestTheReserveDoesNotShortenThePool(t *testing.T) {
+	e := newFixtureEngine(t)
+	const limit = 10
+
+	// The premise: with the extras enabled the tag half is capped BELOW the
+	// limit, so an implementation without the top-up cannot fill it.
+	only, _ := poolOf(t, e, 1, PoolTags, limit)
+	if len(only) != limit {
+		t.Fatalf("tags-only pool is %d for a limit of %d; the fixture cannot "+
+			"exercise a full pool", len(only), limit)
+	}
+
+	withExtras, src := poolOf(t, e, 1, PoolTagsCollabEmbed, limit)
+	if len(withExtras) != limit {
+		t.Fatalf("tags+collab+embed pool is %d for a limit of %d (sources %+v): "+
+			"the reserve shortened the pool instead of being topped up",
+			len(withExtras), limit, src)
+	}
+	if src.Tags+src.Collab+src.Embedding != len(withExtras) {
+		t.Fatalf("sources %+v do not add up to %d", src, len(withExtras))
+	}
+	// And no id appears twice, which the old union allowed.
+	seen := map[int64]bool{}
+	for _, id := range withExtras {
+		if seen[id] {
+			t.Fatalf("work %d is in the pool twice", id)
+		}
+		seen[id] = true
+	}
+}

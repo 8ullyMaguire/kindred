@@ -1317,3 +1317,55 @@ func TestEveryRegisteredPageHasASweepRow(t *testing.T) {
 		}
 	}
 }
+
+// TestTagPageShowsTheEmbeddingNeighbourhood covers the section #11 asked for.
+//
+// The page had two ways to be wrong that no other test would catch: rendering
+// the section with no rows (an empty list that reads as "nothing sits near
+// this tag" — the absence-as-answer failure this tree refuses) and rendering
+// ids without names (a similarity nobody can click or act on). Both are
+// asserted, and the absence case counts its subject first.
+func TestTagPageShowsTheEmbeddingNeighbourhood(t *testing.T) {
+	page := TagPage{
+		Base: Base{Title: "coffee shop"},
+		Tag:  TagInfo{ID: 1, Name: "coffee shop", WorkCount: 40},
+		VectorNeighbours: []EmbedNeighbour{
+			{ID: 840, Name: "barista", Sim: 0.812},
+			{ID: 27, Name: "slow burn", Sim: 0.66},
+		},
+	}
+	body := renderOne(t, "tag.html", page)
+
+	if !strings.Contains(body, "Tags that sit near it") {
+		t.Fatal("the embedding section is missing on a page that has neighbours")
+	}
+	// Count the links before asserting anything about their content: a
+	// section that renders its heading and no rows would satisfy a bare
+	// "contains the heading" check.
+	if n := strings.Count(body, `href="/tag/`); n < 2 {
+		t.Fatalf("the embedding section rendered %d tag links, want 2: "+
+			"the heading renders without its rows", n)
+	}
+	for _, want := range []string{`href="/tag/840"`, "barista", "0.81", "slow burn"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the neighbourhood is missing %q", want)
+		}
+	}
+}
+
+// TestTagPageHidesTheEmbeddingSectionWhenThereIsNothingToSay: a deployment
+// with no embeddings must not render a heading over an empty list.
+func TestTagPageHidesTheEmbeddingSectionWhenThereIsNothingToSay(t *testing.T) {
+	page := TagPage{
+		Base: Base{Title: "coffee shop"},
+		Tag:  TagInfo{ID: 1, Name: "coffee shop", WorkCount: 40},
+	}
+	body := renderOne(t, "tag.html", page)
+	if !strings.Contains(body, "work") {
+		t.Fatal("the page did not render at all; an absence assertion here is vacuous")
+	}
+	if strings.Contains(body, "Tags that sit near it") {
+		t.Fatal("the embedding section rendered with no neighbours, which reads as " +
+			"\"nothing sits near this tag\" rather than \"this host has no embeddings\"")
+	}
+}

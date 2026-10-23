@@ -96,7 +96,7 @@ func runEval(ctx context.Context, args []string) error {
 		lite     = fs.Bool("lite", c.Mode == "lite", "skip the embedding signal (set from --mode lite)")
 		tune     = fs.String("tune", "", "weight tune to evaluate (see `kindred tune --list`; empty = the built-in default)")
 		probe    = fs.Int("pool-depth", 0, "also measure candidate-generation recall at this depth (0 = off)")
-		poolMode = fs.String("pool-mode", "tags+collab", "candidate sources: tags, tags+collab, tags+embed, tags+collab+embed")
+		poolMode = fs.String("pool-mode", engine.DefaultPoolMode.String(), "candidate sources: tags, tags+collab, tags+embed, tags+collab+embed")
 	)
 	c, err := finishConfig(c, fs, args)
 	if err != nil {

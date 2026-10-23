@@ -522,13 +522,16 @@ func (s *Server) parseRecommend(r *http.Request) (*engine.Request, error) {
 			req.Filter.Languages = f.Languages
 		}
 	}
-	if v := q.Get("pool_mode"); v != "" {
-		mode, err := engine.ParsePoolMode(v)
-		if err != nil {
-			return nil, err
-		}
-		req.PoolMode = mode
+	// Parsed even when absent, because ParsePoolMode("") is the DEFAULT and
+	// skipping it left the zero value (tags only) in place — so an API caller
+	// who said nothing got the pre-2026-10-23 behaviour while the browser and
+	// the CLI got the measured default. "The parameter is missing" and "the
+	// parameter says tags" were the same request here and are not.
+	mode, err := engine.ParsePoolMode(q.Get("pool_mode"))
+	if err != nil {
+		return nil, err
 	}
+	req.PoolMode = mode
 	return req, nil
 }
 
@@ -610,6 +613,29 @@ func (s *Server) handleSimilarTags(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	// Two spaces answer the same question two ways, and the parameter is
+	// explicit because the answers differ in KIND rather than in quality.
+	//
+	//   space=cooccur (default) — tags that appeared on the same works. High
+	//   precision, and structurally blind to a tag with few works.
+	//   space=embed — tags whose vectors are nearest. Reaches tags that never
+	//   co-occur with this one, which is the only thing the 634k x 32 matrix
+	//   can say that the graph cannot.
+	//
+	// Default stays cooccur: it is what every existing caller asked for, and
+	// changing the default would silently change the answer to a question
+	// already being asked.
+	space := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("space")))
+	if space == "embed" || space == "embedding" {
+		s.handleSimilarTagsEmbed(w, r, id)
+		return
+	}
+	if space != "" && space != "cooccur" && space != "cooccurrence" && space != "graph" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf(
+			"space %q is not a space; use space=cooccur (shared works) or "+
+				"space=embed (nearest in tag-embedding space)", space))
+		return
+	}
 	if s.Engine.Graph == nil {
 		// No index: say so, with a status that says so. A 200 with an
 		// empty list would read as "nothing is similar".
@@ -638,10 +664,84 @@ func (s *Server) handleSimilarTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"tag":       s.Engine.Graph.Name(int32(id)),
 		"tag_id":    id,
+		"space":     "cooccur",
 		"similar":   out,
 		"returned":  len(out),
 		"requested": limit,
 	})
+}
+
+// handleSimilarTagsEmbed answers the same question from the embedding index.
+func (s *Server) handleSimilarTagsEmbed(w http.ResponseWriter, r *http.Request, id int64) {
+	limit := atoiDefault(r.URL.Query().Get("n"), 20)
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	// 0 by default. A threshold here would be a claim about what counts as
+	// "near", and the honest form is to return the k nearest and let the
+	// similarity travel with each row: a reader can see that the eighth tag
+	// is 0.31 and the ninth is 0.29, which a filter would hide.
+	var minSim float64
+	if v := r.URL.Query().Get("min_sim"); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil || f < 0 || f > 1 {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf(
+				"min_sim %q is not a similarity; it is a number from 0 to 1, or omit it", v))
+			return
+		}
+		minSim = f
+	}
+	near, ok, err := s.Engine.TagsNear(r.Context(), int32(id), limit, minSim)
+	if !ok {
+		// Same contract as the co-occurrence route: 503 with the reason, not
+		// an empty 200 that reads as "nothing is near it".
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "no tag embeddings are loaded",
+			"hint":  "run `kindred embed` on this host to build them",
+		})
+		return
+	}
+	if err != nil && len(near) == 0 {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	ids := make([]int64, 0, len(near))
+	for _, n := range near {
+		ids = append(ids, int64(n.ID))
+	}
+	names := map[int64]string{}
+	if s.Engine.Corpus != nil && len(ids) > 0 {
+		if m, nerr := s.Engine.Corpus.TagNames(r.Context(), ids); nerr == nil {
+			names = m
+		} else {
+			s.Log.Warn("tag names unavailable for the embed neighbourhood", "err", nerr)
+		}
+	}
+	type row struct {
+		ID         int32   `json:"id"`
+		Name       string  `json:"name"`
+		Similarity float64 `json:"similarity"`
+	}
+	out := make([]row, 0, len(near))
+	for _, n := range near {
+		out = append(out, row{ID: n.ID, Name: names[int64(n.ID)], Similarity: n.Sim})
+	}
+	body := map[string]any{
+		"tag":       names[id],
+		"tag_id":    id,
+		"space":     "embed",
+		"similar":   out,
+		"returned":  len(out),
+		"requested": limit,
+	}
+	// A partial index answers with its rows AND says what it could not read.
+	if err != nil {
+		body["degraded"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // --- the unofficial AO3 API ----------------------------------------------

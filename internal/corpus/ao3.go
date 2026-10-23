@@ -605,6 +605,16 @@ func (a *AO3) tagCandidates(ctx context.Context, tagType string, limit int) ([]a
 	return kept, nil
 }
 
+// TagNames resolves tag ids to names in one query per batch.
+//
+// Exported because the embedding finder produces tag IDS from the state
+// database and the mirror is the only place their NAMES live: a page that
+// showed "tag 29 is similar to tag 840" would be reporting a similarity
+// nobody can act on. One query, so the two sets cannot disagree.
+func (a *AO3) TagNames(ctx context.Context, ids []int64) (map[int64]string, error) {
+	return a.tagNames(ctx, ids)
+}
+
 // tagNames resolves tag ids to names, in one query per batch.
 func (a *AO3) tagNames(ctx context.Context, ids []int64) (map[int64]string, error) {
 	out := make(map[int64]string, len(ids))

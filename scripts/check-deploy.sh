@@ -219,27 +219,63 @@ discriminates () {
 
 TAG="${KINDRED_GATE_TAG:-}"
 TAG_WORKS=0
-if [ -n "$TAG" ]; then
-  TAG_WORKS=$(count_works "$TARGET/tag/$TAG?n=100")
-  discriminates "$TAG" || note "KINDRED_GATE_TAG=$TAG cannot discriminate on every "\
-"axis, so the filter checks below may report false failures"
+
+# Discovery asks the CORPUS, not the search page.
+#
+# The search-based walk this replaced could not finish on the live mirror and
+# did not fail — it HUNG, which is worse. Measured on 2026-10-23: /search returns
+# 100 DISTINCT tag links per query, most of them freeform sentence tags
+# ("a lot of coercion in general really") with one work each, so `count_works`
+# made ~400 requests at 3.4s apiece, then picked a 1-work tag and asserted the
+# filters against it. The gate had therefore been reporting on a tag no filter
+# could discriminate on, and a deploy could not complete inside any reasonable
+# window.
+#
+# One SQL query over the corpus answers the question the walk was trying to
+# approximate: which tag has enough works, several ratings, and both completion
+# states? On the live mirror that is tag 29 at 55,810 works (25,293 complete /
+# 30,517 in progress, 5 distinct ratings). It is a FIXTURE CHOICE, not a
+# behaviour assertion — every check below still goes over HTTP — so reading the
+# corpus for it does not weaken the gate.
+#
+# Without the DB (a fixture instance, or a host that does not ship the corpus),
+# the HTTP walk still runs, now capped: eight candidates, best-first, stopping
+# at the first that discriminates. Bounded, and it says which source it used.
+CORPUS_DB=${KINDRED_CORPUS_DB:-/home/alvaro/kindling-data/ao3_metadata.db}
+if [ -z "$TAG" ] && [ -r "$CORPUS_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+  TAG=$(sqlite3 -readonly "$CORPUS_DB" \
+    "SELECT wt.tag_id FROM work_tags wt JOIN works w ON w.id = wt.work_id
+     GROUP BY wt.tag_id
+     HAVING COUNT(*) >= 50 AND COUNT(DISTINCT w.rating) >= 2
+        AND SUM(w.complete = 1) > 5 AND SUM(w.complete = 0) > 5
+     ORDER BY COUNT(*) DESC LIMIT 1;" 2>/dev/null || true)
+  if [ -n "$TAG" ]; then
+    TAG_WORKS=$(count_works "$TARGET/tag/$TAG?n=100")
+    echo "  corpus names tag/$TAG ($TAG_WORKS works, several ratings, both completion states)"
+  else
+    echo "  corpus has no tag that discriminates; falling back to the search walk"
+  fi
 fi
-for q in general explicit angst relationship; do
-  for cand in $(curl -fsS --max-time 20 "$TARGET/search?q=$q&n=100" 2>/dev/null \
-                 | grep -oE '/tag/[0-9]+' | grep -oE '[0-9]+' | sort -un); do
-    n=$(count_works "$TARGET/tag/$cand?n=100")
-    if [ "${n:-0}" -gt "$TAG_WORKS" ]; then
-      TAG=$cand
-      TAG_WORKS=$n
+
+if [ -z "$TAG" ]; then
+  # Best-first over a bounded candidate set: the tag with the most works wins,
+  # then the first that discriminates on both axes. The cap is what makes this
+  # terminate; the message names it so a reader knows the walk was truncated.
+  for q in general explicit angst relationship; do
+    for cand in $(curl -fsS --max-time 20 "$TARGET/search?q=$q&n=100" 2>/dev/null \
+                   | grep -oE '/tag/[0-9]+' | grep -oE '[0-9]+' | sort -un | head -8); do
+      n=$(count_works "$TARGET/tag/$cand?n=100")
+      if [ "${n:-0}" -gt "$TAG_WORKS" ]; then
+        TAG=$cand
+        TAG_WORKS=$n
+      fi
+    done
+    if [ -n "$TAG" ] && discriminates "$TAG"; then
+      echo "  tag/$TAG discriminates on completion and rating"
+      break
     fi
   done
-  # Only a tag that discriminates on both axes is usable. Keep the biggest
-  # candidate seen so far, but stop as soon as one qualifies.
-  if [ -n "$TAG" ] && discriminates "$TAG"; then
-    echo "  tag/$TAG discriminates on completion and rating"
-    break
-  fi
-done
+fi
 if [ -z "$TAG" ]; then
   TAG=1
   TAG_WORKS=$(count_works "$TARGET/tag/1?n=100")

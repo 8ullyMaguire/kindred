@@ -372,3 +372,50 @@ func (h *tagSimHeap) Pop() any {
 	*h = old[:n-1]
 	return x
 }
+
+// NearTag is one tag and how close it sits to another in embedding space.
+type NearTag struct {
+	ID  int32   `json:"id"`
+	Sim float64 `json:"similarity"`
+}
+
+// TagsNear returns the tags nearest id in the tag-embedding space.
+//
+// This is the reader-facing half of the embedding index. The pool source uses
+// a seed CENTROID, which is the right question for ranking ("where is this
+// reader standing?") and the wrong one for a tag page ("what else lives
+// here?"). Asked about a tag, the answer is a neighbourhood, and its whole
+// value is that it is NOT the co-occurrence neighbourhood: 634k tags have a
+// vector, while the graph holds an edge only where two tags appeared on the
+// same work. A tag with three works has no graph neighbours worth the name
+// and still has a position.
+//
+// ok is false when this deployment holds no embeddings at all — a supported
+// state (a mirror that never ran `kindred embed`), not an error, and the
+// caller must say so rather than answering an empty list.
+func (e *Engine) TagsNear(ctx context.Context, id int32, k int, minSim float64) (near []NearTag, ok bool, err error) {
+	idx, ierr := e.tagVectors(ctx)
+	if idx == nil {
+		if ierr != nil {
+			return nil, false, ierr
+		}
+		return nil, false, nil
+	}
+	v, found := idx.row(id)
+	if !found {
+		// The tag exists in the mirror but has no vector: `kindred embed` ran
+		// before this tag was crawled, or skipped its family. That is a fact
+		// about the INDEX, and the caller reports it by name — an empty list
+		// would read as "nothing is near it".
+		return nil, true, fmt.Errorf("tag %d has no embedding", id)
+	}
+	sims := idx.nearestTags(v, k, minSim, map[int32]bool{id: true})
+	out := make([]NearTag, 0, len(sims))
+	for _, s := range sims {
+		out = append(out, NearTag{ID: s.ID, Sim: s.Sim})
+	}
+	// A partial index still answers, and the error travels with the answer so
+	// the caller can report both: the rows it read and the rows it skipped
+	// are different findings.
+	return out, true, ierr
+}
