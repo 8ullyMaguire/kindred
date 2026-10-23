@@ -108,8 +108,8 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 19 | 33, 40, 43, 46, 50, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 76, 78 |
-| PARTIAL | 10 | 32, 38, 41, 42, 45, 49, 54, 72, 79, 89 |
+| BUILT | 20 | 33, 40, 43, 46, 50, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 76, 78 |
+| PARTIAL | 9 | 32, 38, 41, 42, 45, 49, 72, 79, 89 |
 | OPEN | 37 | 31, 34, 35, 36, 37, 39, 44, 47, 48, 52, 53, 55, 58, 59, 68, 69, 73, 74, 75, 77, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
@@ -134,6 +134,13 @@ gives a reader a direct one. The total is now **35 built, 14 partial, 47 open,
 2026-10-23i shipped #66 (the byline as links, authors who write alike) and #50
 ("complete your collection"), so the live total is **37 built, 10 partial, 49
 open, 4 without a premise** -- see `docs/HANDOFF-2026-10-23i-byline-and-shelf.md`.
+
+2026-10-23i also shipped #54 (a tag's shelf in numbers), so the live total is
+**38 built, 9 partial, 49 open, 4 without a premise**. The one measurement that
+came out of it and is NOT a roadmap row: `/tag/{id}` costs 3.67 s warm because its
+default sort is the engine's taste blend (0.54 s for sort=kudos, 67 ms for the new
+statistics). The hottest page on the site is 3.1 s of ranking nobody asked for by
+default.
 
 The measurement that matters more than the count: **pool recall@1000 was
 0.0284** (run #8) and is **0.2113** after the candidate work (run #13), i.e. even a perfect ranking of the 1000 candidates could

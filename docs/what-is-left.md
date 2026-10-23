@@ -13,6 +13,14 @@ established it.
 - [x] **#50 "Complete your collection"** — `/author?q=` says "you have read 2 of
       4 — 2 to go" and `?unread=1` shows the rest. Live with a session; anonymous
       readers get no claim at all.
+- [x] **#54 A tag's shelf in numbers** — medians (not means) of length and kudos,
+      the most-saved work, and a trend by update year. Live tag 29: median 30,603
+      words vs mean 76,222. Two defects found by the tests (double-counted
+      `work_tags` rows; a one-year fixture that made the trend mutants survive).
+- [ ] **Latency, measured and unowned**: `/tag/{id}` is 3.67 s warm, of which 3.1 s
+      is the default taste sort (`sort=kudos` is 0.54 s, the statistics 67 ms). The
+      hottest page on the site spends most of its time on a ranking the reader did
+      not ask for.
 
 ## Skipping, drift, negation (2026-10-23h)
 

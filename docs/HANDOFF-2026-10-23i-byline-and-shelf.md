@@ -62,13 +62,73 @@ size would be a number about pagination. Capped at 5,000 ids, and the page says
 Live, signed in, with two of Titus621's four works marked read:
 `data-read="2" data-total="4"`, "2 to go", and the filtered list at `2 of 2`.
 
-## A gate defect this deploy found
+## #54 A tag's shelf in numbers — BUILT
+
+`/tag/{id}` gained "This tag in numbers": median and mean length, median and mean
+kudos, total words, the most-saved work, and a trend by update year.
+
+**Medians, with the mean beside them.** AO3's distributions are skewed enough that
+a mean describes a work nobody wrote. Live, tag 29:
+
+```
+works 55,810   median length 30,603 words   mean length 76,222 words
+               median kudos  105           mean kudos  201
+most saved: work 17249318, 2,409 bookmarks
+trend: 2026 … 2021, newest first
+```
+
+**The trend is by UPDATE year and says so** — the mirror has no first-published
+column, so an old fic edited last month belongs to this year. Undated works are
+counted out loud rather than dropped.
+
+**Two defects the tests found while being written:**
+
+1. `work_tags` is keyed by (work_id, tag_id, tag_type), so a work carrying one tag
+   under two types was counted **twice** — 43 works where there are 42, on the
+   fixture, whose work 1 does exactly that on purpose. Every query now starts from
+   `SELECT DISTINCT work_id`, and the test counts distinct for the same reason:
+   both halves of a double-count agree, which is how a fixture hides one.
+2. The fixture writes **one** update date for every work (deliberately — a recency
+   assertion must not depend on when the suite runs), so a one-year trend made
+   "oldest-first" and "share of total instead of share of busiest" both SURVIVE.
+   The trend test now stamps several years itself, because a trend test over one
+   year asserts nothing.
+
+**The latency story I got wrong, and how.** The tag page read 4.06 s with the
+feature and 0.35 s had been measured earlier for "the same page", so the feature
+looked like a 3.7 s regression and was rewritten to a single pass. Measuring
+properly afterwards:
+
+| request | time |
+|---|---|
+| `/tag/29` (default sort = taste blend) | 3.67 s |
+| `/tag/29?sort=kudos` | 0.54 s |
+| the shelf's own SQL | 0.067 s |
+
+The 0.35 s reading **predated the taste sort becoming the default**. Folding five
+scans into one is still right (five full passes of 55,810 rows against one), but it
+was not the cost, and the code says so now. The lesson is the one this project
+keeps relearning: a number is only a comparison against a measurement of the same
+thing.
+
+**Still the hottest page on the site at 3.67 s**, 3.1 s of which is a ranking sort
+nobody asked for by default. That is now written down in the roadmap's own note
+rather than left as a surprise.
+
+## Two gate defects this deploy found
 
 `'/author?q='` as a gate pattern can never match: in an ERE, `?` makes the
 preceding character optional, so the pattern means `/autho` + optional `r` +
 `q=`. The check reported a working link as missing on the first deploy and cost a
 retry. The pattern is now `'href="/author'`, and the comment in the script says
 why — this is the second time this gate has been wrong about its own regex.
+
+The second: the gate fetched `/tag/$TAG` with `--max-time 20` and reused that body
+for the filter-control checks. On a **cold** process the first tag request pays for
+loading the 81 MiB tag-vector matrix and building the graph, so the body came back
+empty and the gate reported "complete control is MISSING from the tag page" — a
+working page called broken because the gate timed out. It has a 90 s cold-start
+allowance now, and the comment says it is an allowance, not a latency assertion.
 
 ## Mutations killed
 
@@ -81,11 +141,16 @@ why — this is the second time this gate has been wrong about its own regex.
 | the byline dropped from the page | `TestTheWorkPageNamesItsAuthorAndLinksTheByline` |
 | the author list dropped | `TestTheWorkPageShowsAuthorsWhenTheEngineFindsThem` |
 | a byline rendered but not linked | `TestTheWorkPageNamesItsAuthorAndLinksTheByline` |
+| a work counted twice by `work_tags` | `TestTagShelfMediansAreNotMeans` |
+| the median replaced by the mean | same |
+| the trend reversed | `TestTagShelfTrendIsNewestFirstAndSharesTheBusiestYear` |
+| bars scaled to the total | same |
+| most-saved replaced by least-saved | `TestTagShelfFindsTheMostSavedWorkAndIgnoresNulls` |
 
 ## State
 
 - 27/27 packages green; deployed; provenance IN SYNC; gate **87 checks**.
-- Roadmap: **37 built, 10 partial, 49 open, 4 without a premise**.
+- Roadmap: **38 built, 9 partial, 49 open, 4 without a premise**.
 
 ## Next
 
