@@ -1216,3 +1216,30 @@ func (s *Store) LastJudgedInSession(ctx context.Context, sessionKey string) (Com
 	c.Choice = choice
 	return c, true, nil
 }
+
+// OwnerForSession resolves a session cookie to its owner WITHOUT touching the
+// session row.
+//
+// TouchSession exists and updates last_seen, which is right when a reader is
+// mid-comparison. It is wrong for a page that merely displays a fact about the
+// reader (#50's "you have read 3 of 7"): rendering a list would otherwise look
+// like activity, and "last seen" is a number other parts of the site report.
+//
+// An unknown or expired cookie yields ("", nil) rather than an error: a stale
+// cookie is a reader with no session, which the caller renders as "no progress
+// to show", not as a broken page.
+func (s *Store) OwnerForSession(ctx context.Context, sessionKey string) (string, error) {
+	if s == nil || s.DB == nil || sessionKey == "" {
+		return "", nil
+	}
+	var owner string
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT owner_key FROM arena_sessions WHERE session_key = ?`, sessionKey).Scan(&owner)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return owner, nil
+}

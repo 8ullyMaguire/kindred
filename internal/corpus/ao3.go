@@ -206,6 +206,25 @@ func (a *AO3) Entity(ctx context.Context, id int64) (Entity, error) {
 	return ents[0], nil
 }
 
+// Byline returns a work's author string (#66).
+//
+// Entity deliberately does not carry the byline: every ranking path holds tens
+// of thousands of entities and an author string per candidate is weight nothing
+// in the ranking reads. The one surface that needs it — the work page, which
+// turns its byline into links — asks for it by id.
+func (a *AO3) Byline(ctx context.Context, id int64) (string, error) {
+	var by string
+	err := a.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(authors,'') FROM works WHERE id = ?`, id).Scan(&by)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("work %d: %w", id, ErrNotFound)
+		}
+		return "", err
+	}
+	return by, nil
+}
+
 var ErrNotFound = fmt.Errorf("not found in corpus")
 
 // TagPair is a tag id together with its name.

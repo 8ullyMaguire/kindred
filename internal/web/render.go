@@ -323,7 +323,18 @@ type WorkPage struct {
 	// CompareID echoes what the reader typed, so the field is not emptied by the
 	// error it produced.
 	CompareID string
-	Similar   []rank.Candidate
+	// Byline is the raw author string, shown and split into per-author links
+	// (#66): until now a work page did not name its author anywhere, so an
+	// author was a string you had to retype into /author yourself.
+	Byline string
+	// BylineAuthors are the byline's names, each a link to that author's shelf.
+	BylineAuthors []string
+	// Authors are authors whose works carry the same distinguishing tags as
+	// this work's first author. Best-effort and separate from Similar: that
+	// ranks WORKS, this names PEOPLE.
+	Authors    []engine.SimilarAuthor
+	AuthorsErr string
+	Similar    []rank.Candidate
 	// CoBookmarked are works that share readers with this one. It is
 	// separate from Similar because it answers a different question: Similar
 	// is "ranked like this" (tags, graph, quality), while this is the
@@ -537,6 +548,35 @@ type AuthorPage struct {
 	// replacing them, because the works are what the reader asked for.
 	Similar    []engine.SimilarAuthor
 	SimilarErr string
+
+	// Collection is the reader's progress through this byline's whole shelf
+	// (#50): "3 of 7 read — 4 to go". Absent when the reader has no session,
+	// because a count with nobody to attribute it to is not a fact about
+	// anyone.
+	Collection *CollectionProgress
+	// CollectionErr says the progress could not be computed. Rendered, not
+	// swallowed: a missing line reads as "you have read none of these".
+	CollectionErr string
+	// Unread is true when the list is filtered to what the reader has not
+	// read; the toggle has to say which of the two lists you are looking at.
+	Unread bool
+}
+
+// CollectionProgress is "you have read X of Y, Z to go".
+type CollectionProgress struct {
+	Read int
+	// Total is every work in the byline match, not the page size: "12 of 20"
+	// where 20 is the page would be a number about pagination, not a shelf.
+	Total int
+	// ToGo is Total - Read. Carried rather than computed in the template so
+	// the page cannot print a negative for a reader whose read works have
+	// left the corpus since (Read is measured on the corpus list, so it
+	// cannot, and this comment is the reason to keep it that way).
+	ToGo int
+	// Capped is true when the byline matched more works than the counting
+	// query reads. The page says so instead of presenting a partial shelf as
+	// a complete one.
+	Capped bool
 }
 
 // AuthorLink is one parsed byline name and where it goes.

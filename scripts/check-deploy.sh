@@ -814,6 +814,32 @@ check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped
 check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
 
 echo
+echo "the byline, and the shelf (#66/#50)"
+if [ -n "${WORK_A:-}" ]; then
+  check "the work page names its author"   "$TARGET/work/$WORK_A" 'data-testid="work-byline"'
+  # A byline that renders but does not link is the defect the row names: the
+  # author-similarity endpoint needs a way IN from a work.
+  check "and links it to the shelf"        "$TARGET/work/$WORK_A" '/author?q='
+  check "and names authors who write alike" "$TARGET/work/$WORK_A" 'data-testid="work-authors"|work-authors-error'
+  AUTHOR=""
+  if [ -r "$CORPUS_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+    AUTHOR=$(sqlite3 -readonly "$CORPUS_DB" "SELECT authors FROM works WHERE id = $WORK_A;" 2>/dev/null \
+             | cut -d, -f1 | sed 's/^ *//; s/ *$//' | sed 's/ /%20/g')
+  fi
+  if [ -n "$AUTHOR" ]; then
+    echo "  author of /work/$WORK_A: $AUTHOR"
+    check  "the shelf page lists the works" "$TARGET/author?q=$AUTHOR" 'data-testid="author-count"'
+    # An anonymous reader must be promised nothing about their reading: the
+    # progress line is a claim about a person and needs a session to be about
+    # anyone.
+    check_absent "and claims no reading progress for a stranger" \
+      "$TARGET/author?q=$AUTHOR" 'data-testid="collection-progress"'
+  else
+    note "could not resolve a byline for /work/$WORK_A; shelf checks skipped"
+  fi
+fi
+
+echo
 echo "new since your last visit"
 check "the list answers one way or the other" "$TARGET/new" 'first visit|Since your previous visit'
 check "and refuses to invent a boundary"      "$TARGET/new" 'no .before. to compare against|began on'

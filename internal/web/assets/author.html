@@ -25,7 +25,38 @@
     <input type="submit" value="Find">
   </form>
 
-  {{if .Works}}
+    {{/* #50: the reader's progress through this SHELF, not this page. The
+       number is over every work the byline matches, so "4 to go" is a fact
+       about the author rather than about pagination. */}}
+  {{if .CollectionErr}}
+    <p class="note" data-testid="collection-error">{{.CollectionErr}}</p>
+  {{else if .Collection}}
+    <p class="count" data-testid="collection-progress" data-read="{{.Collection.Read}}" data-total="{{.Collection.Total}}">
+      You have read <strong>{{.Collection.Read}}</strong> of
+      <strong>{{.Collection.Total}}</strong>{{if .Collection.Capped}}+{{end}}
+      work{{if ne .Collection.Total 1}}s{{end}} whose byline matches this name{{if .Collection.Capped}}
+      (counted over the first 5,000, so this shelf may be longer){{end}} &mdash;
+      {{if .Collection.ToGo}}
+        <strong>{{.Collection.ToGo}}</strong> to go.
+        {{if not .Unread}}
+          <a href="?q={{urlquery .Query}}&amp;unread=1" data-testid="show-unread">Show only the ones I have not read</a>.
+        {{else}}
+          <a href="?q={{urlquery .Query}}" data-testid="show-all">Show all of them again</a>.
+        {{end}}
+      {{else}}
+        you have read all of them.
+      {{end}}
+      <span class="count">&ldquo;Read&rdquo; is a mark you made, not a work the
+      site merely showed you.</span>
+    </p>
+    {{if .Unread}}
+      <p class="count" data-testid="unread-filter-on">
+        This list is filtered to works you have not marked read.
+      </p>
+    {{end}}
+  {{end}}
+
+{{if .Works}}
     <p class="count" data-testid="author-count">
       Showing {{len .Works}} of {{commas .Total}}
       matching work{{if ne .Total 1}}s{{end}}, most kudos first.
@@ -44,8 +75,14 @@
     {{end}}
   {{else}}
     <p class="count" data-testid="no-author-works" data-empty="true">
-      No work&rsquo;s byline matches &ldquo;{{.Query}}&rdquo; in this mirror.
-      Bylines are matched as substrings, so a shorter name finds more.
+      {{if .Unread}}
+        Nothing left unread under &ldquo;{{.Query}}&rdquo;: you have marked read
+        every work whose byline matches.
+        <a href="?q={{urlquery .Query}}">Show all of them again</a>.
+      {{else}}
+        No work&rsquo;s byline matches &ldquo;{{.Query}}&rdquo; in this mirror.
+        Bylines are matched as substrings, so a shorter name finds more.
+      {{end}}
     </p>
   {{end}}
 

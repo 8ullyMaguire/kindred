@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"git.polarisocial.xyz/kindred/kindred/internal/arena"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
 	"git.polarisocial.xyz/kindred/kindred/internal/crawl"
@@ -1546,8 +1547,31 @@ func (d Deps) renderAuthor(w http.ResponseWriter, r *http.Request) {
 
 	if q != "" {
 		needle := "%" + likeEscape(q) + "%"
-		const countStmt = `SELECT COUNT(*) FROM works WHERE authors LIKE ? ESCAPE '\'`
-		if err := d.Engine.Corpus.DB.QueryRowContext(ctx, countStmt, needle).
+
+		// #50: what this reader has already read of this shelf. Computed
+		// before the list so the ?unread=1 filter can be applied to the same
+		// query rather than by removing rows after the LIMIT (which would
+		// return a short page and no reason for it).
+		ownerKey := d.collectionForOwner(r)
+		progress, read, cerr := d.collectionInfo(ctx, ownerKey, needle)
+		if cerr != nil {
+			// Not fatal: the works are the answer to the URL. A progress
+			// line that could not be computed says so instead of printing
+			// "0 read", which would be a claim about the reader.
+			page.CollectionErr = "Your reading history could not be read: " + cerr.Error()
+		} else {
+			page.Collection = progress
+		}
+		page.Unread = r.URL.Query().Get("unread") == "1" && len(read) > 0
+
+		countStmt := `SELECT COUNT(*) FROM works w WHERE w.authors LIKE ? ESCAPE '\'`
+		countArgs := []any{needle}
+		if page.Unread {
+			var clause string
+			clause, countArgs = unreadClause(read, countArgs)
+			countStmt += clause
+		}
+		if err := d.Engine.Corpus.DB.QueryRowContext(ctx, countStmt, countArgs...).
 			Scan(&page.Total); err != nil {
 			// One data source, one failure mode: say it and stop. The
 			// search page halves its errors because it has two halves to
@@ -1557,12 +1581,18 @@ func (d Deps) renderAuthor(w http.ResponseWriter, r *http.Request) {
 				fmt.Errorf("counting works matching %q: %w", q, err))
 			return
 		}
-		const stmt = `SELECT ` + workHitCols + `
+		stmt := `SELECT ` + workHitCols + `
 			FROM works w
-			WHERE w.authors LIKE ? ESCAPE '\'
-			ORDER BY w.kudos DESC, w.id
-			LIMIT ?`
-		rows, err := d.Engine.Corpus.DB.QueryContext(ctx, stmt, needle, page.N)
+			WHERE w.authors LIKE ? ESCAPE '\'`
+		listArgs := []any{needle}
+		if page.Unread {
+			var clause string
+			clause, listArgs = unreadClause(read, listArgs)
+			stmt += clause
+		}
+		stmt += ` ORDER BY w.kudos DESC, w.id LIMIT ?`
+		listArgs = append(listArgs, page.N)
+		rows, err := d.Engine.Corpus.DB.QueryContext(ctx, stmt, listArgs...)
 		if err != nil {
 			d.fail(w, r, http.StatusServiceUnavailable,
 				fmt.Errorf("reading works matching %q: %w", q, err))
@@ -1672,6 +1702,28 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 	}
 
 	page := WorkPage{Base: d.baseOf(r, ent.Title, ent.Title), Work: ent}
+
+	// #66: the byline becomes links, and the first author becomes a seed for
+	// "authors who write like this one". Until now the work page did not name
+	// its author at all, so /api/v1/authors/similar had no way in from a work.
+	if by, berr := d.Engine.Corpus.Byline(ctx, id); berr == nil {
+		page.Byline = strings.TrimSpace(by)
+		page.BylineAuthors = arena.SplitAuthors(page.Byline)
+	}
+	if len(page.BylineAuthors) > 0 {
+		// Best-effort, like every other panel on this page: the work is what
+		// the reader asked for, and a similarity failure must not cost them it.
+		// ErrNotFound is not a failure: it means the byline has no other works
+		// in this mirror, which the empty state says honestly.
+		if sim, serr := d.Engine.SimilarAuthors(ctx, page.BylineAuthors[0], 8); serr != nil {
+			if !errors.Is(serr, corpus.ErrNotFound) {
+				d.log().Warn("similar authors on work page failed", "work", id, "err", serr)
+				page.AuthorsErr = serr.Error()
+			}
+		} else {
+			page.Authors = sim
+		}
+	}
 
 	// ?compare={other}: the pair report (#78). Best-effort like the
 	// recommendation below — a comparison that fails must not cost the reader

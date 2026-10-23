@@ -3,6 +3,19 @@
   {{if .Work.URL}}<a href="{{.Work.URL}}" rel="noopener nofollow">{{.Work.Title}}</a> on AO3{{else}}{{.Work.Title}}{{end}}
 </p>
 
+{{/* #66: the byline itself. Until now this page did not name its author
+     anywhere, so an author was a string a reader had to retype into /author.
+     Each name links to the shelf view, which reports how much of that shelf
+     this reader has finished. */}}
+{{if .BylineAuthors}}
+<p class="byline" data-testid="work-byline">
+  by
+  {{range $i, $name := .BylineAuthors}}{{if $i}}, {{end}}<a href="/author?q={{urlquery $name}}" rel="author">{{$name}}</a>{{end}}
+</p>
+{{else if .Byline}}
+<p class="byline" data-testid="work-byline">{{.Byline}}</p>
+{{end}}
+
 {{if .Work.Summary}}<p class="summary">{{.Work.Summary}}</p>{{end}}
 
 {{/* Stats. A key that is absent prints nothing at all rather than a zero:
@@ -89,6 +102,28 @@
      "these are similar" but "these readers kept both". It has its own empty
      state because a work with no co-readers is a real answer too, and leaving
      the section out entirely would read as a page that failed to load it. */}}
+{{/* #66: authors, not works. The list below answers which WORKS a reader
+     might like; this answers which PEOPLE write this way, and it is the surface
+     /api/v1/authors/similar had no way in to. Its own empty state, because a
+     missing panel reads as a failed load. */}}
+{{if or .Authors .AuthorsErr}}
+<h2>Authors who write like this one</h2>
+{{if .AuthorsErr}}
+  <p class="note" data-testid="work-authors-error">
+    The author-similarity lookup failed while the work itself loaded: {{.AuthorsErr}}
+  </p>
+{{else}}
+  <ul class="authors" data-testid="work-authors">
+    {{range .Authors}}
+    <li>
+      <a href="/author?q={{urlquery .Name}}">{{.Name}}</a>
+      <span class="count">{{.SharedWorks}} shared work(s){{if .Evidence}} &mdash; {{range $i, $e := .Evidence}}{{if $i}}, {{end}}{{$e.Reason}}{{end}}{{end}}</span>
+    </li>
+    {{end}}
+  </ul>
+{{end}}
+{{end}}
+
 <h2>Readers who bookmarked this also bookmarked</h2>
 {{if .CoBookmarkErr}}
   <p class="note" data-testid="co-bookmark-error">
