@@ -824,6 +824,31 @@ check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped
 check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
 
 echo
+echo "the pool cache and the MMR cost (measured 2026-10-23)"
+# The cache is a BEHAVIOURAL claim, not a timing one: the same request twice must
+# report a hit. Asserting wall-clock here would fail on a busy host for reasons
+# that have nothing to do with the product.
+h0=$(curl -fsS --max-time 20 "$TARGET/healthz" | tr ',' '\n' | grep '"hits"' | tr -dc '0-9')
+curl -fsS -o /dev/null --max-time 60 "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=5" || true
+curl -fsS -o /dev/null --max-time 60 "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=5" || true
+h1=$(curl -fsS --max-time 20 "$TARGET/healthz" | tr ',' '\n' | grep '"hits"' | tr -dc '0-9')
+if [ -n "$h0" ] && [ -n "$h1" ] && [ "$h1" -gt "$h0" ]; then
+  ok "the second identical request was answered from the pool cache (hits $h0 -> $h1)"
+else
+  bad "the pool cache never reported a hit (hits $h0 -> $h1)"
+fi
+# 200 results took 10.4 s before the MMR fix (quadratic in n) and 0.36 s after. A
+# 5 s ceiling is wide enough for a loaded host and still catches the quadratic
+# shape, which is what a regression would look like.
+t=$(curl -fsS -o /dev/null -w '%{time_total}' --max-time 60 \
+  "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=200" || echo 999)
+if awk "BEGIN{exit !($t < 5)}"; then
+  ok "200 results still answer quickly (${t}s)"
+else
+  bad "200 results took ${t}s; the MMR pass is quadratic again"
+fi
+
+echo
 echo "the tag shelf in numbers (#54)"
 # Medians, not means: a mean on a skewed tag describes a work nobody wrote. The
 # page must print both, so a reader can see the skew rather than a single number.
