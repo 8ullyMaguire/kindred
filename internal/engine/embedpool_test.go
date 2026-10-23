@@ -215,3 +215,81 @@ func TestTheReserveDoesNotShortenThePool(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+// TestThePoolNeverExceedsItsLimit: the tail is admitted in full, so the cap
+// belongs in admit rather than in each caller. Measured live before this guard:
+// a 1000-item request returned 1061 candidates, because the tail was admitted
+// after the extras had taken 98 slots and the outer `len(out) < limit` test had
+// been passed BEFORE them.
+//
+// The fixture has to leave the pool PARTLY filled at the moment the tail is
+// admitted — extras greater than zero (or the outer test skips the tail
+// entirely) and less than the room left (or the pool is full and the cap never
+// matters). So: the seed's own tags point one way, every other tag points the
+// opposite way (nothing but the bridge is near), and one bridge work carries a
+// tag near the seed. The embedding source then finds exactly one work.
+func TestThePoolNeverExceedsItsLimit(t *testing.T) {
+	c := testcorpus.New(40)
+	const bridgeTag = 40
+	const bridgeWork = 999
+	c.Tags = append(c.Tags, testcorpus.Tag{ID: bridgeTag, Name: "the only near tag"})
+	c.Works = append(c.Works, testcorpus.Work{
+		ID: bridgeWork, Title: "Bridge", Authors: "author3",
+		Summary: "one work the tag pool cannot reach.", WordCount: 30_000,
+		Hits: 100, Kudos: 10, Rating: "Teen And Up Audiences",
+		Language: "English", Complete: true, UpdateDate: "15 Jan 2026",
+	})
+	c.WorkTags = append(c.WorkTags, testcorpus.WorkTag{
+		WorkID: bridgeWork, TagID: bridgeTag, TagType: "freeforms",
+	})
+	e := newFixtureEngineFrom(t, c)
+
+	// The seed's tags: whatever the fixture gave work 1. They point forward;
+	// every other tag points back, so the only tag near the seed centroid is
+	// the bridge's.
+	seedTags := map[int32]bool{}
+	rows, err := e.Corpus.DB.Query(`SELECT tag_id FROM work_tags WHERE work_id = 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id int32
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		seedTags[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	rows.Close()
+	if len(seedTags) == 0 {
+		t.Fatal("the seed has no tags; the fixture cannot place it")
+	}
+	vecs := map[int32][]float32{}
+	for _, tg := range c.Tags {
+		id := int32(tg.ID)
+		switch {
+		case seedTags[id]:
+			vecs[id] = []float32{1, 0, 0, 0}
+		case id == bridgeTag:
+			vecs[id] = []float32{0.9, 0.1, 0, 0}
+		default:
+			vecs[id] = []float32{-1, 0, 0, 0}
+		}
+	}
+	putTagVecs(t, e, 4, vecs)
+
+	for _, lim := range []int{10, 20, 40} {
+		pool, src := poolOf(t, e, 1, PoolTagsCollabEmbed, lim)
+		if len(pool) > lim {
+			t.Fatalf("limit=%d returned %d candidates (sources %+v): the tail "+
+				"overshot the pool", lim, len(pool), src)
+		}
+		if src.Embedding != 1 {
+			t.Fatalf("limit=%d: the embedding source contributed %d, want exactly 1 "+
+				"(fixture invariant: the cap must be exercised with a PARTIAL fill)",
+				lim, src.Embedding)
+		}
+	}
+}

@@ -931,6 +931,16 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 	inPool := make(map[int64]bool, limit)
 	admit := func(ids []int64, bucket *int) {
 		for _, id := range ids {
+			// The limit is enforced HERE, not by the callers. The tail is a
+			// slice of whatever the tag query returned and the extras are
+			// already trimmed to the room left, so a caller-side check would
+			// be right in two places and wrong in the third: measured on the
+			// live mirror before this guard, a 1000-item request returned 1061
+			// candidates, because the tail was admitted in full after the
+			// extras had taken 98 slots.
+			if len(out) >= limit {
+				return
+			}
 			if inPool[id] {
 				src.Overlap++
 				continue

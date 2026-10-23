@@ -80,11 +80,14 @@ from a gate that passed**, which is the failure `deploy.sh` was written to end.
 
 ## What shipped beyond the default
 
-- **The pool is topped up.** The reserves worked and left the pool short:
-  measured live, `pool_mode=all` gave 848 candidates against 1000 for tags-only
-  (tag half capped at 750, collab found 1, embedding 97, 152 slots unused). The
-  tag half is now a closure called twice — reserved budget, then whatever the
-  extras left unused — with admitted ids excluded in SQL, not after the LIMIT.
+- **The pool is topped up, from ONE query.** The reserves worked and left the
+  pool short: measured live, `pool_mode=all` gave 848 candidates against 1000 for
+  tags-only (tag half capped at 750, collab found 1, embedding 97, 152 slots
+  unused). The first fix ran a second query for the tail with the admitted ids
+  excluded; measured, each query costs ~2.2 s on a 55k-work seed, so the pool
+  answered in 4.6 s against 2.45 s for tags-only — for a byte-identical pool.
+  The tag half is now fetched once for the whole budget and admitted in two
+  parts: the reserved part before the extra sources, the tail after them.
 - **Seeds are excluded in SQL too.** Exclusive pools dropped the seed after the
   LIMIT, so a 20-item pool came back as 19 whenever a seed ranked in its own tag
   results.
@@ -119,7 +122,7 @@ Mutations, each restored afterwards:
 | mutation | caught by |
 |---|---|
 | `DefaultPoolMode` back to `PoolTags` | `TestRecommendDefaultsToTheMeasuredPoolMode` |
-| top-up disabled | `TestTheReserveDoesNotShortenThePool` (pool 6 of 10) |
+| tail not admitted after the extras | `TestTheReserveDoesNotShortenThePool` (pool 6 of 10) |
 | `embedCandidates` returns nothing | `TestEmbedPoolReachesAWorkTheTagPoolCannot` |
 | `filterSQL` dropped from the embed query | `TestEmbedPoolHonoursFiltersInTheQuery` |
 | old renormalise branch | `TestEmbeddingSignalContributesOnEveryItem` |
