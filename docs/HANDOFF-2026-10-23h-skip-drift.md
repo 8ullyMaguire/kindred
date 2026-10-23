@@ -120,6 +120,57 @@ floor would bless it while the learned weights went stale.
 **Mutations killed:** floor 0, centroid-instead-of-sample, width change not its own
 verdict, and the sample compared against itself (no cross-run lookup).
 
+## 4. #48 Reader velocity — the count, and why not the weight
+
+`MarksSince` + one line on `/new`: "2 work(s) marked read since then, across 1
+visit(s)".
+
+The row asks for a **signal**. A signal needs a weight, a weight needs a
+measurement, and a measurement needs readers with more than one visit. Measured on
+the live state database: **33 marked works, 8 owners, 8 reader-days, no owner with
+five, max 13 marks in one day**. A weight fitted to that is a weight fitted to
+noise. The count needs no model, is a fact about the reader, and is exactly what a
+weight would later be computed from — so it is built and the row stays OPEN with
+the number that would justify the next step recorded in it.
+
+Mutant killed: the boundary ignored, so "since your last visit" counted every mark
+ever made.
+
+## Two defects the live table found and no test could
+
+Both were in #76, both green in 27 packages, and both only appeared against
+634,232 real rows:
+
+1. **A single-connection deadlock.** `RecordEmbedRun` read the sample, then ran
+   the centroid query, then the INSERT. The pool holds ONE connection
+   (`store.go: MaxOpenConns(1)`) and an **unexhausted `Rows`** holds that
+   connection until it is closed. On the live table the sample asks for 64 of
+   634k rows and the loop `break`s — so the centroid query waited on the sample
+   query forever: seven minutes at 0.5% CPU, nothing written, no error. The unit
+   test passed because two fixture rows against a sample of eight EXHAUST the
+   `Rows`, and an exhausted `Rows` closes itself. The regression test therefore
+   has twelve rows and asks for four; removing the `Close` makes it fail after its
+   own 20-second timeout.
+2. **A false drift alarm.** This table records "no embedding for this tag" as an
+   all-zero vector. Three of the first 64 tags carry zeros, and scoring two zero
+   vectors at cosine 0.0 turned an honest 1.0000 into 0.9531 — so a build
+   compared with ITSELF reported "the space MOVED", the loudest thing the monitor
+   can say. Zero vectors are now excluded from the mean and counted in
+   `EmptySample`, which the verdict and `/mirror` both name.
+
+A third, smaller one: `run.Rows` was incremented inside the sample loop, so a
+634k-row table would have been fingerprinted as "rows 64" and the drift report's
+own row column would have been a lie.
+
+## And one gate defect
+
+`"the tag kind ranks with the default"` asserted `"algo": "embed"` on an
+**unpinned** `/api/v1/related` request. An anonymous request is a new reader, and
+the A/B arm is `fnv64a(kind|owner) % 2` — so the check was a coin flip: measured
+**5 default / 1 challenger across six consecutive curls**. It passed three deploys
+in a row on luck. Pinned with `?algo=embed`, and a second check now asserts every
+related answer NAMES its arm.
+
 ## State
 
 - HEAD is the commit above this file; 27/27 packages green.

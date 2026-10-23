@@ -1,8 +1,26 @@
 # kindred: what is left
 
-Status as of 2026-10-07. Every line below was verified by running it, not by
+Status as of 2026-10-23. Every line below was verified by running it, not by
 reading the code. A line marked DONE names the test or the tool output that
 established it.
+
+## Skipping, drift, negation (2026-10-23h)
+
+- [x] **#60 "Works you keep skipping"** — `/skipped`. Works shown 3+ separate times
+      with no credit and not already read, with two actions per row. Live: the row
+      rendered at "shown 3 times", "Not interested" wrote polarity −1 and 74 tag
+      weights, and the row left the list.
+- [x] **#76 Embedding drift** — `embed_runs` + `kindred embed-check` + `/mirror`
+      verdict + `GET /api/v1/embed/drift`. Two live defects found by running it on
+      the real 634k-row table: a single-connection deadlock (unexhausted `Rows`),
+      and zero vectors scored as cosine 0.0, which made a build compared with
+      itself report "the space MOVED".
+- [x] **#43 Anti-recommendations** — premise measured FALSE. Negatives already
+      flowed from `arena.LearnTags` (losing tags) and now from "Not interested".
+      Live session_taste contributions: −0.1025, −0.0740, −0.0627, −0.0570, −0.0627.
+      Still missing: the magnitude (no session-taste eval model).
+- [~] **#48 Reader velocity** — the COUNT is built (`MarksSince`, printed on `/new`);
+      the weight is not, because the deployment holds 8 reader-days.
 
 ## Per-kind algorithms + live A/B (2026-10-23g, 8161b37 → 027e8fd)
 
