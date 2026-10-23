@@ -13,6 +13,11 @@ established it.
 - [x] **#50 "Complete your collection"** — `/author?q=` says "you have read 2 of
       4 — 2 to go" and `?unread=1` shows the rest. Live with a session; anonymous
       readers get no claim at all.
+- [x] **#42 What the order is worth** (2026-10-24a): every eval run records where
+      hits land, position by position; `/recommend` prints three bands with the run
+      id and `GET /api/v1/calibration` serves the unrounded numbers. Live (run #18,
+      37 lists): first three 26%, next four 14%, the rest 9%. Unmeasured is never
+      rendered as 0%, and a run under 20 lists prints no rate at all.
 - [x] **#79 Diversity, measured** (2026-10-23k): every offline run stores
       intra-list tag overlap and fandoms per list, and `kindred eval --lambda 1`
       is the ablation. Live: lambda 0.75 → recall 0.1050, overlap 0.086, 2.4
