@@ -192,6 +192,20 @@ func allPages() []pageSpec {
 				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, arg string) { d.renderTag(w, r, arg) },
 			},
 			{
+				Template: "choose.html",
+				Paths:    []string{"/choose"},
+				// A form page: the POST stores the reader's choice for one kind
+				// and renders the state it just wrote.
+				AcceptsPost: true,
+				Handler:     func(d Deps, w http.ResponseWriter, r *http.Request, _ string) { d.renderChoose(w, r) },
+			},
+			{
+				Template: "related.html",
+				Paths:    []string{"/related"},
+				List:     true,
+				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, _ string) { d.renderRelatedPage(w, r) },
+			},
+			{
 				Template: "new.html",
 				Paths:    []string{"/new"},
 				// A list page: the empty state is the FIRST-VISIT case, which is

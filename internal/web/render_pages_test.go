@@ -34,6 +34,8 @@ import (
 	"strings"
 	"testing"
 
+	"git.polarisocial.xyz/kindred/kindred/internal/algo"
+	"git.polarisocial.xyz/kindred/kindred/internal/arena"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
@@ -226,6 +228,71 @@ var pageRenderCases = []pageRenderCase{
 		// "no rows with no explanation" is the thing this page must not be.
 		wantContains:    []string{"No work matched", "notes below"},
 		wantNotContains: []string{"<tbody"},
+	},
+	{
+		tpl:  "choose.html",
+		name: "choose.html with the registry and a standing",
+		data: ChoosePage{
+			Base:   sweepBase,
+			Kinds:  algo.List(),
+			Chosen: map[arena.EntityKind]string{arena.KindWork: string(algo.Collab)},
+			Arms:   map[arena.EntityKind]algo.ID{arena.KindWork: algo.Hybrid},
+			Standing: []store.AlgoArmStat{
+				{Kind: arena.KindWork, Algo: "hybrid", Arm: "default", Impressions: 12, Credits: 3, CreditRate: 0.25},
+			},
+			Focus: arena.KindWork,
+			Saved: "Saved: co-bookmark CF for works.",
+		},
+		// The three claims the page makes: a default is named, a disabled
+		// algorithm carries its reason, and the standings carry numbers.
+		wantContains: []string{"default", "not available", "training pipeline", "25.0%", "Saved:"},
+	},
+	{
+		tpl:  "choose.html",
+		name: "choose.html before anything is served",
+		data: ChoosePage{
+			Base:   sweepBase,
+			Kinds:  algo.List(),
+			Focus:  arena.KindTag,
+			NoData: "No lists have been served yet",
+		},
+		hasEmptyList: true,
+		wantContains: []string{"No lists served for tags yet", "No lists have been served yet"},
+	},
+	{
+		tpl:  "related.html",
+		name: "related.html with rows",
+		data: RelatedPage{
+			Base:      sweepBase,
+			Kind:      arena.KindTag,
+			Seed:      61461,
+			SeedLabel: "jasmine",
+			Algo:      algo.Embed,
+			Default:   algo.Embed,
+			Choices:   algo.LiveIDs(arena.KindTag),
+			Arm:       "default",
+			Millis:    21,
+			Items: []RelatedItemView{
+				{ID: 2, Label: "aurora", Why: "0.94 cosine in the tag space", Score: 0.94},
+			},
+		},
+		wantContains: []string{"jasmine", "aurora", "0.94 cosine", "default", "21 ms"},
+	},
+	{
+		tpl:  "related.html",
+		name: "related.html with a missing dimension",
+		data: RelatedPage{
+			Base:    sweepBase,
+			Kind:    arena.KindAuthor,
+			Seed:    42,
+			Algo:    algo.CoBookAuthors,
+			Default: algo.CoBookAuthors,
+			Choices: algo.LiveIDs(arena.KindAuthor),
+			Missing: []string{"readers"},
+			Note:    "no reader of this author's works has read another work",
+		},
+		hasEmptyList: true,
+		wantContains: []string{"Missing: readers", "no reader of this author"},
 	},
 	{
 		tpl:  "new.html",

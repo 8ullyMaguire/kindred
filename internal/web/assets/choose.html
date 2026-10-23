@@ -1,0 +1,95 @@
+{{define "content"}}
+<h1>Choose your algorithm</h1>
+
+<p class="note">
+  Each kind is ranked by its own mechanism, and you can pick a different one for
+  each. The default is what this site measured as best; the experiment below it
+  compares that default against one challenger, and you are in it unless you
+  choose. Nothing here is hidden: algorithms this host cannot run are listed with
+  the reason.
+</p>
+
+{{if .Err}}<p class="note error" data-testid="choose-error">{{.Err}}</p>{{end}}
+{{if .Saved}}<p class="note" data-testid="choose-saved">{{.Saved}}</p>{{end}}
+
+{{range .Kinds}}
+<section class="kind-block" data-kind="{{.Kind}}">
+  <h2>{{.Label}}</h2>
+
+  {{$kind := .Kind}}
+  {{$chosen := index $.Chosen .Kind}}
+
+  <form method="post" action="/choose" class="algo-form">
+    <input type="hidden" name="kind" value="{{.Kind}}">
+    <ul class="algo-list">
+      {{range .Algos}}
+        {{if eq .Status "live"}}
+        <li>
+          <label>
+            <input type="radio" name="algo" value="{{.ID}}"
+                   {{if $chosen}}{{if eq $chosen .ID}}checked{{end}}{{else}}{{if .Default}}checked{{end}}{{end}}>
+            <strong>{{.Label}}</strong>
+            {{if .Default}}<span class="badge" data-testid="default-{{.ID}}">default</span>{{end}}
+          </label>
+          <p class="count">{{.Blurb}}</p>
+          <p class="count">One request costs: {{.Cost}}</p>
+        </li>
+        {{end}}
+      {{end}}
+    </ul>
+    <p class="count">
+      <button type="submit">Use this for {{.Label}}</button>
+      <button type="submit" name="clear" value="1">Follow the experiment again</button>
+    </p>
+  </form>
+
+  <details>
+    <summary>Algorithms this host cannot run ({{len .Algos}} listed)</summary>
+    <ul class="algo-list disabled">
+      {{range .Algos}}
+        {{if eq .Status "disabled"}}
+        <li data-testid="disabled-{{.ID}}">
+          <strong>{{.Label}}</strong> <span class="badge">not available</span>
+          <p class="count">{{.Blurb}}</p>
+          <p class="count"><em>Why not:</em> {{.Reason}}</p>
+        </li>
+        {{end}}
+      {{end}}
+    </ul>
+  </details>
+
+  <h3>What has actually happened</h3>
+  {{$rows := $.Standing}}
+  {{$any := false}}
+  {{range $rows}}{{if eq .Kind $kind}}{{$any = true}}{{end}}{{end}}
+  {{if $any}}
+  <table class="standings" data-testid="standings-{{.Kind}}">
+    <thead><tr><th>algorithm</th><th>why it ran</th><th>lists served</th><th>acted on</th><th>rate</th></tr></thead>
+    <tbody>
+    {{range $rows}}
+      {{if eq .Kind $kind}}
+      <tr>
+        <td>{{.Algo}}</td>
+        <td>{{.Arm}}</td>
+        <td>{{.Impressions}}</td>
+        <td>{{.Credits}}</td>
+        <td>{{pct .CreditRate}}</td>
+      </tr>
+      {{end}}
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="count" data-empty="true">No lists served for {{.Label}} yet.</p>
+  {{end}}
+</section>
+{{end}}
+
+{{if .NoData}}<p class="count" data-testid="standings-empty">{{.NoData}}</p>{{end}}
+
+<p class="count">
+  Try it: <a href="/related?kind=ao3_tag&amp;id=61461">related tags for “jasmine”</a> ·
+  <a href="/related?kind=ao3_work&amp;id=17249318">related works for a seed</a> ·
+  <a href="/algo">compare weight vectors instead</a>
+</p>
+{{end}}

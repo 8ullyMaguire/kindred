@@ -1,0 +1,48 @@
+{{define "content"}}
+<h1>Related {{.Kind.Label}}{{if .SeedLabel}}: {{.SeedLabel}}{{end}}</h1>
+
+<p class="count" data-testid="related-head">
+  seed <code>{{.Kind}}/{{.Seed}}</code> ·
+  algorithm <strong>{{.Algo}}</strong>
+  {{if eq .Algo .Default}}<span class="badge">default</span>{{end}}
+  {{if .Arm}}· you are in the <strong>{{.Arm}}</strong> arm{{end}}
+  · {{.Millis}} ms
+</p>
+
+{{if .Refused}}<p class="note" data-testid="refused">{{.Refused}}</p>{{end}}
+{{if .Err}}<p class="note error" data-testid="related-error">{{.Err}}</p>{{end}}
+
+<nav class="algo-switch" aria-label="algorithm">
+  <span class="count">Rank these by:</span>
+  {{range .Choices}}
+    {{if eq . $.Algo}}<strong data-testid="current-{{.}}">{{.}}</strong>{{else}}<a href="?kind={{$.Kind}}&amp;id={{$.Seed}}&amp;algo={{.}}">{{.}}</a>{{end}}
+  {{end}}
+  · <a href="/choose?kind={{.Kind}}">make this your default</a>
+</nav>
+
+{{if .Missing}}
+  <p class="note" data-testid="missing">Missing: {{range .Missing}}{{.}} {{end}}— the list below is short by exactly that dimension.</p>
+{{end}}
+{{if .Note}}<p class="note" data-testid="related-note">{{.Note}}</p>{{end}}
+
+{{if .Items}}
+<ol class="related" data-testid="related-items">
+  {{range .Items}}
+  <li data-id="{{.ID}}">
+    {{if .URL}}<a href="{{.URL}}" rel="noopener">{{.Label}}</a>{{else}}<span>{{.Label}}</span>{{end}}
+    <span class="count">— {{.Why}}</span>
+  </li>
+  {{end}}
+</ol>
+{{else}}
+  <p class="note" data-empty="true" data-testid="related-empty">
+    This algorithm returned nothing for this seed. That is an answer: the note
+    above says which dimension was missing, rather than a page pretending the
+    list failed to load.
+  </p>
+{{end}}
+
+<p class="count">
+  <a href="/choose?kind={{.Kind}}">Choose a different algorithm for {{.Kind.Label}}</a>
+</p>
+{{end}}

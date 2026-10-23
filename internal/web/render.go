@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 
+	"git.polarisocial.xyz/kindred/kindred/internal/algo"
+	"git.polarisocial.xyz/kindred/kindred/internal/arena"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
@@ -187,6 +189,54 @@ type SearchPage struct {
 type TagHit struct {
 	ID   int64
 	Name string
+}
+
+// ChoosePage is the per-kind algorithm picker.
+//
+// It carries the registry for EVERY kind, because the page's job is to show the
+// whole choice; it carries the reader's stored choices as a map so the "selected"
+// radio is the reader's own state rather than the default they are about to
+// override.
+type ChoosePage struct {
+	Base
+	Kinds  []algo.Catalog
+	Chosen map[arena.EntityKind]string
+	// Arms is what the reader would get with no choice, per kind — the one thing
+	// an A/B must not hide from the people in it.
+	Arms       map[arena.EntityKind]algo.ID
+	ArmReaders map[string]int64
+	Standing   []store.AlgoArmStat
+	Focus      arena.EntityKind
+	Saved      string
+	Err        string
+	NoData     string
+}
+
+// RelatedPage is one algorithm's list for one seed.
+type RelatedPage struct {
+	Base
+	Kind      arena.EntityKind
+	Seed      int64
+	SeedLabel string
+	Algo      algo.ID
+	Default   algo.ID
+	Choices   []algo.ID
+	Arm       string
+	Items     []RelatedItemView
+	Note      string
+	Missing   []string
+	Millis    int64
+	Refused   string
+	Err       string
+}
+
+// RelatedItemView is one related row as the template sees it.
+type RelatedItemView struct {
+	ID    int64
+	Label string
+	URL   string
+	Why   string
+	Score float64
 }
 
 // NewPage is "new since your last visit" (#65).

@@ -784,6 +784,48 @@ CREATE INDEX IF NOT EXISTS seen_works_owner_shown
    because "a new visit" is a product decision (how long away counts as away)
    and a trigger would freeze it into the schema.
 */
+/* algo_choices is one reader's algorithm per KIND (#per-kind algorithms).
+
+   The primary key is (owner_key, kind) and there is no global preference row:
+   a reader who prefers co-bookmark CF for works has not said anything about
+   tags, and a global default that a kind inherits is how a setting ends up
+   applying to a surface nobody chose it for. No row means "follow the arm".
+*/
+CREATE TABLE IF NOT EXISTS algo_choices (
+	owner_key TEXT NOT NULL,
+	kind      TEXT NOT NULL,
+	algo      TEXT NOT NULL,
+	chosen_at TEXT NOT NULL,
+	PRIMARY KEY (owner_key, kind)
+) WITHOUT ROWID;
+
+/* algo_impressions is the A/B log: one row per list served.
+
+   "arm" says WHY this algorithm ran -- "default", "challenger" or "choice" --
+   and it is what keeps the two questions apart: an experiment's arms can be
+   compared with each other, and a reader's own choice can be looked at without
+   being counted as an arm. "credited" is set when something on the list was
+   acted on (a work marked read), so a click rate is a property of the SHOW
+   that produced the list rather than of the algorithm in the abstract.
+
+   No index on (owner_key, kind, seed_id) beyond the implicit rowid: the
+   crediting query walks backwards from the newest row for one reader, and the
+   table is written once per related-list request.
+*/
+CREATE TABLE IF NOT EXISTS algo_impressions (
+	id        INTEGER PRIMARY KEY,
+	owner_key TEXT NOT NULL,
+	kind      TEXT NOT NULL,
+	algo      TEXT NOT NULL,
+	arm       TEXT NOT NULL,
+	seed_id   INTEGER NOT NULL,
+	credited  INTEGER NOT NULL DEFAULT 0,
+	shown_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS algo_impressions_owner
+	ON algo_impressions (owner_key, kind, seed_id, id);
+
 CREATE TABLE IF NOT EXISTS reader_visits (
 	owner_key   TEXT PRIMARY KEY,
 	previous_at TEXT NOT NULL,

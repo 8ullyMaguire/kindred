@@ -69,6 +69,12 @@ var routeTable = map[string]routeAudit{
 	"GET /api/v1/algo/compare":   {Page: "/algo"},
 	"POST /api/v1/algo/judge":    {Page: "/algo"},
 	"GET /api/v1/algo/standings": {Page: "/algo"},
+	// The per-kind algorithm registry and the list it produces. /choose is the
+	// picker (it POSTs the choice), /related renders what one algorithm returns;
+	// the two API routes are those pages seen through their other face.
+	"GET /api/v1/algo/kinds":   {Page: "/choose"},
+	"POST /api/v1/algo/choice": {Page: "/choose"},
+	"GET /api/v1/related":      {Page: "/related"},
 	// The merged-list experiment. Both routes are the /algo page seen
 	// through its other mode: the page renders the merged list and records
 	// the impressions, and the standings are the same table the page prints.

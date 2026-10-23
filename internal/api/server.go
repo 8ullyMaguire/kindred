@@ -146,6 +146,15 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/algo/compare", s.handleAlgoCompare)
 	mux.HandleFunc("POST /api/v1/algo/judge", s.handleAlgoJudge)
 	mux.HandleFunc("GET /api/v1/algo/standings", s.handleAlgoStandings)
+
+	// Per-kind algorithm choice and the related list it produces. Distinct from
+	// the tune comparison above: that compares weight vectors for works, this
+	// chooses the MECHANISM for every kind and logs what was served for the
+	// live A/B.
+	mux.HandleFunc("GET /api/v1/algo/kinds", s.handleAlgoKinds)
+	mux.HandleFunc("POST /api/v1/algo/choice", s.handleAlgoChoice)
+	mux.HandleFunc("GET /api/v1/related", s.handleRelated)
+
 	// Interleaved ranking: one list, both algorithms contributing, and a read
 	// mark as the vote. /standings is the online counterpart of the arena's
 	// /api/v1/algo/standings: same question, no side-by-side.
