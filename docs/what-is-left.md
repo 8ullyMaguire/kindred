@@ -4,6 +4,34 @@ Status as of 2026-10-07. Every line below was verified by running it, not by
 reading the code. A line marked DONE names the test or the tool output that
 established it.
 
+## Per-kind algorithms + live A/B (2026-10-23g, 8161b37 → 027e8fd)
+
+- [x] **A registry with statuses and reasons** (`internal/algo`): every kind
+      names its live algorithms, its default, and what a request costs; every
+      algorithm this host cannot run is LISTED with the reason and the
+      measurement behind it.
+- [x] **Per-kind choice**, stored per (reader, kind). Choosing for works does not
+      touch tags.
+- [x] **Three new mechanisms**: Adamic-Adar over shared readers (works), tag
+      co-occurrence (tags), author co-reader walk + author tag IDF (authors).
+- [x] **A live A/B** with a hash-stable arm, impressions carrying the ids each
+      list showed, and a credit that goes to the list that carried the work.
+- [x] **`/choose` and `/related` pages**, plus `/api/v1/algo/kinds`,
+      `POST /api/v1/algo/choice`, `GET /api/v1/related`.
+- [x] **The gate covers all of it** (48 → 73 checks), including that a disabled
+      algorithm is refused by name and does not answer as itself.
+
+Two rules worth keeping:
+
+- **An implementation with no registry entry is invisible.** The edit that moved
+  two mechanisms to the disabled list also cut the Adamic entry out of the works
+  list, so the engine served it and nobody could choose it.
+  `TestEveryImplementedMechanismIsOffered` now fails when that happens.
+- **`seen_works.entity_id` is `ao3_work:<id>`.** Three queries parsed it as a
+  bare integer, which made #65's exclusion and the Adamic walk silently inert.
+  Use `store.WorkEntityID` / `store.EntityNumericID`; fixtures must write the
+  production shape or they test a table nobody has.
+
 ## The deploy gate covers what shipped (2026-10-23d, commit f52f7d2)
 
 - [x] **15 new checks, 48 → 63** — feeds, descriptor, pair report, reading path

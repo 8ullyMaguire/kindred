@@ -121,7 +121,10 @@ candidate source exists, the nearest-tags surface does not), so the live total
 is **32 built, 14 partial, 50 open, 4 without a premise** — 100 accounted
 (#61, #62, #78, #40 and #65 shipped on 2026-10-23d: a tag feed, a seed feed,
 the search descriptor, the work-pair report, the reading path and the
-new-since-visit list, all verified on the deployed binary)
+new-since-visit list, all verified on the deployed binary; 2026-10-23g added the
+per-kind algorithm registry and its live A/B, which is infrastructure for every
+row below rather than one of them -- see
+`docs/HANDOFF-2026-10-23g-per-kind-algorithms.md`)
 for. The measurement that matters more than the count: **pool recall@1000 was
 0.0284** (run #8) and is **0.2113** after the candidate work (run #13), i.e. even a perfect ranking of the 1000 candidates could
 find at most 2.8% of held-out works, and the current recall@10 of 0.0056 is a
