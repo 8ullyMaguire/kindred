@@ -780,7 +780,13 @@ check  "and names a default per kind"      "$TARGET/api/v1/algo/kinds" '"default
 # it would still look like a working picker.
 check  "and publishes what cannot run"     "$TARGET/api/v1/algo/kinds" '"status": "disabled"'
 check  "and says why it cannot run"        "$TARGET/api/v1/algo/kinds" 'training pipeline'
-check  "the tag kind ranks with the default" "$TARGET/api/v1/related?kind=ao3_tag&id=$TAG&n=5" '"algo": "embed"'
+# Pinned with ?algo=, NOT left to the arm. An anonymous request is a NEW reader
+# and the arm is a hash of the owner key, so asserting the default on an unpinned
+# request is a coin flip -- measured at 5 default / 1 challenger across six
+# consecutive curls. This check used to be unpinned and passed three deploys in a
+# row on luck alone.
+check  "the tag kind ranks with the default" "$TARGET/api/v1/related?kind=ao3_tag&id=$TAG&n=5&algo=embed" '"algo": "embed"' 
+check  "and every related answer names its arm" "$TARGET/api/v1/related?kind=ao3_tag&id=$TAG&n=5" '"arm": "'
 check  "the choice page renders"           "$TARGET/choose" 'Choose your algorithm'
 check  "and lists a disabled algorithm with its reason" "$TARGET/choose" 'Why not:'
 check  "the related page renders a list"   "$TARGET/related?kind=ao3_tag&id=$TAG" 'data-testid="related-items"'
