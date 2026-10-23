@@ -4,6 +4,37 @@ Status as of 2026-10-07. Every line below was verified by running it, not by
 reading the code. A line marked DONE names the test or the tool output that
 established it.
 
+## Candidate generation + the embedding dimension (2026-10-23b, commit b0383a3)
+
+- [x] **The embedding signal runs at last.** It was registered, weighted at
+      zero (renormalise ran in the `!e.Lite` branch, deleting the 0.10 exactly
+      when the signal existed) and reading per-WORK vectors that no deployment
+      has (the state DB holds 634,232 `kind='tag'` rows and nothing else).
+      Measured live before the fix: 7 signals per item, `embedding` in neither
+      `evidence` nor `meta.degraded`. Now a work sits at the mean of its tags'
+      vectors, the seeds at the mean of each seed's position, and the score is
+      the cosine between them. Verified by a wiring test that asserts every
+      ranked item CARRIES evidence with a positive weight.
+- [x] **`meta.pool_sources`** — admissions per source, `tags+collab+embedding
+      == pool_size`, overlap counted separately. The handoff's step 1.
+- [x] **The embedding as a candidate SOURCE** — `pool_mode=tags+embed` /
+      `tags+collab+embed`, nearest tags to the seed centroid (top 32, cosine
+      ≥ 0.25) → works carrying them, filters/blocks/seen applied in the SQL
+      before the LIMIT. Proven by a fixture work that shares no tag with the
+      seed and enters the pool only with the source on.
+- [x] **`kindred eval --pool-mode`** — widening the pool is a flag, not a
+      rebuild.
+- [ ] **The measurement that decides the default.** Not run: no eval against
+      the live mirror since the change, and the deployment still runs the
+      pre-`b0383a3` binary. Compare pool recall@1000 for `tags+collab` against
+      `tags+collab+embed`; the default moves only if pool recall rises
+      materially and recall@10 does not fall. Exact commands are in
+      `docs/HANDOFF-2026-10-23b-embedding-enumeration.md`.
+
+Verified: `go test ./... -count=1` 26 packages green; three mutations (old
+renormalise branch, empty `embedCandidates`, dropped `filterSQL`) each turned
+exactly their own named test red and nothing else, and each was restored.
+
 ## Tier 2 + the memory cap (2026-10-22, commit 9733c57)
 
 The owner removed the SPEC §6 memory cap and asked for the ideas worth having

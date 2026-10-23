@@ -30,7 +30,7 @@ the "high score" half of the list.
 | 8 | "Why this author?" evidence | **built** | `author_tag_profile` evidence, `authors_test.go` |
 | 9 | Offline eval harness (held-out bookmarks) | **built** | `internal/eval`, `kindred eval`, recall@K + NDCG@K |
 | 10 | Popularity-dampened default sort | **partly built** | `quality` and `popularity` signals; no dampening exponent slider |
-| 11 | Tag embedding nearest neighbours | **not built** | embeddings exist (`kindred embed`); no endpoint scans them |
+| 11 | Tag embedding nearest neighbours | PARTIAL | **Enumeration BUILT 2026-10-23b** as a candidate source: `pool_mode=tags+embed` loads the 634,232 × 32 tag matrix into one resident slab (`engine/embedindex.go`) and admits works carrying the top-32 nearest tags. Missing: the SURFACE — no endpoint or page returns nearest tags to a reader. |
 | 12 | Relationship recs via character co-occurrence | not built | needs character tags to be distinguished from relationship tags; the corpus has both as plain tags |
 | 13 | Author leaderboard in the arena | **built** | `ao3_author` is an arena kind (`arena_kinds_test.go`) |
 | 14 | "More like this" on every work card | **built** | `layout.html` workrow: "rank from this" → `/recommend?seed=` |
@@ -82,7 +82,7 @@ The 11 still open, with what each actually needs:
 | # | Idea | What is missing |
 |---|---|---|
 | 10 | Popularity-dampened default sort | a dampening exponent (`score * kudos^-0.3`) applied to the default sort; deliberately not built while the `quality` signal is unmeasured |
-| 11 | Tag embedding nearest neighbours | a bulk load path: `Engine.Embedding` reads one row per call, so a 634k x 32 scan needs a decision about loading the matrix, not a new surface |
+| 11 | Tag embedding nearest neighbours | **enumeration shipped 2026-10-23b** (`engine/embedindex.go`, `pool_mode=tags+embed`); what remains is a reader-facing nearest-tags surface |
 | 12 | Relationship recs via character co-occurrence | the corpus holds character and relationship tags in the same shape; telling them apart is a classification problem, not a query |
 | 15 | Cross-kind "tags you'd like from arena history" | a surface that reads arena tag weights for a different kind |
 | 17 | Tag relationship types (rivals/complements) | signed PMI: edges are unsigned today, so "rivals" cannot be expressed |
@@ -108,10 +108,13 @@ is the first thing this tier builds:
    recall@K and NDCG@K and then threw the numbers away. The page is only worth
    building if the numbers persist, so this tier adds `eval_runs` and records
    every run.
-3. **#11 Tag embedding nearest neighbours — planned, next.** The embeddings
-   exist and a brute-force cosine scan over 634k x 32 floats is ~5ms. What is
-   missing is a bulk load path (the current `Engine.Embedding` is one row per
-   call), so this is a storage decision before it is a surface.
+3. **#11 Tag embedding nearest neighbours — enumeration SHIPPED 2026-10-23b.**
+   The brute-force scan over 634k x 32 floats was ~5ms as predicted, but the
+   "bulk load path" framing understated the problem: the matrix had to be
+   resident (81 MiB, `sync.Once`) because a per-request read streams the whole
+   table out of SQLite. It is now a candidate source in the pool, not a page.
+   The measurement that decides whether it becomes the default is the next
+   unit — see `docs/HANDOFF-2026-10-23b-embedding-enumeration.md`.
 
 Two design rules carried over from tier 1, both learned the expensive way:
 

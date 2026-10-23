@@ -115,8 +115,10 @@ Four statuses:
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
 open of 30), the whole list stood at 22 built, 13 partial, 61 open, 4 without a premise.
-Five of the open ones (33, 46, 64, 67, 71) shipped on 2026-10-23, so the live
-total is **27 built, 13 partial, 56 open, 4 without a premise** — 100 accounted
+Five of the open ones (33, 46, 64, 67, 71) shipped on 2026-10-23, and #11's
+enumeration half shipped on 2026-10-23b (it moves from OPEN to PARTIAL: the
+candidate source exists, the nearest-tags surface does not), so the live total
+is **27 built, 14 partial, 55 open, 4 without a premise** — 100 accounted
 for. The measurement that matters more than the count: **pool recall@1000 is
 0.0284** (run #8), i.e. even a perfect ranking of the 1000 candidates could
 find at most 2.8% of held-out works, and the current recall@10 of 0.0056 is a
@@ -126,13 +128,16 @@ most headroom.
 
 ## What the audit changed about the group story
 
-1. **The embeddings are built and used, and still have no enumeration.** Every
-   recommendation scores an `embedding` signal at weight 0.10 (`engine.go:476`,
-   `signal.Embedding`, seed vector = mean of the seeds' vectors) — that is idea
-   29, and it shipped in the tier-1/2 work. What does not exist is any query
-   that *enumerates* the vector space: no K-nearest-tags endpoint (11), no 2-D
-   projection (59), no drift check (76), no width search (72) and no per-tag
-   width (96). The vectors are here; the scans over them are not.
+1. **The embeddings are built, were NOT being used, and now have an
+   enumeration.** This paragraph used to say every recommendation scores an
+   `embedding` signal at weight 0.10. Measured on 2026-10-23 it scored at
+   nothing, twice over: `renormalise` deleted the weight whenever the signal
+   was registered, and the signal asked for per-WORK vectors that no deployment
+   has (only `kind='tag'` rows exist). Both are fixed in 2026-10-23b, which
+   also adds the enumeration: `pool_mode=tags+embed` reaches works whose tags
+   never co-occur with a seed's. Still missing among the scans: no
+   K-nearest-tags ENDPOINT (11 is partial for that reason), no 2-D projection
+   (59), no drift check (76), no width search (72), no per-tag width (96).
 2. **Impressions now exist**, so two ideas that were previously impossible are
    merely unbuilt: 60 (shown but never marked) and 84 (counterfactual). The
    interleave table records the alternative, which is exactly the counterfactual.
