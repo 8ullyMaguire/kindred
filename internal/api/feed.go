@@ -303,9 +303,15 @@ func (s *Server) handleFeedSeed(w http.ResponseWriter, r *http.Request) {
 // handleOpenSearch serves the descriptor a browser reads to add this site to
 // its search-engine list (#62).
 //
-// One entry, HTML output: the reader lands on /search, which is the page that
+// One Url, HTML output: the reader lands on /search, which is the page that
 // renders results. Advertising the JSON API here would put a URL in the
 // browser's address bar that renders raw JSON.
+//
+// There is deliberately no `format=rss` Url. A descriptor that advertises one
+// makes the browser offer "subscribe to search results" and then hand the
+// reader an HTML page, because /search has no format parameter — a broken
+// promise the browser surfaces as a feed that fails to load. If a search feed
+// is wanted, the route comes first and the descriptor line after it.
 func (s *Server) handleOpenSearch(w http.ResponseWriter, r *http.Request) {
 	base := absoluteBase(r)
 	w.Header().Set("Content-Type", "application/opensearchdescription+xml; charset=utf-8")
@@ -316,9 +322,8 @@ func (s *Server) handleOpenSearch(w http.ResponseWriter, r *http.Request) {
   <Description>Search this mirror of AO3 by tag, title or byline.</Description>
   <InputEncoding>UTF-8</InputEncoding>
   <Url type="text/html" method="get" template="%s/search?q={searchTerms}"/>
-  <Url type="application/rss+xml" method="get" template="%s/search?q={searchTerms}&amp;format=rss"/>
 </OpenSearchDescription>
-`, base, base)
+`, base)
 }
 
 // feedDescription is the entry body: the facts a reader decides on, in the

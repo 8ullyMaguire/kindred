@@ -333,6 +333,13 @@ func TestOpenSearchDescriptorPointsAtTheSearchPage(t *testing.T) {
 			t.Fatalf("descriptor is missing %q", want)
 		}
 	}
+	// Every advertised URL must be one the server answers. There is exactly one,
+	// and it is the search page: a second Url for a feed /search does not serve
+	// makes the browser offer a subscription that returns HTML.
+	if n := strings.Count(raw, "<Url "); n != 1 {
+		t.Fatalf("the descriptor advertises %d URLs, want 1: an advertised URL that "+
+			"the server does not answer is a promise the reader sees broken\n%s", n, raw)
+	}
 	// A browser refuses a descriptor that is not well-formed.
 	var v struct {
 		XMLName xml.Name
