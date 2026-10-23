@@ -63,8 +63,8 @@ Four statuses:
 | 58 | Productivity vs quality scatter | OPEN | No scatter surface; `/fandoms` and `/author` print numbers, not a plot. |
 | 59 | t-SNE/UMAP tag map | OPEN | No projection and no `/tag-map`. |
 | 60 | "Works you keep avoiding" | OPEN | `interleave_impressions` now records what was shown (`store/interleave.go`), so the input exists; nothing reads it as "shown, never marked". |
-| 61 | RSS feed of recommendations | OPEN | No `/feed`; the tree serves no XML document (the only `rss` match is `PeakRSSKiB`). |
-| 62 | OpenSearch descriptor | OPEN | No `/opensearch.xml` route. |
+| 61 | RSS feed of recommendations | **BUILT** | `/feed/tag/{id}` (works under a tag, newest first) and `/feed/seed/{kind}/{id}` (the ranking for one seed), both RSS 2.0 with absolute guids. Ordering is `corpus.ChronologicalUpdateDateDesc`, because the mirror stores AO3's "31 Oct 2025" and a string sort names 31 Oct 2025 the newest work when 26 Jun 2026 is. The tag page discovers its feed via `rel=alternate` and links it in words. Two defects the DEPLOYED feed showed: the seed came first in its own feed (`Request.Exclude` defaults false; only the API handler set it), and a work with an empty `update_date` rendered `<pubDate></pubDate>`, which readers parse as a date. `internal/api/feed.go`, `feed_test.go`. |
+| 62 | OpenSearch descriptor | **BUILT** | `/opensearch.xml`, OpenSearch 1.1, one Url pointing at `/search?q={searchTerms}`. A second `format=rss` Url was removed: `/search` has no format parameter, so the browser offered a subscription that returned HTML — a promise the reader sees broken. The test counts the Urls. |
 | 63 | Jaccard co-occurrence similarity | **BUILT** | `signal.go` computes and prints a Jaccard ratio; `TagNeighbours` ranks by PMI; `idf_overlap.go` is the weighted variant. |
 | 64 | "Tag DNA" distinctive tags | **BUILT** | `internal/web/distinctive.go` + the work page's "What makes this work distinctive" block: rarest by document frequency, a tag on every work dropped (zero evidence), a zero-frequency tag dropped (the table and the work disagree). |
 | 65 | "New since your last visit" | OPEN | `seen_works` is a set, not a cursor; no `first_seen` comparison per reader. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 9 | 33, 46, 56, 57, 63, 64, 67, 70, 71 |
+| BUILT | 11 | 33, 46, 56, 57, 61, 62, 63, 64, 67, 70, 71 |
 | PARTIAL | 12 | 32, 38, 41, 42, 45, 49, 50, 54, 66, 72, 79, 89 |
-| OPEN | 45 | 31, 34, 35, 36, 37, 39, 40, 43, 44, 47, 48, 52, 53, 55, 58, 59, 60, 61, 62, 65, 68, 69, 73, 74, 75, 76, 77, 78, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 43 | 31, 34, 35, 36, 37, 39, 40, 43, 44, 47, 48, 52, 53, 55, 58, 59, 60, 65, 68, 69, 73, 74, 75, 76, 77, 78, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
@@ -118,9 +118,11 @@ open of 30), the whole list stood at 22 built, 13 partial, 61 open, 4 without a 
 Five of the open ones (33, 46, 64, 67, 71) shipped on 2026-10-23, and #11's
 enumeration half shipped on 2026-10-23b (it moves from OPEN to PARTIAL: the
 candidate source exists, the nearest-tags surface does not), so the live total
-is **27 built, 14 partial, 55 open, 4 without a premise** — 100 accounted
-for. The measurement that matters more than the count: **pool recall@1000 is
-0.0284** (run #8), i.e. even a perfect ranking of the 1000 candidates could
+is **29 built, 14 partial, 53 open, 4 without a premise** — 100 accounted
+(#61 and #62 shipped on 2026-10-23d: a tag feed, a seed feed and the search
+descriptor, all three verified on the deployed binary)
+for. The measurement that matters more than the count: **pool recall@1000 was
+0.0284** (run #8) and is **0.2113** after the candidate work (run #13), i.e. even a perfect ranking of the 1000 candidates could
 find at most 2.8% of held-out works, and the current recall@10 of 0.0056 is a
 fifth of that ceiling. The remaining ideas are worth less than candidate
 generation, and #11 (embeddings over the whole corpus) is the lever with the

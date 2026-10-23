@@ -4,6 +4,26 @@ Status as of 2026-10-07. Every line below was verified by running it, not by
 reading the code. A line marked DONE names the test or the tool output that
 established it.
 
+## Feeds and the search descriptor (2026-10-23d, commits fc21e12/8eea88a/e06b92d)
+
+- [x] **`/feed/tag/{id}`** — RSS 2.0 of the works under a tag, newest first by
+      `corpus.ChronologicalUpdateDateDesc`. Verified on the deployed binary:
+      well-formed under a hostile title, five items in date order, 404 for an
+      unknown tag.
+- [x] **`/feed/seed/{kind}/{id}`** — the ranking for one seed, dated by the
+      works. Verified live that the seed is not in its own feed.
+- [x] **`/opensearch.xml`** — one Url at `/search?q={searchTerms}`; a second
+      `format=rss` Url was removed because `/search` answers HTML for it.
+- [x] **Discovery** — the tag page carries `rel=alternate` and "Follow this tag".
+
+Found by the deployment, not by the tests: the seed came first in its own feed
+(`Request.Exclude` defaults false and only the API handler set it), an empty
+`update_date` rendered `<pubDate></pubDate>` (readers parse "" as a date), and
+the descriptor advertised a URL the server does not answer. Each now has a test
+that named it, and three mutations (string sort, relative guid, unescaped XML)
+each redden exactly their own test — the relative-guid one SURVIVED until the
+fixture gained a work with no url.
+
 ## Candidate generation + the embedding dimension (2026-10-23b, commit b0383a3)
 
 - [x] **The embedding signal runs at last.** It was registered, weighted at
