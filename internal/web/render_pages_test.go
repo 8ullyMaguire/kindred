@@ -41,6 +41,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 	"git.polarisocial.xyz/kindred/kindred/internal/tagfamily"
+	"time"
 )
 
 // renderOne executes a named page template against data.
@@ -225,6 +226,55 @@ var pageRenderCases = []pageRenderCase{
 		// "no rows with no explanation" is the thing this page must not be.
 		wantContains:    []string{"No work matched", "notes below"},
 		wantNotContains: []string{"<tbody"},
+	},
+	{
+		tpl:  "new.html",
+		name: "new.html after a second visit",
+		data: NewPage{
+			Base:      sweepBase,
+			Requested: 40,
+			Visit: &store.VisitCursor{
+				PreviousAt: time.Date(2026, 10, 20, 14, 10, 0, 0, time.UTC),
+				CurrentAt:  time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC),
+				Visits:     2,
+			},
+			Works: []store.NewWork{
+				{ID: 7, Title: "Arrived Tuesday", Authors: "someone", FirstSeen: "2026-10-21T00:00:00+00:00"},
+			},
+		},
+		// The BOUNDARY is asserted, not just the rows: a list without the date it
+		// was measured from cannot be told apart from an empty site.
+		wantContains: []string{"Arrived Tuesday", "20 Oct 2026 14:10", "visit 2"},
+	},
+	{
+		tpl:  "new.html",
+		name: "new.html on a first visit",
+		data: NewPage{
+			Base:       sweepBase,
+			Requested:  40,
+			FirstVisit: true,
+			Visit: &store.VisitCursor{
+				CurrentAt: time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC),
+				Visits:    1,
+			},
+		},
+		hasEmptyList: true,
+		wantContains: []string{"first-visit", "no “before” to compare against"},
+	},
+	{
+		tpl:  "new.html",
+		name: "new.html with nothing new",
+		data: NewPage{
+			Base:      sweepBase,
+			Requested: 40,
+			Visit: &store.VisitCursor{
+				PreviousAt: time.Date(2026, 10, 22, 8, 0, 0, 0, time.UTC),
+				CurrentAt:  time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC),
+				Visits:     3,
+			},
+		},
+		hasEmptyList: true,
+		wantContains: []string{"nothing-new", "Nothing has arrived since then"},
 	},
 	{
 		tpl:  "path.html",

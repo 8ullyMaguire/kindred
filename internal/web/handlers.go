@@ -1745,6 +1745,49 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 	d.page(w, "work.html", page, http.StatusOK)
 }
 
+// renderNew lists what arrived since this reader's previous visit (#65).
+//
+// It MINTS a session: the list is per-reader by definition, and the rest of the
+// site only mints on /arena, so a reader who never opened the arena would
+// otherwise be told the feature does not apply to them.
+func (d Deps) renderNew(w http.ResponseWriter, r *http.Request) {
+	base := d.baseOf(r, "New since your last visit", "New since your last visit")
+	page := NewPage{Base: base, Requested: 40}
+	if !d.hasStore() {
+		d.fail(w, r, http.StatusServiceUnavailable, errNoStore)
+		return
+	}
+	_, ownerKey, err := d.arenaSession(r.Context(), w, r)
+	if err != nil {
+		page.Err = "This list needs a reader session, and one could not be created: " + err.Error()
+		d.page(w, "new.html", page, http.StatusOK)
+		return
+	}
+	cur, err := d.Engine.Store.NoteVisit(r.Context(), ownerKey, time.Now(), store.DefaultVisitGap)
+	if err != nil {
+		page.Err = "Your visit could not be recorded: " + err.Error()
+		d.page(w, "new.html", page, http.StatusOK)
+		return
+	}
+	page.Visit = &cur
+	page.FirstVisit = cur.FirstVisit
+	// On a first visit the boundary is NOW, so the list is empty by construction
+	// rather than by an error. Saying so is the honest answer; inventing a list
+	// for a reader the site has never seen would be a different feature.
+	since := cur.PreviousAt
+	if page.FirstVisit {
+		since = cur.CurrentAt
+	}
+	works, err := d.Engine.Store.NewSince(r.Context(), ownerKey, since, page.Requested)
+	if err != nil {
+		page.Err = "The new-works list could not be read: " + err.Error()
+		d.page(w, "new.html", page, http.StatusOK)
+		return
+	}
+	page.Works = works
+	d.page(w, "new.html", page, http.StatusOK)
+}
+
 // renderPath draws a reading path (#40).
 //
 // A page of its own rather than a section on the work page: a walk is ten

@@ -760,6 +760,38 @@ CREATE TABLE IF NOT EXISTS seen_works (
 CREATE INDEX IF NOT EXISTS seen_works_owner_shown
 	ON seen_works (owner_key, shown_at);
 
+/* reader_visits is the per-reader VISIT CURSOR (#65).
+
+   seen_works answers "has this reader met this work"; it cannot answer "what
+   arrived since they last looked", because a set has no time order. This table
+   stores two instants per reader: when the current visit began, and when the
+   one before it began. "New since your last visit" is then a comparison of
+   corpus first_seen against previous_at, which is exactly what a set cannot
+   express.
+
+   Three instants, each answering a different question: previous_at is the
+   BOUNDARY the list is measured from (the start of the visit before this one),
+   current_at is when this visit began, and last_at is when we last heard from
+   the reader. last_at is separate from current_at because the gap that decides
+   "a new visit" has to be measured from ACTIVITY, not from the start of the
+   visit: a reader who browses for an hour is one visit, and a schema that
+   measured from current_at would split them into two.
+
+   Not a log of visits: the product needs the previous one and nothing older,
+   and a log would grow forever to answer a question about its last two rows.
+
+   The roll is done in NoteVisit with the gap as a parameter, not by a trigger,
+   because "a new visit" is a product decision (how long away counts as away)
+   and a trigger would freeze it into the schema.
+*/
+CREATE TABLE IF NOT EXISTS reader_visits (
+	owner_key   TEXT PRIMARY KEY,
+	previous_at TEXT NOT NULL,
+	current_at  TEXT NOT NULL,
+	last_at     TEXT NOT NULL,
+	visits      INTEGER NOT NULL DEFAULT 1
+) WITHOUT ROWID;
+
 /* work_feedback is a reader's like or dislike on a work.
 
    Separate from seen_works because the two answer different questions and

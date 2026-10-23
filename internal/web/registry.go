@@ -192,6 +192,14 @@ func allPages() []pageSpec {
 				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, arg string) { d.renderTag(w, r, arg) },
 			},
 			{
+				Template: "new.html",
+				Paths:    []string{"/new"},
+				// A list page: the empty state is the FIRST-VISIT case, which is
+				// the normal state for every reader once.
+				List:    true,
+				Handler: func(d Deps, w http.ResponseWriter, r *http.Request, _ string) { d.renderNew(w, r) },
+			},
+			{
 				Template: "path.html",
 				Paths:    []string{"/path/"},
 				Prefix:   true,

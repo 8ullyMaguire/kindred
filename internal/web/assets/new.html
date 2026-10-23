@@ -1,0 +1,51 @@
+{{define "content"}}
+<h1>New since your last visit</h1>
+
+<p class="note">
+  Works this mirror first saw since the last time you were here, minus anything
+  you have already been shown or read. The date below is the boundary the list
+  was measured from — without it, “nothing new” and “nothing here” look the same.
+</p>
+
+{{if .Err}}
+  <p class="note" data-testid="new-error">{{.Err}}</p>
+{{else if .FirstVisit}}
+  <p class="note" data-empty="true" data-testid="first-visit">
+    This is your first visit, so there is no “before” to compare against. From
+    now on this page lists what arrived while you were away.
+  </p>
+  <p class="count">
+    Your boundary for next time: {{.Visit.CurrentAt.Format "2 Jan 2006 15:04"}}.
+    Keep the session cookie this site set and the list follows you.
+  </p>
+{{else}}
+  <p class="count" data-testid="boundary">
+    Since your previous visit began on
+    <strong>{{.Visit.PreviousAt.Format "2 Jan 2006 15:04"}}</strong>
+    (visit {{.Visit.Visits}}) ·
+    {{len .Works}} of up to {{.Requested}} works shown.
+  </p>
+
+  {{if .Works}}
+    <ol class="new-works">
+      {{range .Works}}
+      <li>
+        <a href="/work/{{.ID}}">{{.Title}}</a>
+        {{if .Authors}}<span class="count">by {{.Authors}}</span>{{end}}
+        <span class="count">first seen {{.FirstSeen}}</span>
+      </li>
+      {{end}}
+    </ol>
+  {{else}}
+    <p class="note" data-empty="true" data-testid="nothing-new">
+      Nothing has arrived since then. That is an answer, not an error: the mirror
+      grew by nothing between your last visit and this one.
+    </p>
+  {{end}}
+{{end}}
+
+<p class="count">
+  <a href="/">Back to searching</a> ·
+  <a href="/new">Refresh this list</a>
+</p>
+{{end}}

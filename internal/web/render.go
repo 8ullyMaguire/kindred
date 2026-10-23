@@ -189,6 +189,23 @@ type TagHit struct {
 	Name string
 }
 
+// NewPage is "new since your last visit" (#65).
+//
+// The number that matters is not the size of the list but the BOUNDARY it was
+// measured from, so the page prints the boundary rather than only the rows: a
+// reader who cannot see "since Tuesday 14:10" cannot tell "nothing happened" from
+// "the site is empty".
+type NewPage struct {
+	Base
+	Visit     *store.VisitCursor
+	Works     []store.NewWork
+	Requested int
+	// FirstVisit is lifted out of Visit so a template cannot dereference a nil
+	// cursor for a reader whose visit could not be recorded.
+	FirstVisit bool
+	Err        string
+}
+
 // PathPage is a reading path (#40): a walk through embedding space where each
 // step is measured from the PREVIOUS work, so the list drifts instead of
 // describing the seed ten times.
