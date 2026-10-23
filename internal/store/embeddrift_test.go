@@ -223,3 +223,37 @@ func TestRecordEmbedRunWithMoreRowsThanItsSample(t *testing.T) {
 			"row column a lie", run.Rows)
 	}
 }
+
+// TestTagsWithNoVectorDoNotCountAsDrift is the defect the live table found.
+//
+// This table records "no embedding for this tag" as an all-zero vector. Two of
+// those have no angle, and scoring them 0.0 drags the mean down: the deployed
+// table has 3 such tags among its first 64, which turned an honest 1.0000 into
+// 0.9531 and made a build compared with ITSELF report "the space MOVED".
+func TestTagsWithNoVectorDoNotCountAsDrift(t *testing.T) {
+	zero := make([]float32, 4)
+	before := EmbedRun{
+		ID: 1, Dim: 4, MeanNorm: 1,
+		Centroid: []float32{0.1, 0.2, 0.3, 0.4},
+		Sample: []EmbedSample{
+			{TagID: 1, Vec: []float32{1, 0, 0, 0}},
+			{TagID: 2, Vec: zero},
+			{TagID: 3, Vec: zero},
+		},
+	}
+	after := before
+	after.ID = 2
+	d := DriftBetween(before, after)
+	if d.SampleCosine < 0.999 {
+		t.Fatalf("identical runs compared at cosine %.4f because zero vectors were scored 0.0", d.SampleCosine)
+	}
+	if d.SampleN != 1 {
+		t.Fatalf("sample n = %d, want 1 compared tag (the two without vectors carry no position)", d.SampleN)
+	}
+	if d.EmptySample != 2 {
+		t.Fatalf("empty sample = %d, want 2: dropped tags must be counted, not silently ignored", d.EmptySample)
+	}
+	if !strings.Contains(d.Verdict, "carry no vector") {
+		t.Fatalf("verdict = %q, want the excluded tags named", d.Verdict)
+	}
+}

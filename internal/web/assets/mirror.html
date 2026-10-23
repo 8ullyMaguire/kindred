@@ -78,6 +78,7 @@
   <table>
     <tbody>
       <tr><td>sampled tags compared</td><td>{{.Drift.SampleN}}</td></tr>
+      {{if .Drift.EmptySample}}<tr><td>sampled tags with no vector (excluded)</td><td>{{.Drift.EmptySample}}</td></tr>{{end}}
       <tr><td>per-tag cosine (mean)</td><td>{{printf "%.4f" .Drift.SampleCosine}}</td></tr>
       <tr><td>centroid cosine</td><td>{{printf "%.4f" .Drift.CentroidCosine}}</td></tr>
       <tr><td>scale (mean norm ratio)</td><td>{{printf "%.3f" .Drift.MeanNormRatio}}</td></tr>

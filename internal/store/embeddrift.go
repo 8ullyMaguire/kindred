@@ -222,8 +222,17 @@ type EmbedDrift struct {
 	// SampleCosine is the mean per-tag cosine over the tags present in both
 	// samples. This is the number that says whether individual tags moved, which
 	// an average can hide when two halves move in opposite directions.
+	//
+	// Tags whose vector is all zeros are NOT in this mean: a tag with no vector
+	// has no position to move, and counting it as cosine 0 reports a drift that
+	// did not happen. They are counted in EmptySample instead -- measured on the
+	// live table, where 3 of the 64 sampled tags carry zeros and dragged an
+	// honest 1.0000 down to 0.9531, i.e. a rebuild compared with ITSELF was
+	// reported as having moved the space.
 	SampleCosine float64 `json:"sample_cosine"`
 	SampleN      int     `json:"sample_n"`
+	// EmptySample is how many sampled tags carried a zero vector in either run.
+	EmptySample int `json:"empty_sample"`
 	// Verdict is a sentence, not a number: an operator reading 0.87 should not
 	// have to remember what 0.87 means.
 	Verdict string `json:"verdict"`
@@ -255,15 +264,20 @@ func DriftBetween(before, after EmbedRun) EmbedDrift {
 		byID[s.TagID] = s.Vec
 	}
 	var sum float64
-	var n int
+	var n, empty int
 	for _, s := range after.Sample {
 		prev, ok := byID[s.TagID]
 		if !ok {
 			continue
 		}
+		if !hasDirection(prev) || !hasDirection(s.Vec) {
+			empty++
+			continue
+		}
 		sum += cosine32(prev, s.Vec)
 		n++
 	}
+	d.EmptySample = empty
 	d.SampleN = n
 	if n > 0 {
 		d.SampleCosine = sum / float64(n)
@@ -279,20 +293,45 @@ func driftVerdict(d EmbedDrift) string {
 			d.DimBefore, d.DimAfter)
 	}
 	if d.SampleN == 0 {
+		if d.EmptySample > 0 {
+			return fmt.Sprintf("none of the sampled tags carry a vector in both runs (%d carry none at all), "+
+				"so per-tag movement cannot be measured", d.EmptySample)
+		}
 		return "the two runs share no sampled tags, so per-tag movement cannot be measured"
 	}
 	if d.SampleCosine < DriftFloor {
 		return fmt.Sprintf("the space MOVED: sampled tags average cosine %.3f against the previous build "+
-			"(floor %.2f). Reader weights trained before this rebuild were trained against other positions",
-			d.SampleCosine, DriftFloor)
+			"(floor %.2f). Reader weights trained before this rebuild were trained against other positions%s",
+			d.SampleCosine, DriftFloor, d.emptyNote())
 	}
 	if d.MeanNormRatio < 0.9 || d.MeanNormRatio > 1.1 {
 		return fmt.Sprintf("tag positions held (cosine %.3f) but the scale changed by %.0f%%; "+
 			"cosine-based readers are unaffected, additive scores are not",
 			d.SampleCosine, (d.MeanNormRatio-1)*100)
 	}
-	return fmt.Sprintf("reproduced: sampled tags average cosine %.3f, centroid %.3f, scale %.3f",
-		d.SampleCosine, d.CentroidCosine, d.MeanNormRatio)
+	return fmt.Sprintf("reproduced: sampled tags average cosine %.3f, centroid %.3f, scale %.3f%s",
+		d.SampleCosine, d.CentroidCosine, d.MeanNormRatio, d.emptyNote())
+}
+
+// emptyNote keeps the excluded tags visible. Silently dropping them from the
+// mean would make a thin sample look like a complete one.
+func (d EmbedDrift) emptyNote() string {
+	if d.EmptySample == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (%d sampled tag(s) carry no vector and are excluded from the mean)", d.EmptySample)
+}
+
+// hasDirection reports whether a vector has a position at all: an all-zero
+// vector is how this table records "no embedding for this tag", and two of them
+// have no angle to measure.
+func hasDirection(v []float32) bool {
+	for _, f := range v {
+		if f != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeVec(blob []byte, dim int) ([]float32, error) {
