@@ -52,7 +52,7 @@ Four statuses:
 | 47 | Work cluster labels | OPEN | No work-level clustering; embeddings are `kind='tag'` only. |
 | 48 | Reader velocity signal | OPEN (count built) | The session model now exists: `reader_visits` (three instants per reader — `previous_at`, `current_at`, `last_at`) and `MarksSince`, which `/new` prints ("2 work(s) marked read since then, across 1 visit(s)"). The SIGNAL is deliberately not built, and the reason is measured, not assumed: a weight needs a distribution, and the live state database on 2026-10-23 held **33 marked works across 8 owners and 8 reader-days — no owner with five, max 13 marks in one day**. Fitting a weight to that is fitting noise, and this project refuses unmeasured weights. The number that would justify the next step: ≥20% of owners with ≥5 reader-days and a spread between the 90th and 50th percentile mark rate wide enough to change a ranking. Mutant killed: the boundary ignored, so "since your last visit" counted every mark ever made. |
 | 49 | Tag polarity detection | PARTIAL | A reader can block a tag (`arena_user_blocked_tags`, `POST /block`) and blocks are honoured in ranking; nothing infers polarity corpus-wide from block/bookmark ratios. |
-| 50 | "Complete your collection" for an author | PARTIAL | `/author` lists an author's works and `/seen` excludes read ones; no "3 of 7 read, 4 to go" surface. |
+| 50 | "Complete your collection" for an author | BUILT | `/author?q=` prints "you have read **2** of **4** — **2** to go" for a reader with a session, and `?unread=1` lists the rest ("Showing 2 of 2"). `store.ReadAmong` reads the read set for a bounded id list (400 per statement) because `works` (corpus) and `seen_works` (state) are different SQLite files with no possible join. Three exclusions: a work only SHOWN is not read; another reader's reads are not this one's; and no session means NO CLAIM — an anonymous reader gets no line at all rather than "0 of 4". The count is over the shelf (capped at 5,000 ids, and the page says "counted over the first 5,000" when it hits the cap), not the page: "2 of 20" where 20 is the page size is a number about pagination. `OwnerForSession` is not `TouchSession`: rendering a list must not look like activity. LIVE: signed in, two of Titus621's four works marked read → data-read="2" data-total="4", "2 to go", and ?unread=1 answered "Showing 2 of 2" with exactly the two unread ids. Mutants killed: shown counted as read, filter inert, filter unannounced, shelf counted as one page. |
 | 51 | Series-aware recommendations | NO PREMISE | No series column or table; AO3 series metadata is not crawled. |
 | 52 | Writing-style similarity via summary embeddings | OPEN | Embeddings are tag-level (`embeddings.kind='tag'`); there is no text model and no summary vector. |
 | 53 | Bradley-Terry vs Glicko | OPEN | Glicko-2 only (`internal/arena/glicko.go`); no BT fit and no rank-correlation comparison. |
@@ -108,8 +108,8 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 17 | 33, 40, 43, 46, 56, 57, 60, 61, 62, 63, 64, 65, 67, 70, 71, 76, 78 |
-| PARTIAL | 12 | 32, 38, 41, 42, 45, 49, 50, 54, 66, 72, 79, 89 |
+| BUILT | 19 | 33, 40, 43, 46, 50, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 76, 78 |
+| PARTIAL | 10 | 32, 38, 41, 42, 45, 49, 54, 72, 79, 89 |
 | OPEN | 37 | 31, 34, 35, 36, 37, 39, 44, 47, 48, 52, 53, 55, 58, 59, 68, 69, 73, 74, 75, 77, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
@@ -129,7 +129,11 @@ row below rather than one of them -- see
 fingerprints) and settled #43 by MEASUREMENT rather than by building: negatives
 already flowed from arena pair judgements, and the new "Not interested" action
 gives a reader a direct one. The total is now **35 built, 14 partial, 47 open,
-4 without a premise** -- see `docs/HANDOFF-2026-10-23h-skip-drift.md`.
+4 without a premise**.
+
+2026-10-23i shipped #66 (the byline as links, authors who write alike) and #50
+("complete your collection"), so the live total is **37 built, 10 partial, 49
+open, 4 without a premise** -- see `docs/HANDOFF-2026-10-23i-byline-and-shelf.md`.
 
 The measurement that matters more than the count: **pool recall@1000 was
 0.0284** (run #8) and is **0.2113** after the candidate work (run #13), i.e. even a perfect ranking of the 1000 candidates could

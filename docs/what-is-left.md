@@ -4,6 +4,16 @@ Status as of 2026-10-23. Every line below was verified by running it, not by
 reading the code. A line marked DONE names the test or the tool output that
 established it.
 
+## Byline and shelf (2026-10-23i)
+
+- [x] **#66 The byline is a page** — the work page names its author (it did not,
+      anywhere), links each name to `/author?q=`, and renders "Authors who write
+      like this one" from the same `SimilarAuthors` the JSON endpoint serves. Live
+      on /work/17249318: byline link + a populated author list.
+- [x] **#50 "Complete your collection"** — `/author?q=` says "you have read 2 of
+      4 — 2 to go" and `?unread=1` shows the rest. Live with a session; anonymous
+      readers get no claim at all.
+
 ## Skipping, drift, negation (2026-10-23h)
 
 - [x] **#60 "Works you keep skipping"** — `/skipped`. Works shown 3+ separate times
