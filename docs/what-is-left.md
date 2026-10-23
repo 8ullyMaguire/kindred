@@ -520,6 +520,8 @@ together in `meta.degraded` and read like three broken signals.
 
 ## Session 2026-10-23 (second batch): the weights were never the problem
 
+> Full write-up, numbers and the exact reproduce commands: **`docs/HANDOFF-2026-10-23.md`**.
+
 Four units, each one forced by the previous measurement.
 
 - [x] **#33 seed_agreement.** Every tag signal scored against the BEST seed.
@@ -556,6 +558,12 @@ Numbers, all on the same 38 readers / 495 held-out works:
 | 4 | control tune, seed_agreement weight 0 | 0.0067 | 0.0096 | 0.0789 |
 | 6 | neighbourhood weight 0 (ordering test) | 0.0035 | 0.0060 | 0.0526 |
 | 7-8 | neighbourhood saturated to [0,1) | 0.0056 | 0.0101 | 0.0789 |
+
+One deploy reported "5 of 48 checks failed" and the names were lost to
+`deploy.sh | tail -6`; two immediate re-runs of the same tree passed 48/48 (one
+through an SSH tunnel, one with the log captured to a file). Cause unknown —
+either a cold service under load or a flaky check. Capture the full log from now
+on.
 
 Two lessons worth keeping. **An experiment whose instrument is blind reports a
 null result**, and three identical runs read as "the new signal does nothing"
