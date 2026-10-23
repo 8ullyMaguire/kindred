@@ -227,6 +227,11 @@ func live() map[arena.EntityKind][]Algo {
 			Cost:  "one index lookup; the index is resident",
 		},
 		{
+			ID: Adamic, Label: "Adamic-Adar over shared readers", Kind: arena.KindWork, Status: Live,
+			Blurb: "Each reader who read both the seed and a candidate contributes 1/(1+log(their bookmark count)). Downweights the readers who bookmark everything, which the flat two-hop BFS cannot do.",
+			Cost:  "one query over the seed's readers, capped at 4,000 walked from the most recent; a 50k-reader seed therefore degrades to a sample and says so",
+		},
+		{
 			ID: Popular, Label: "Popularity within the seed's tags", Kind: arena.KindWork, Status: Live,
 			Blurb: "The baseline: the most-read works carrying the seed's tags. Not personalised, and kept for exactly that reason — a personalised list that cannot beat this is not working.",
 			Cost:  "one indexed query",

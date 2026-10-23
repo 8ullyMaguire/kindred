@@ -39,6 +39,38 @@ func TestEveryKindHasExactlyOneLiveDefault(t *testing.T) {
 	}
 }
 
+// TestEveryImplementedMechanismIsOffered closes the direction the registry tests
+// cannot see: an implementation with no registry entry is a mechanism nobody can
+// choose, and it looks exactly like a mechanism that was never written.
+//
+// This list is a deliberate duplicate -- it names what `engine/related.go`
+// implements. Adding a case there without adding it here fails nothing (which is
+// why the engine's own test walks the registry), but adding a case there and
+// forgetting the registry fails HERE, which is the omission that reached a
+// deployed binary once.
+func TestEveryImplementedMechanismIsOffered(t *testing.T) {
+	implemented := map[arena.EntityKind][]ID{
+		arena.KindWork:         {Hybrid, Collab, Adamic, Popular},
+		arena.KindTag:          {Embed, Cooccur, Popular},
+		arena.KindAuthor:       {CoBookAuthors, TagIDF, Popular},
+		arena.KindCharacter:    {Embed, Cooccur, Popular},
+		arena.KindRelationship: {Embed, Cooccur, Popular},
+		arena.KindFandom:       {Embed, Cooccur, Popular},
+	}
+	for kind, ids := range implemented {
+		live := map[ID]bool{}
+		for _, id := range LiveIDs(kind) {
+			live[id] = true
+		}
+		for _, id := range ids {
+			if !live[id] {
+				t.Errorf("%s implements %s but the registry does not offer it, so no "+
+					"reader can choose it", kind, id)
+			}
+		}
+	}
+}
+
 func TestEveryDisabledAlgorithmSaysWhy(t *testing.T) {
 	for _, kind := range arena.Kinds {
 		for _, a := range For(kind) {
