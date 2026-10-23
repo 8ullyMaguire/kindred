@@ -37,6 +37,7 @@ commands:
   verify    verify a snapshot's signature and hashes
   fetch     pull a snapshot from a peer's .onion service
   tune      inspect or set signal weights
+  embed-check  fingerprint the embedding table and compare it with the previous build
 
 run "kindred <command> -h" for command flags.
 `
@@ -63,6 +64,8 @@ func main() {
 		err = runIngest(ctx, args)
 	case "embed":
 		err = runEmbed(ctx, args)
+	case "embed-check":
+		err = runEmbedCheck(ctx, args)
 	case "recommend":
 		err = runRecommend(ctx, args)
 	case "crawl":

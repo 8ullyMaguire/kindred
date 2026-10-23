@@ -103,6 +103,31 @@ docfreq tags=634231 works=112935 bytes=5073868 /path/to/ao3_metadata.db.docfreq
 Not yet documented above because every one of its flags is either global or
 listed by `-h`. It is the command `--top-n` and `--embed-dim` exist for.
 
+## `embed-check` — did the embedding space move?
+
+`kindred embed` rewrites all 634k vectors. `embed-check` records a fingerprint of
+the table as it stands and compares it with the previous one:
+
+```bash
+kindred embed-check --db ~/.local/share/kindred/kindred.db
+```
+
+```
+fingerprint #3: 634232 rows, dim 32, mean norm 0.4127, 64 sampled vectors, 2026-10-23T19:02:11Z
+against #2 (2026-10-23T18:40:02Z):
+  sampled tags 64, per-tag cosine 1.0000, centroid 1.0000, scale 1.000
+  rows 634232 -> 634232, width 32 -> 32
+  verdict: reproduced: sampled tags average cosine 1.0000, centroid 1.0000, scale 1.000
+```
+
+`kindred embed` takes the same fingerprint automatically after every build, so
+this command is for the two moments a rebuild does not cover: taking a baseline
+**before** one, and asking whether a table that was restored or copied by hand is
+the one that produced the stored weights.
+
+It writes a row, so running it twice compares the table with itself. That proves
+the wiring (and the output says so); it does not prove a rebuild.
+
 ## `recommend` — recommend entities
 
 ```bash
