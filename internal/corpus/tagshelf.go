@@ -19,11 +19,17 @@ package corpus
 //
 // # Why one pass, not five queries
 //
-// The first version asked SQLite four separate questions — aggregates, median
+// The first version asked SQLite five separate questions — aggregates, median
 // words, median kudos, top work, trend — each a full scan of the tag's works, and
-// the two medians sorted the tag's whole work list inside the query. Measured on
-// tag 29 (55,810 works) the tag page went from 0.35 s to 4.06 s, which is a page
-// nobody waits for twice.
+// the two medians sorted the tag's whole work list inside the query.
+//
+// The rewrite was prompted by a bad measurement, worth recording: the tag page
+// read 4.06 s and 0.35 s had been measured for "the same page" earlier, so the
+// feature looked like a 3.7 s regression. It was not. The default sort is the
+// engine's taste blend, which costs 3.1 s of that 3.67 s on its own (sort=kudos
+// answers in 0.54 s), and the 0.35 s reading predated that default. The shelf's
+// own query is 67 ms. The five-scan version is still worth folding into one pass —
+// it is five full scans of 55,810 rows against one — but it was not the cost.
 //
 // This reads (words, kudos, bookmarks, year) for the tag's works ONCE and computes
 // everything here: two sorts in Go over 55k int64s cost milliseconds, and the scan

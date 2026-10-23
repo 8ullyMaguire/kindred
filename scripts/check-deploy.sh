@@ -291,7 +291,17 @@ echo "  using /tag/$TAG ($TAG_WORKS works)"
 # Each check therefore runs the filter and asserts the RESULT moved.
 echo
 echo "filters:"
-ctl=$(curl -fsS --max-time 20 "$TARGET/tag/$TAG" || true)
+# One generously-timed fetch, reused by every check below.
+#
+# The FIRST tag request after a restart pays for loading the 81 MiB tag-vector
+# matrix and building the graph, and the page's default sort is the engine's
+# taste blend (measured 3.67 s warm on tag 29, 0.54 s for sort=kudos). Against the
+# 20 s cap this fetch used to have, a cold process read as an EMPTY body and the
+# gate reported "complete control is MISSING from the tag page" — a working page
+# reported broken because the gate timed out. 90 s is a cold-start allowance, not
+# a latency assertion; latency is measured in its own section against a warm
+# process.
+ctl=$(curl -fsS --max-time 90 "$TARGET/tag/$TAG" || true)
 for name in complete rating lang; do
   if printf '%s' "$ctl" | grep -qE "name=\"$name\""; then
     ok "$name control is present"
