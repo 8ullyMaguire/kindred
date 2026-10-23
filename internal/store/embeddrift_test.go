@@ -11,8 +11,10 @@ package store
 import (
 	"context"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIdenticalRebuildsReportReproduced(t *testing.T) {
@@ -167,4 +169,57 @@ func floatsToBlob(v []float32) []byte {
 		out[i*4+3] = byte(bits >> 24)
 	}
 	return out
+}
+
+// TestRecordEmbedRunWithMoreRowsThanItsSample is the regression test for a
+// deadlock that only the LIVE table could show.
+//
+// The pool holds one connection. A query whose Rows is not exhausted holds that
+// connection, and the next query waits for it forever. With two fixture rows and
+// a sample of eight, `rows.Next()` returns false and the Rows closes itself — so
+// the small fixture passed while 634k rows against a sample of 64 hung the
+// command for seven minutes at 0.5% CPU. The fixture therefore has MORE rows
+// than the sample, which is the only shape that reaches the `break`.
+func TestRecordEmbedRunWithMoreRowsThanItsSample(t *testing.T) {
+	ctx := context.Background()
+	s, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := 0; i < 12; i++ {
+		vec := []float32{1, 0}
+		if err := func() error {
+			_, err := s.DB.ExecContext(ctx,
+				`INSERT INTO embeddings (kind, entity_id, dim, vec) VALUES ('tag', ?, 2, ?)`,
+				strconv.Itoa(i+1), floatsToBlob(vec))
+			return err
+		}(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan struct{})
+	var run EmbedRun
+	var rerr error
+	go func() {
+		run, rerr = s.RecordEmbedRun(ctx, 4) // 4 of 12: the break is reached
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("RecordEmbedRun did not finish with more rows than its sample: the sample query's " +
+			"Rows is still holding the only connection, so the centroid query waits on it forever")
+	}
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if len(run.Sample) != 4 {
+		t.Fatalf("sample has %d vectors, want the 4 asked for", len(run.Sample))
+	}
+	if run.Rows != 12 {
+		t.Fatalf("fingerprint says the table holds %d rows, want 12: the sample asked for 4 of 12, "+
+			"and recording the sample's extent as the table's size makes the drift report's own "+
+			"row column a lie", run.Rows)
+	}
 }

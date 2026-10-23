@@ -83,8 +83,17 @@ func (s *Store) RecordEmbedRun(ctx context.Context, sampleN int) (EmbedRun, erro
 			return run, err
 		}
 		sample = append(sample, EmbedSample{TagID: int32(id), Vec: vec})
-		run.Rows++
 		run.Dim = dim
+	}
+	// Close BEFORE the next query. The pool holds exactly one connection
+	// (store.go: MaxOpenConns(1)), and an unexhausted Rows holds that
+	// connection until it is closed -- so with more rows than the sample asks
+	// for, the centroid query below waits on itself forever. Found on the live
+	// database, where 634k rows hit the `break` and the unit test's two rows
+	// never did: an exhausted Rows closes itself, which is why the small
+	// fixture passed.
+	if err := rows.Close(); err != nil {
+		return run, err
 	}
 	if err := rows.Err(); err != nil {
 		return run, err
@@ -122,12 +131,21 @@ func (s *Store) RecordEmbedRun(ctx context.Context, sampleN int) (EmbedRun, erro
 		normSum += math.Sqrt(norm)
 		n++
 	}
+	// Same reason as above, and here the waiting query is an INSERT: until the
+	// scan's connection is returned, the fingerprint cannot be written at all.
+	if err := crows.Close(); err != nil {
+		return run, err
+	}
 	if err := crows.Err(); err != nil {
 		return run, err
 	}
 	if n == 0 {
 		return run, fmt.Errorf("no embeddings are stored")
 	}
+	// run.Rows is the TABLE's row count, from the centroid pass, not the
+	// sample's extent: a fingerprint of a 634k-row table that recorded "rows 64"
+	// would make the drift table's own size column a lie.
+	run.Rows = n
 	run.MeanNorm = normSum / float64(n)
 	cent := make([]float32, len(centroid))
 	for i, v := range centroid {
