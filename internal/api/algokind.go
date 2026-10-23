@@ -144,7 +144,11 @@ func (s *Server) handleRelated(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.Store != nil && ownerKey != "" {
-		if err := s.Store.RecordAlgoImpression(r.Context(), ownerKey, kind, string(chosen), arm, id); err != nil {
+		shown := make([]int64, 0, len(res.Items))
+		for _, it := range res.Items {
+			shown = append(shown, it.ID)
+		}
+		if err := s.Store.RecordAlgoImpression(r.Context(), ownerKey, kind, string(chosen), arm, id, shown); err != nil {
 			s.Log.Warn("algo impression failed", "kind", kind, "algo", chosen, "err", err)
 		}
 	}

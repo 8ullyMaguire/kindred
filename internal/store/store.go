@@ -820,6 +820,7 @@ CREATE TABLE IF NOT EXISTS algo_impressions (
 	arm       TEXT NOT NULL,
 	seed_id   INTEGER NOT NULL,
 	credited  INTEGER NOT NULL DEFAULT 0,
+	shown     TEXT NOT NULL DEFAULT '',
 	shown_at  TEXT NOT NULL
 );
 
@@ -1008,6 +1009,20 @@ func (s *Store) migrate(ctx context.Context) error {
 				`ALTER TABLE eval_runs ADD COLUMN `+col.name+` `+col.decl); err != nil {
 				return fmt.Errorf("migrate eval_runs.%s: %w", col.name, err)
 			}
+		}
+	}
+
+	// algo_impressions gained a `shown` column: without the ids a list actually
+	// carried, a click cannot be attributed to the list that produced it, and
+	// "credited" would have to be guessed from the reader's most recent request.
+	has, err = s.columnExists(ctx, "algo_impressions", "shown")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := s.DB.ExecContext(ctx,
+			`ALTER TABLE algo_impressions ADD COLUMN shown TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("migrate algo_impressions.shown: %w", err)
 		}
 	}
 

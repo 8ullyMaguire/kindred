@@ -27,6 +27,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
@@ -104,15 +106,60 @@ func (s *Store) AlgoChoices(ctx context.Context, ownerKey string) (map[arena.Ent
 // who opted out. Without it, a standings table cannot tell a challenger winning
 // on its merits from one winning because the readers most likely to click chose
 // it.
-func (s *Store) RecordAlgoImpression(ctx context.Context, ownerKey string, kind arena.EntityKind, algoID, arm string, seedID int64) error {
+func (s *Store) RecordAlgoImpression(ctx context.Context, ownerKey string, kind arena.EntityKind, algoID, arm string, seedID int64, shown []int64) error {
 	if s == nil || s.DB == nil {
 		return nil
 	}
 	_, err := s.DB.ExecContext(ctx,
-		`INSERT INTO algo_impressions (owner_key, kind, algo, arm, seed_id, shown_at)
-		 VALUES (?,?,?,?,?,?)`,
-		ownerKey, string(kind), algoID, arm, seedID, time.Now().UTC().Format(time.RFC3339))
+		`INSERT INTO algo_impressions (owner_key, kind, algo, arm, seed_id, shown, shown_at)
+		 VALUES (?,?,?,?,?,?,?)`,
+		ownerKey, string(kind), algoID, arm, seedID, joinIDs(shown), time.Now().UTC().Format(time.RFC3339))
 	return err
+}
+
+// joinIDs renders the ids a list carried as ",1,2,3," so a membership test is
+// `instr(shown, ',<id>,') > 0` — a LIKE on a comma-delimited column, chosen over
+// a JSON column because SQLite's JSON functions are not guaranteed in the builds
+// this ships to and the list is at most a few dozen ids.
+func joinIDs(ids []int64) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, id := range ids {
+		b.WriteByte(',')
+		b.WriteString(strconv.FormatInt(id, 10))
+	}
+	b.WriteByte(',')
+	return b.String()
+}
+
+// CreditAlgoImpressionByWork credits the most recent impression of this kind
+// whose list CONTAINED this work.
+//
+// The membership test is what makes the credit mean "the reader acted on
+// something an algorithm put in front of them". Crediting the reader's most
+// recent request instead would credit a list for a click that may have come from
+// search, and the arm that happened to be served last would collect the credit.
+func (s *Store) CreditAlgoImpressionByWork(ctx context.Context, ownerKey string, kind arena.EntityKind, workID int64) (int64, error) {
+	if s == nil || s.DB == nil || ownerKey == "" {
+		return 0, nil
+	}
+	needle := "," + strconv.FormatInt(workID, 10) + ","
+	res, err := s.DB.ExecContext(ctx,
+		`UPDATE algo_impressions SET credited = 1
+		 WHERE id = (SELECT id FROM algo_impressions
+		             WHERE owner_key = ? AND kind = ? AND credited = 0
+		               AND instr(shown, ?) > 0
+		             ORDER BY id DESC LIMIT 1)`,
+		ownerKey, string(kind), needle)
+	if err != nil {
+		if isMissingTable(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // CreditAlgoImpression marks the most recent impression of this seed for this

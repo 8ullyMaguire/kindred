@@ -514,6 +514,16 @@ func (d Deps) postSeen(w http.ResponseWriter, r *http.Request) {
 		if opErr == nil && d.CreditInterleave != nil {
 			d.CreditInterleave(ctx, ownerKey, workID)
 		}
+		// The algorithm credit. Same rule as the interleave vote and for the
+		// same reason: only a READ credits, and only an impression whose list
+		// actually carried this work can be credited (see the store's
+		// membership test), so a click cannot be attributed to a list that never
+		// showed it.
+		if opErr == nil && d.Engine.Store != nil {
+			if _, err := d.Engine.Store.CreditAlgoImpressionByWork(ctx, ownerKey, arena.KindWork, workID); err != nil {
+				d.Log.Warn("algo credit failed", "work_id", workID, "err", err)
+			}
+		}
 	case "unread":
 		opErr = d.Engine.Store.UnmarkRead(ctx, ownerKey, entity)
 	default:

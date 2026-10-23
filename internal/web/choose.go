@@ -151,7 +151,11 @@ func (d Deps) renderRelatedPage(w http.ResponseWriter, r *http.Request) {
 			arm = "challenger"
 		}
 		page.Arm = arm
-		if err := d.Engine.Store.RecordAlgoImpression(r.Context(), ownerKey, kind, string(chosen), arm, seed); err != nil {
+		shown := make([]int64, 0, len(res.Items))
+		for _, it := range res.Items {
+			shown = append(shown, it.ID)
+		}
+		if err := d.Engine.Store.RecordAlgoImpression(r.Context(), ownerKey, kind, string(chosen), arm, seed, shown); err != nil {
 			d.Log.Warn("algo impression failed", "err", err)
 		}
 	}
