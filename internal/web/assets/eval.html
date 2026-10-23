@@ -48,7 +48,7 @@
           <td class="num">{{printf "%.4f" .NDCG}}</td>
           <td class="num">{{printf "%.4f" .Coverage}}</td>
           <td class="num" data-testid="eval-pool">{{if .PoolDepth}}{{printf "%.4f" .PoolRecall}} @{{.PoolDepth}}{{else}}—{{end}}</td>
-          <td data-testid="eval-degraded">{{if .Degraded}}{{.Degraded}}{{else}}none{{end}}</td>
+          <td data-testid="eval-degraded">{{if not .Degraded}}not recorded{{else if eq .Degraded "all"}}none{{else}}{{.Degraded}}{{end}}</td>
         </tr>
       {{end}}
     </tbody>

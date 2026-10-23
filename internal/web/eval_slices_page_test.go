@@ -85,3 +85,33 @@ func TestEvalPageWithoutSlicesOmitsTheSection(t *testing.T) {
 		t.Errorf("an empty slice set rendered the section heading")
 	}
 }
+
+// TestLegacyRunsDoNotClaimNothingWasBlind pins the distinction between "this
+// run had every signal live" and "this run predates the column". Three runs
+// recorded before `degraded` existed measured a recommender whose idf_overlap
+// never executed, and rendering them as "none" would be a claim about a run
+// that never made it.
+func TestLegacyRunsDoNotClaimNothingWasBlind(t *testing.T) {
+	f := &fakeEvalStore{runs: []store.EvalRun{
+		{ID: 9, K: 10, Mode: "full", Degraded: "all"},
+		{ID: 2, K: 10, Mode: "full"}, // legacy: the column did not exist
+		{ID: 8, K: 10, Mode: "full", Degraded: "idf_overlap"},
+	}}
+	d := Deps{Version: "test", Eval: f}
+	rr := httptest.NewRecorder()
+	d.renderEval(rr, httptest.NewRequest(http.MethodGet, "/eval", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "not recorded") {
+		t.Errorf("a legacy run does not say its blindness was never recorded")
+	}
+	// The complete run still says "none", and the blind one names the signal.
+	if strings.Count(body, ">none<") < 1 {
+		t.Errorf("a run with every signal live does not say so")
+	}
+	if !strings.Contains(body, "idf_overlap") {
+		t.Errorf("a run with a blind signal does not name it")
+	}
+}

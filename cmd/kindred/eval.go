@@ -219,7 +219,7 @@ func runEval(ctx context.Context, args []string) error {
 		Evaluated: rep.Evaluated, Failures: rep.Failures,
 		HeldOut: rep.HeldOut, Hits: rep.Hits,
 		Recall: rep.RecallAtK, NDCG: rep.NDCGAtK, Coverage: rep.Coverage,
-		Mode: c.Mode, Degraded: strings.Join(rep.Degraded, ","),
+		Mode: c.Mode, Degraded: degradedField(rep.Degraded),
 		PoolDepth: rep.PoolDepth, PoolHits: rep.PoolHits, PoolRecall: rep.PoolRecall,
 	}); rerr != nil {
 		fmt.Fprintf(os.Stderr, "eval: could not record this run (it was still measured): %v\n", rerr)
@@ -279,6 +279,19 @@ func runEval(ctx context.Context, args []string) error {
 		fmt.Println("every registered signal contributed")
 	}
 	return nil
+}
+
+// degradedField is what goes in eval_runs.degraded.
+//
+// "all" is stored when every signal ran, so an EMPTY column keeps its one
+// honest meaning: the run predates the column and nobody can say. Storing ""
+// for both would make a legacy row render as "none blind", which is a claim
+// about a run that never made one.
+func degradedField(d []string) string {
+	if len(d) == 0 {
+		return "all"
+	}
+	return strings.Join(d, ",")
 }
 
 // sliceMinN is the smallest group worth reporting.
