@@ -29,6 +29,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -228,11 +230,36 @@ func (s *Store) seenEntityIDs(ctx context.Context, ownerKey string) ([]int64, er
 		if err := rows.Scan(&raw); err != nil {
 			return nil, err
 		}
-		var id int64
-		if _, err := fmt.Sscanf(raw, "%d", &id); err != nil || id <= 0 {
+		id, ok := EntityNumericID(raw)
+		if !ok {
 			continue
 		}
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// WorkEntityID is the form `seen_works` stores for a work.
+//
+// The prefix is not decoration: the column holds several kinds, and a bare
+// number would collide with a tag id of the same value. Every reader of the
+// table therefore has to strip it, which is why these two helpers live here
+// rather than being inlined at each call site.
+func WorkEntityID(id int64) string { return "ao3_work:" + strconv.FormatInt(id, 10) }
+
+// EntityNumericID parses "<kind>:<n>" and returns n.
+//
+// A bare number is accepted too, because rows written before the prefix existed
+// exist, and refusing them would silently ignore a reader's history. Anything
+// else is not an entity id and reports false rather than 0 — a zero would then
+// be excluded from a list as if it were a work.
+func EntityNumericID(s string) (int64, bool) {
+	if i := strings.LastIndexByte(s, ':'); i >= 0 {
+		s = s[i+1:]
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
 }

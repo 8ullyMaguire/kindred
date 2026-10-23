@@ -42,7 +42,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +49,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
 	"git.polarisocial.xyz/kindred/kindred/internal/collab"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
+	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
 
 // RelatedItem is one row of a related list.
@@ -222,7 +222,12 @@ FROM seen_works s JOIN deg d ON d.owner_key = s.owner_key
 WHERE s.entity_id <> ?
 GROUP BY s.entity_id
 ORDER BY score DESC LIMIT ?`
-	rows, err := e.Store.DB.QueryContext(ctx, q, strconv.FormatInt(id, 10), adamicCap, strconv.FormatInt(id, 10), limit)
+	// The state table stores "<kind>:<id>", so the bind value is the prefixed
+	// form. A bare number here matches nothing and the walk reports "no shared
+	// readers" for a work with thousands — measured on the live mirror before
+	// this line existed.
+	entity := store.WorkEntityID(id)
+	rows, err := e.Store.DB.QueryContext(ctx, q, entity, adamicCap, entity, limit)
 	if err != nil {
 		return err
 	}
@@ -239,7 +244,8 @@ ORDER BY score DESC LIMIT ?`
 		if err := rows.Scan(&raw, &h.score, &h.shared); err != nil {
 			return err
 		}
-		if h.id, err = strconv.ParseInt(raw, 10, 64); err != nil {
+		var ok bool
+		if h.id, ok = store.EntityNumericID(raw); !ok {
 			continue // a seen_works row with a non-work id cannot be a candidate
 		}
 		hits = append(hits, h)
@@ -528,7 +534,7 @@ func (e *Engine) coBookAuthors(ctx context.Context, byline string, limit int, re
 			rows.Close()
 			return err
 		}
-		workIDs = append(workIDs, strconv.FormatInt(id, 10))
+		workIDs = append(workIDs, store.WorkEntityID(id))
 	}
 	rows.Close()
 	if len(workIDs) == 0 {
@@ -565,7 +571,7 @@ func (e *Engine) coBookAuthors(ctx context.Context, byline string, limit int, re
 			rows.Close()
 			return err
 		}
-		if id, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if id, ok := store.EntityNumericID(raw); ok {
 			readers[id] = n
 		}
 	}
@@ -582,7 +588,7 @@ func (e *Engine) coBookAuthors(ctx context.Context, byline string, limit int, re
 
 	ids := make([]any, 0, len(readers))
 	for id := range readers {
-		ids = append(ids, strconv.FormatInt(id, 10))
+		ids = append(ids, id)
 	}
 	bylines, err := e.bylinesFor(ctx, ids)
 	if err != nil {

@@ -186,12 +186,16 @@ func TestNewSinceExcludesWhatTheReaderHasMet(t *testing.T) {
 	since := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
 
 	// Work 3 is marked read; work 2 is only marked SHOWN.
-	if err := s.MarkRead(ctx, "owner", "3"); err != nil {
+	// Written in the form the PRODUCT writes: `ao3_work:<id>`. A fixture using
+	// bare numbers was green against an exclusion that never matched a live row —
+	// CAST('ao3_work:3' AS INTEGER) is 0, so every work was "unseen" and the
+	// re-offer list looked correct on a deployment where it was inert.
+	if err := s.MarkRead(ctx, "owner", WorkEntityID(3)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB.ExecContext(ctx,
 		`INSERT INTO seen_works (owner_key, entity_id, kind, shown_at) VALUES (?,?,?,?)`,
-		"owner", "2", "ao3_work", time.Now().UTC().Format(time.RFC3339)); err != nil {
+		"owner", WorkEntityID(2), "ao3_work", time.Now().UTC().Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -214,5 +218,30 @@ func TestNewSinceExcludesWhatTheReaderHasMet(t *testing.T) {
 	if len(other) != 2 {
 		t.Fatalf("another reader sees %d works, want 2: the exclusion must be per-owner",
 			len(other))
+	}
+}
+
+// TestEntityNumericIDAcceptsBothShapes: the prefixed form is what production
+// writes and the bare form is what older rows hold; a parser that accepts only
+// one silently ignores the other's history.
+func TestEntityNumericIDAcceptsBothShapes(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want int64
+		ok   bool
+	}{
+		{"ao3_work:11623035", 11623035, true},
+		{"11623035", 11623035, true},
+		{"ao3_tag:29", 29, true},
+		{"ao3_work:", 0, false},
+		{"", 0, false},
+		{"nonsense", 0, false},
+		{"ao3_work:0", 0, false},
+		{"ao3_work:-5", 0, false},
+	} {
+		got, ok := EntityNumericID(c.in)
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("EntityNumericID(%q) = %d,%v want %d,%v", c.in, got, ok, c.want, c.ok)
+		}
 	}
 }
