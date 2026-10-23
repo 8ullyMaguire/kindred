@@ -107,6 +107,29 @@ func (s TagOverlap) Score(c rank.Candidate, seeds []rank.Candidate, _ rank.Store
 	return best, fmt.Sprintf("shares %d tags with seed %d (jaccard %.3f)", bestShared, bestSeed, best), nil
 }
 
+// NeighbourSaturation is the soft cap that puts this signal on the same
+// scale as every other one.
+//
+// The raw score below is a SUM of PMI votes, which on the live mirror runs
+// from roughly 20 to 130 — two orders of magnitude above tag_overlap,
+// quality, recency or popularity, all of which are already in [0,1]. With
+// weight 0.32 the signal therefore decided the ranking almost alone: on a real
+// request its contribution was 39.5 of a 39.7 total, and the other eleven
+// signals together were noise in the third decimal.
+//
+// That is not a property anyone chose. It is what happens when one scorer's
+// output is unbounded and the tune was written as if all of them were
+// comparable, and the consequence is that no weight change can matter — three
+// evaluations with different tunes came back byte-identical before this was
+// measured.
+//
+// The value is CALIBRATED, not derived: the observed range 20-130 maps to
+// 0.17-0.57, which leaves the top of the range spread out rather than
+// saturating. `kindred eval` is what checks it; a tune can raise or lower the
+// signal's WEIGHT, and this constant decides only how much raw evidence counts
+// as "a lot".
+const NeighbourSaturation = 100.0
+
 // Neighbourhood scores a candidate by how strongly its tags are connected
 // to the seeds' tags in the co-occurrence graph, weighted by PMI.
 //
@@ -118,6 +141,10 @@ type Neighbourhood struct {
 	SeedTags       []int32
 	TotalWorks     float64
 	NeighbourLimit int
+	// Saturation is NeighbourSaturation unless a caller overrides it. It is
+	// a field so a test can pin the shape of the curve without restating the
+	// constant, and so an unusual mirror can be calibrated without a build.
+	Saturation float64
 }
 
 func (Neighbourhood) Name() string { return "neighbourhood" }
@@ -154,7 +181,16 @@ func (s Neighbourhood) Score(c rank.Candidate, _ []rank.Candidate, _ rank.Store)
 	}
 	// Normalise by the candidate's own tag count so a work with 200 tags
 	// does not out-score a focused one purely by having more chances.
-	score := total / math.Sqrt(float64(len(c.TagIDs)))
+	raw := total / math.Sqrt(float64(len(c.TagIDs)))
+
+	// Then put it on [0,1), the scale every other signal here already uses,
+	// so the tune's weights trade off between signals rather than between
+	// orders of magnitude. See NeighbourSaturation.
+	ceil := s.Saturation
+	if ceil <= 0 {
+		ceil = NeighbourSaturation
+	}
+	score := raw / (raw + ceil)
 	return score, fmt.Sprintf("%d tags reach the seed neighbourhood; strongest is %q (pmi-weighted vote %.2f)",
 		hits, s.G.Name(bestTag), maxV), nil
 }
