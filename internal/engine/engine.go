@@ -1160,7 +1160,12 @@ func embedReserve(limit int) int {
 	if limit <= 2 {
 		return 0
 	}
-	r := (limit + 7) / 8
+	// EXPERIMENT 2026-10-23d: one quarter instead of one eighth, to be measured
+	// against run #13 (pool recall@1000 0.2113, recall@10 0.1050) before this
+	// constant is decided. The deployed pool filled 125 embed slots with only 97
+	// NEW works because 28 of its candidates were already in the tag half — so
+	// the source is not saturated and a bigger reserve can add distinct works.
+	r := (limit + 3) / 4
 	if r > limit-1 {
 		return limit - 1
 	}
