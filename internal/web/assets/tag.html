@@ -56,6 +56,49 @@
 </ul>
 {{end}}
 
+{{/* #54: the shelf in numbers. Medians first, because AO3's length and kudos
+     distributions are skewed enough that a mean describes a work nobody wrote;
+     the mean is kept beside the median and labelled so the skew is visible. */}}
+{{if .ShelfErr}}
+  <h2>This tag in numbers</h2>
+  <p class="note" data-testid="shelf-error">The statistics for this tag could not be
+  computed: {{.ShelfErr}}. The works below are unaffected.</p>
+{{else if .Shelf}}
+  <h2>This tag in numbers</h2>
+  <dl class="stats" data-testid="tag-shelf" data-works="{{.Shelf.Works}}">
+    <dt>works</dt><dd>{{commas .Shelf.Works}}</dd>
+    <dt>median length</dt><dd data-testid="median-words">{{commas .Shelf.MedianWords}} words</dd>
+    <dt>mean length</dt><dd>{{commas .Shelf.MeanWords}} words</dd>
+    <dt>median kudos</dt><dd data-testid="median-kudos">{{commas .Shelf.MedianKudos}}</dd>
+    <dt>mean kudos</dt><dd>{{commas .Shelf.MeanKudos}}</dd>
+    <dt>words in total</dt><dd>{{commas .Shelf.TotalWords}}</dd>
+    {{if .Shelf.Top.ID}}
+    <dt>most saved</dt>
+    <dd data-testid="top-work"><a href="/work/{{.Shelf.Top.ID}}">{{.Shelf.Top.Title}}</a>
+      &mdash; {{commas .Shelf.Top.Bookmarks}} bookmarks</dd>
+    {{end}}
+  </dl>
+
+  {{if .Shelf.Years}}
+  <h3>When these works were last updated</h3>
+  <p class="count">
+    Counted by <strong>update</strong> year, not publication: this mirror has no
+    first-published column, so an old fic edited last month appears under this
+    year. {{if .Shelf.Undated}}{{.Shelf.Undated}} work(s) in this tag carry no
+    date and are not in the chart.{{end}}
+  </p>
+  <table class="trend" data-testid="tag-trend">
+    {{range .Shelf.Years}}
+    <tr>
+      <th scope="row">{{.Year}}</th>
+      <td><span class="bar" style="display:inline-block;height:0.8em;background:currentColor;width:{{pct .Share}}"></span></td>
+      <td class="count">{{commas .Works}}</td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+{{end}}
+
 <h2>Works</h2>
 
 {{/* Sort and length controls. A GET form, so the result is a URL a reader

@@ -814,6 +814,16 @@ check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped
 check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
 
 echo
+echo "the tag shelf in numbers (#54)"
+# Medians, not means: a mean on a skewed tag describes a work nobody wrote. The
+# page must print both, so a reader can see the skew rather than a single number.
+check "the tag page summarises its shelf"  "$TARGET/tag/$TAG" 'data-testid="tag-shelf"'
+check "and prints a median length"         "$TARGET/tag/$TAG" 'data-testid="median-words"'
+check "and a median kudos"                 "$TARGET/tag/$TAG" 'data-testid="median-kudos"'
+check "and the trend is dated as updates"  "$TARGET/tag/$TAG" 'Counted by <strong>update</strong> year'
+status "and a tag with no works is still a 404" "$TARGET/tag/999999" 404
+
+echo
 echo "the byline, and the shelf (#66/#50)"
 if [ -n "${WORK_A:-}" ]; then
   check "the work page names its author"   "$TARGET/work/$WORK_A" 'data-testid="work-byline"'

@@ -1968,6 +1968,15 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	// the exact matches boosted among them. The three exact orders stay as
 	// choices because the blend answers a different question than "show me
 	// this tag".
+	// #54: the shelf in numbers. Best-effort: the works list is the answer to
+	// the URL, and a statistics pass that fails must not cost the reader it.
+	if shelf, serr := d.Engine.Corpus.TagShelf(ctx, id); serr != nil {
+		d.log().Warn("tag shelf stats failed", "tag", id, "err", serr)
+		page.ShelfErr = serr.Error()
+	} else {
+		page.Shelf = &shelf
+	}
+
 	page.Sort = tagSort(r.URL.Query().Get("sort"))
 	page.SortOptions = []SortOption{
 		{Value: "taste", Label: "taste match (default)"},

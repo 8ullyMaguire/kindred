@@ -383,6 +383,12 @@ type TagPage struct {
 	// VectorCentral is set when the tag sits near the corpus centroid, where
 	// "nearest tags" is a weak claim and the page says so.
 	VectorCentral bool
+	// Shelf is the tag's statistics (#54): median length and kudos, the
+	// most-saved work, and a trend by update year. Medians because AO3's
+	// distributions are skewed enough that a mean describes a work nobody has
+	// written.
+	Shelf    *corpus.TagShelf
+	ShelfErr string
 
 	// Sort is the order the works are listed in, as one of "kudos",
 	// "recent", "words". It is on the page so the control can render the
