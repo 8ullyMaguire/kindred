@@ -694,7 +694,7 @@ func (s *Server) handleSimilarTagsEmbed(w http.ResponseWriter, r *http.Request, 
 		}
 		minSim = f
 	}
-	near, ok, err := s.Engine.TagsNear(r.Context(), int32(id), limit, minSim)
+	nb, ok, err := s.Engine.TagsNear(r.Context(), int32(id), limit, minSim)
 	if !ok {
 		// Same contract as the co-occurrence route: 503 with the reason, not
 		// an empty 200 that reads as "nothing is near it".
@@ -704,16 +704,21 @@ func (s *Server) handleSimilarTagsEmbed(w http.ResponseWriter, r *http.Request, 
 		})
 		return
 	}
-	if err != nil && len(near) == 0 {
+	if err != nil && len(nb.Near) == 0 {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	ids := make([]int64, 0, len(near))
-	for _, n := range near {
+	// The query tag's own name is resolved with the neighbours': asking the
+	// corpus twice would let the two lists disagree, and the first version
+	// resolved only the neighbours, so "tag" came back empty and a reader had
+	// an id where a name belonged.
+	ids := make([]int64, 0, len(nb.Near)+1)
+	ids = append(ids, id)
+	for _, n := range nb.Near {
 		ids = append(ids, int64(n.ID))
 	}
 	names := map[int64]string{}
-	if s.Engine.Corpus != nil && len(ids) > 0 {
+	if s.Engine.Corpus != nil {
 		if m, nerr := s.Engine.Corpus.TagNames(r.Context(), ids); nerr == nil {
 			names = m
 		} else {
@@ -725,17 +730,26 @@ func (s *Server) handleSimilarTagsEmbed(w http.ResponseWriter, r *http.Request, 
 		Name       string  `json:"name"`
 		Similarity float64 `json:"similarity"`
 	}
-	out := make([]row, 0, len(near))
-	for _, n := range near {
+	out := make([]row, 0, len(nb.Near))
+	for _, n := range nb.Near {
 		out = append(out, row{ID: n.ID, Name: names[int64(n.ID)], Similarity: n.Sim})
 	}
 	body := map[string]any{
-		"tag":       names[id],
-		"tag_id":    id,
-		"space":     "embed",
-		"similar":   out,
-		"returned":  len(out),
-		"requested": limit,
+		"tag":        names[id],
+		"tag_id":     id,
+		"space":      "embed",
+		"similar":    out,
+		"returned":   len(out),
+		"requested":  limit,
+		"center_sim": nb.CenterSim,
+	}
+	// When the tag sits near the middle of the space, "nearest" is a weak
+	// claim and the caller is told rather than left to trust eight tags from
+	// four unrelated fandoms.
+	if nb.CenterSim >= engine.CenterSimFloor {
+		body["note"] = "this tag is used across many unrelated fandoms, so it sits " +
+			"near the centre of the embedding space; its nearest tags describe the " +
+			"centre rather than a meaning"
 	}
 	// A partial index answers with its rows AND says what it could not read.
 	if err != nil {

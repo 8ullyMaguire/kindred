@@ -1987,24 +1987,29 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	// PMI list above: not "what co-occurs" but "what sits near it". Reported
 	// only when the index answered, so a deployment with no embeddings shows
 	// no section rather than an empty one that reads as "nothing is near".
-	if near, ok, err := d.Engine.TagsNear(ctx, int32(id), 12, 0); err != nil {
+	if nb, ok, err := d.Engine.TagsNear(ctx, int32(id), 12, 0); err != nil {
 		// A partial index still lists what it read; the log carries the rest.
 		d.log().Warn("tag-page embedding neighbourhood is incomplete", "tag", id, "err", err)
 		_ = ok
-	} else if ok && len(near) > 0 {
-		ids := make([]int64, 0, len(near))
-		for _, n := range near {
+	} else if ok && len(nb.Near) > 0 {
+		ids := make([]int64, 0, len(nb.Near))
+		for _, n := range nb.Near {
 			ids = append(ids, int64(n.ID))
 		}
 		names, nerr := d.Engine.Corpus.TagNames(ctx, ids)
 		if nerr != nil {
 			d.log().Warn("tag names for the embedding neighbourhood", "tag", id, "err", nerr)
 		}
-		for _, n := range near {
+		for _, n := range nb.Near {
 			page.VectorNeighbours = append(page.VectorNeighbours, EmbedNeighbour{
 				ID: int64(n.ID), Name: names[int64(n.ID)], Sim: n.Sim,
 			})
 		}
+		// A tag used across many unrelated fandoms sits near the middle of the
+		// space, where "nearest" describes the middle rather than a meaning.
+		// The section says so instead of presenting eight character tags from
+		// four fandoms as a neighbourhood.
+		page.VectorCentral = nb.CenterSim >= engine.CenterSimFloor
 	}
 	d.page(w, "tag.html", page, http.StatusOK)
 }

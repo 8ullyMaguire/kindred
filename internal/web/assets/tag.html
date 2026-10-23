@@ -36,6 +36,13 @@
   about appearing together. It is the list that can still answer for a tag
   too rare to co-occur with anything above.
 </p>
+{{if .VectorCentral}}
+<p class="note" data-central="true">
+  This tag is used across many unrelated fandoms, so it sits near the middle
+  of the embedding space &mdash; the eight nearest tags describe that middle
+  rather than a meaning. A character or trope tag gives a sharper answer.
+</p>
+{{end}}
 <ul class="tags">
   {{range .VectorNeighbours}}
   <li><a class="tag" href="/tag/{{.ID}}">{{.Name}}</a>

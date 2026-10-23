@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -239,5 +240,62 @@ func TestSimilarTagsMinSimIsValidated(t *testing.T) {
 	if body.Returned != 0 {
 		t.Fatalf("min_sim=0.95 returned %d rows, and the only other tag is cosine "+
 			"0.8 away: the floor is not being applied", body.Returned)
+	}
+}
+
+// TestSimilarTagsEmbedNamesTheQueryTag: the first version resolved only the
+// NEIGHBOURS, so "tag" came back empty and the caller had an id where a name
+// belonged. Found by curling the deployed endpoint, not by any test here.
+func TestSimilarTagsEmbedNamesTheQueryTag(t *testing.T) {
+	ts, s := newTestServerFull(t)
+	putEmbeddings(t, s.DB, 2, map[int64][]float32{1: {1, 0}, 2: {0.9, 0.1}})
+	res, err := http.Get(ts.URL + "/api/v1/tags/1/similar?space=embed&n=3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var body struct {
+		Tag string `json:"tag"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Tag == "" {
+		t.Fatal("the response names no query tag: a reader cannot tell which tag " +
+			"the neighbourhood belongs to")
+	}
+}
+
+// TestSimilarTagsEmbedSaysWhenTheTagIsTooCentral: a tag used across unrelated
+// fandoms sits near the centroid, where "nearest" is a weak claim. The fixture
+// makes one tag nearly the mean and one its opposite, so the flag has to
+// discriminate rather than always fire.
+func TestSimilarTagsEmbedSaysWhenTheTagIsTooCentral(t *testing.T) {
+	ts, s := newTestServerFull(t)
+	// Mean of these four is (0.5, 0): tag 1 is exactly the mean, tag 4 is
+	// exactly opposite it.
+	putEmbeddings(t, s.DB, 2, map[int64][]float32{
+		1: {1, 0}, 2: {1, 0}, 3: {1, 0}, 4: {-1, 0},
+	})
+
+	for _, tc := range []struct {
+		id       int
+		wantNote bool
+	}{{1, true}, {4, false}} {
+		res, err := http.Get(ts.URL + "/api/v1/tags/" + strconv.Itoa(tc.id) + "/similar?space=embed&n=2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+			res.Body.Close()
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		_, hasNote := body["note"]
+		if hasNote != tc.wantNote {
+			t.Fatalf("tag %d: note=%v (center_sim=%v), want %v", tc.id, hasNote,
+				body["center_sim"], tc.wantNote)
+		}
 	}
 }

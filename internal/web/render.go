@@ -240,6 +240,9 @@ type TagPage struct {
 	// vectors are nearest this tag's. Empty when the deployment holds no
 	// embeddings, which is why the template tests the slice and not a flag.
 	VectorNeighbours []EmbedNeighbour
+	// VectorCentral is set when the tag sits near the corpus centroid, where
+	// "nearest tags" is a weak claim and the page says so.
+	VectorCentral bool
 
 	// Sort is the order the works are listed in, as one of "kudos",
 	// "recent", "words". It is on the page so the control can render the
