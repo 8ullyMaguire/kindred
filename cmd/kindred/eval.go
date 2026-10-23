@@ -90,6 +90,7 @@ func runEval(ctx context.Context, args []string) error {
 		pool   = fs.Int("pool", 0, "candidate pool size (0 = the mode's default)")
 		lite   = fs.Bool("lite", c.Mode == "lite", "skip the embedding signal (set from --mode lite)")
 		tune   = fs.String("tune", "", "weight tune to evaluate (see `kindred tune --list`; empty = the built-in default)")
+		probe  = fs.Int("pool-depth", 0, "also measure candidate-generation recall at this depth (0 = off)")
 	)
 	c, err := finishConfig(c, fs, args)
 	if err != nil {
@@ -194,7 +195,11 @@ func runEval(ctx context.Context, args []string) error {
 		fmt.Printf("evaluating tune %q\n", *tune)
 	}
 	rec := engineRecommender{eng: eng, tune: *tune}
-	rep, err := eval.Run(ctx, rec, split, *n)
+	var runOpts []eval.Option
+	if *probe > 0 {
+		runOpts = append(runOpts, eval.WithPoolDepth(*probe))
+	}
+	rep, err := eval.Run(ctx, rec, split, *n, runOpts...)
 	if err != nil {
 		return err
 	}
@@ -215,6 +220,7 @@ func runEval(ctx context.Context, args []string) error {
 		HeldOut: rep.HeldOut, Hits: rep.Hits,
 		Recall: rep.RecallAtK, NDCG: rep.NDCGAtK, Coverage: rep.Coverage,
 		Mode: c.Mode, Degraded: strings.Join(rep.Degraded, ","),
+		PoolDepth: rep.PoolDepth, PoolHits: rep.PoolHits, PoolRecall: rep.PoolRecall,
 	}); rerr != nil {
 		fmt.Fprintf(os.Stderr, "eval: could not record this run (it was still measured): %v\n", rerr)
 	} else {
@@ -259,6 +265,13 @@ func runEval(ctx context.Context, args []string) error {
 	// wrong. "recall 0.0067" means one thing with every signal live and
 	// another with two of them blind, and the two printed identically until
 	// this line existed.
+	// The ceiling and the number inside it. When pool recall is near zero the
+	// recommender is failing to CONSIDER the right works, and no weight change
+	// can fix that; the two facts print together so they are read together.
+	if rep.PoolDepth > *n {
+		fmt.Printf("pool recall@%d %.4f -- the ceiling: a work the candidate set never held cannot be ranked\n",
+			rep.PoolDepth, rep.PoolRecall)
+	}
 	if len(rep.Degraded) > 0 {
 		fmt.Printf("signals that never ran: %s -- this run is not production's ranking\n",
 			strings.Join(rep.Degraded, ", "))

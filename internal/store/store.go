@@ -725,7 +725,15 @@ CREATE TABLE IF NOT EXISTS eval_runs (
 	   different recommender from the one in production, and the number alone
 	   cannot say so -- three runs on 2026-10-23 came back byte-identical
 	   because the evaluator had no document-frequency table. */
-	degraded    TEXT NOT NULL DEFAULT ''
+	degraded    TEXT NOT NULL DEFAULT '',
+	/* The candidate-generation measurement. pool_recall is the share of
+	   held-out works that were IN the candidate set at pool_depth; recall_at_k
+	   can never exceed it, so when pool_recall is small the ceiling is the
+	   candidate set and no re-weighting can help. Zero means the run did not
+	   ask for it. */
+	pool_depth  INTEGER NOT NULL DEFAULT 0,
+	pool_hits   INTEGER NOT NULL DEFAULT 0,
+	pool_recall REAL NOT NULL DEFAULT 0
 );
 
 /* Works a reader has already been shown or has marked as read.
@@ -905,6 +913,27 @@ func (s *Store) migrate(ctx context.Context) error {
 		if _, err := s.DB.ExecContext(ctx,
 			`ALTER TABLE eval_runs ADD COLUMN degraded TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("migrate eval_runs.degraded: %w", err)
+		}
+	}
+
+	// eval_runs gained the candidate-generation columns, for the same reason
+	// it gained `degraded`: a recall number whose ceiling is the candidate set
+	// is not comparable with one whose ceiling is the ranking, and only these
+	// columns say which it is.
+	for _, col := range []struct{ name, decl string }{
+		{"pool_depth", "INTEGER NOT NULL DEFAULT 0"},
+		{"pool_hits", "INTEGER NOT NULL DEFAULT 0"},
+		{"pool_recall", "REAL NOT NULL DEFAULT 0"},
+	} {
+		has, err = s.columnExists(ctx, "eval_runs", col.name)
+		if err != nil {
+			return err
+		}
+		if !has {
+			if _, err := s.DB.ExecContext(ctx,
+				`ALTER TABLE eval_runs ADD COLUMN `+col.name+` `+col.decl); err != nil {
+				return fmt.Errorf("migrate eval_runs.%s: %w", col.name, err)
+			}
 		}
 	}
 

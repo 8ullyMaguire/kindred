@@ -199,6 +199,14 @@ type Report struct {
 	// cover most readers, or the reverse, and the two are different
 	// products.
 	Coverage float64 `json:"coverage"`
+	// PoolDepth is how many candidates the recommender was asked for, and
+	// PoolRecall is the mean per-user share of held-out works that were in
+	// that candidate set at all. RecallAtK can never exceed it: a work the
+	// pool never held cannot be ranked. When PoolRecall is near zero the
+	// ceiling is candidate generation, not the weights.
+	PoolDepth  int     `json:"pool_depth,omitempty"`
+	PoolHits   int     `json:"pool_hits,omitempty"`
+	PoolRecall float64 `json:"pool_recall,omitempty"`
 	// Degraded names the signals that skipped for every candidate, recorded
 	// from the first successful request. It is filled by the caller (the
 	// recommender knows its own meta; this package does not import the
@@ -222,6 +230,33 @@ type Report struct {
 // are grouped from these rows — deriving them from the per-user sums after the
 // fact is not possible, and recomputing the ranking per group would measure
 // the recommender several times and call it one run.
+// Option configures a run.
+type Option func(*config)
+
+type config struct {
+	poolDepth int
+}
+
+// WithPoolDepth asks for the candidate-generation measurement as well as the
+// ranking one.
+//
+// It is the difference between two very different failures. A recommender that
+// puts the right work at position 40 has a ranking problem; one whose candidate
+// pool never contained the work has a candidate problem, and no amount of
+// re-weighting will fix it. Held-out recall at depth k cannot tell them apart,
+// and on this corpus that distinction decides what to work on next.
+//
+// The recommendation is asked for poolDepth ids and the FIRST k are scored as
+// usual, so one call produces both numbers and the pool number is an upper
+// bound on the ranking number by construction.
+func WithPoolDepth(d int) Option {
+	return func(c *config) {
+		if d > c.poolDepth {
+			c.poolDepth = d
+		}
+	}
+}
+
 type Placement struct {
 	// Work is the held-out work's id.
 	Work int64 `json:"work"`
@@ -298,9 +333,19 @@ func ByGroup(placements []Placement, axis string, minN int, key func(work int64)
 // mirror must not throw away the other hundred readers' measurements -- but
 // silently skipping it would make a broken deployment look like a clean
 // evaluation.
-func Run(ctx context.Context, rec Recommender, split Split, k int) (Report, error) {
+func Run(ctx context.Context, rec Recommender, split Split, k int, opts ...Option) (Report, error) {
 	if k <= 0 {
 		k = DefaultK
+	}
+	var cfg config
+	for _, o := range opts {
+		o(&cfg)
+	}
+	// The pool probe is never shallower than k: asking for fewer ids than the
+	// ranking depth would make the pool number meaningless.
+	depth := k
+	if cfg.poolDepth > depth {
+		depth = cfg.poolDepth
 	}
 	rep := Report{K: k, Users: split.Users, Bookmarks: split.Bookmarks, TooFew: split.TooFew}
 
@@ -313,7 +358,7 @@ func Run(ctx context.Context, rec Recommender, split Split, k int) (Report, erro
 	}
 	sort.Slice(users, func(i, j int) bool { return users[i] < users[j] })
 
-	var recallSum, ndcgSum float64
+	var recallSum, ndcgSum, poolSum float64
 	for _, user := range users {
 		if err := ctx.Err(); err != nil {
 			return rep, err
@@ -323,7 +368,7 @@ func Run(ctx context.Context, rec Recommender, split Split, k int) (Report, erro
 		if len(test) == 0 || len(train) == 0 {
 			continue
 		}
-		recs, err := rec.Recommend(ctx, train, k)
+		recs, err := rec.Recommend(ctx, train, depth)
 		if err != nil {
 			rep.Failures++
 			if len(rep.Errors) < 5 {
@@ -339,11 +384,25 @@ func Run(ctx context.Context, rec Recommender, split Split, k int) (Report, erro
 			wanted[id] = true
 		}
 		hits := 0
+		poolHits := 0
 		dcg := 0.0
 		// The first occurrence of a work is the one that counts. A
 		// recommender returning the same id twice must not be paid twice.
 		seen := make(map[int64]bool, len(recs))
 		rankOf := make(map[int64]int, len(recs))
+		// The pool count walks the WHOLE returned list, the ranking count only
+		// the first k. Counting pool hits as ranking hits is the mistake this
+		// split exists to prevent.
+		poolSeen := make(map[int64]bool, len(recs))
+		for _, id := range recs {
+			if poolSeen[id] {
+				continue
+			}
+			poolSeen[id] = true
+			if wanted[id] {
+				poolHits++
+			}
+		}
 		for i, id := range recs {
 			if i >= k {
 				break
@@ -366,13 +425,17 @@ func Run(ctx context.Context, rec Recommender, split Split, k int) (Report, erro
 			rep.Placements = append(rep.Placements, Placement{Work: id, Rank: rankOf[id]})
 		}
 		rep.Hits += hits
+		rep.PoolHits += poolHits
+		poolSum += float64(poolHits) / float64(len(test))
 		recallSum += float64(hits) / float64(len(test))
 		ndcgSum += dcg / idealDCG(len(test), k)
 		if hits > 0 {
 			rep.Coverage++
 		}
 	}
+	rep.PoolDepth = depth
 	if rep.Evaluated > 0 {
+		rep.PoolRecall = poolSum / float64(rep.Evaluated)
 		rep.RecallAtK = recallSum / float64(rep.Evaluated)
 		rep.NDCGAtK = ndcgSum / float64(rep.Evaluated)
 		rep.Coverage /= float64(rep.Evaluated)

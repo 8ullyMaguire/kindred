@@ -32,7 +32,7 @@
         <th>Run</th><th>When</th><th class="num">k</th><th>Mode</th>
         <th class="num">Readers</th><th class="num">Evaluated</th>
         <th class="num">Recall</th><th class="num">NDCG</th><th class="num">Coverage</th>
-        <th>Signals blind</th>
+        <th class="num">Pool recall</th><th>Signals blind</th>
       </tr>
     </thead>
     <tbody>
@@ -47,12 +47,17 @@
           <td class="num">{{printf "%.4f" .Recall}}</td>
           <td class="num">{{printf "%.4f" .NDCG}}</td>
           <td class="num">{{printf "%.4f" .Coverage}}</td>
+          <td class="num" data-testid="eval-pool">{{if .PoolDepth}}{{printf "%.4f" .PoolRecall}} @{{.PoolDepth}}{{else}}—{{end}}</td>
           <td data-testid="eval-degraded">{{if .Degraded}}{{.Degraded}}{{else}}none{{end}}</td>
         </tr>
       {{end}}
     </tbody>
   </table>
   <p class="hint">
+    <strong>Pool recall</strong> is the share of held-out works that were in
+    the candidate set at all, at the depth shown. Recall above can never exceed
+    it: when pool recall is small the ceiling is candidate generation, not the
+    weights, and re-tuning cannot help.
     <strong>Signals blind</strong> names the signals that skipped for every
     candidate in that run. A run with <code>idf_overlap</code> there measured a
     different recommender from the one answering requests, so its recall is not

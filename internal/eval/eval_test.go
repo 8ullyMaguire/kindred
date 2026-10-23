@@ -268,3 +268,78 @@ func TestByGroupCountsAWorkInEveryGroupAndDropsSmallOnes(t *testing.T) {
 		}
 	}
 }
+
+// TestPoolRecallCountsTheWholeListAndRecallCountsOnlyK is the distinction the
+// pool probe exists for. A work at position 60 is IN the candidate set and
+// NOT in the top ten; reporting it as a ranking hit would make a pool problem
+// look like a ranking problem, and the two call for different work.
+func TestPoolRecallCountsTheWholeListAndRecallCountsOnlyK(t *testing.T) {
+	// One reader, four held-out works. The recommender returns 3 of them: one
+	// at position 2 (inside k=5) and two at positions 7 and 9 (outside k but
+	// inside a pool of 10).
+	split := Split{
+		Users:     1,
+		Bookmarks: 9,
+		Train:     map[int64][]int64{1: {100, 101, 102, 103, 104}},
+		Test:      map[int64][]int64{1: {1, 2, 3, 4}},
+	}
+	rec := &fakeRec{ids: []int64{90, 2, 91, 92, 93, 94, 1, 95, 3, 96}}
+
+	rep, err := Run(context.Background(), rec, split, 5, WithPoolDepth(10))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rep.Hits != 1 {
+		t.Errorf("hits@5 = %d, want 1 (only work 2 is inside the top 5)", rep.Hits)
+	}
+	if rep.PoolHits != 3 {
+		t.Errorf("pool hits = %d, want 3 (works 2, 1 and 3 are in the list)", rep.PoolHits)
+	}
+	if math.Abs(rep.PoolRecall-0.75) > 1e-9 {
+		t.Errorf("pool recall = %v, want 0.75 (3 of 4 held-out works present)", rep.PoolRecall)
+	}
+	if rep.PoolDepth != 10 {
+		t.Errorf("pool depth = %d, want 10", rep.PoolDepth)
+	}
+	if got := rec.asked; got != 10 {
+		t.Errorf("asked the recommender for %d ids, want 10 (one call for both numbers)", got)
+	}
+	// Recall@5 stays a share of the four held-out works: 1/4.
+	if math.Abs(rep.RecallAtK-0.25) > 1e-9 {
+		t.Errorf("recall@5 = %v, want 0.25", rep.RecallAtK)
+	}
+}
+
+// TestPoolProbeIsNeverShallowerThanK pins the degenerate configuration: asking
+// for a pool of 3 while ranking at 10 would report a pool recall that cannot
+// bound the ranking recall.
+func TestPoolProbeIsNeverShallowerThanK(t *testing.T) {
+	split := Split{
+		Users: 1, Bookmarks: 2,
+		Train: map[int64][]int64{1: {100, 101}},
+		Test:  map[int64][]int64{1: {1}},
+	}
+	rec := &fakeRec{ids: []int64{90, 91, 1}}
+	rep, err := Run(context.Background(), rec, split, 10, WithPoolDepth(3))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rep.PoolDepth != 10 {
+		t.Errorf("pool depth = %d, want 10 (never below k)", rep.PoolDepth)
+	}
+}
+
+// fakeRec returns a fixed list and records the depth it was asked for.
+type fakeRec struct {
+	ids   []int64
+	asked int
+}
+
+func (r *fakeRec) Recommend(_ context.Context, _ []int64, n int) ([]int64, error) {
+	r.asked = n
+	out := r.ids
+	if len(out) > n {
+		out = out[:n]
+	}
+	return out, nil
+}

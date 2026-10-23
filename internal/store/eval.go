@@ -31,6 +31,13 @@ type EvalRun struct {
 	Recall   float64 `json:"recall_at_k"`
 	NDCG     float64 `json:"ndcg_at_k"`
 	Coverage float64 `json:"coverage"`
+	// PoolDepth, PoolHits and PoolRecall describe the candidate set: how many
+	// works the recommender was asked for, how many held-out works were in
+	// that list, and the mean per-user share. Zero depth means the run did not
+	// measure it.
+	PoolDepth  int     `json:"pool_depth,omitempty"`
+	PoolHits   int     `json:"pool_hits,omitempty"`
+	PoolRecall float64 `json:"pool_recall,omitempty"`
 	// Degraded names the signals that skipped for every candidate in this
 	// run, comma separated. A run with idf_overlap in this list measured a
 	// different recommender from the one serving requests, and the recall
@@ -50,10 +57,12 @@ func (s *Store) RecordEvalRun(ctx context.Context, r EvalRun) (int64, error) {
 	res, err := s.DB.ExecContext(ctx, `
 		INSERT INTO eval_runs
 			(k, readers, bookmarks, evaluated, failures, held_out, hits,
-			 recall_at_k, ndcg_at_k, coverage, mode, degraded)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 recall_at_k, ndcg_at_k, coverage, mode, degraded,
+			 pool_depth, pool_hits, pool_recall)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.K, r.Readers, r.Bookmarks, r.Evaluated, r.Failures, r.HeldOut, r.Hits,
-		r.Recall, r.NDCG, r.Coverage, r.Mode, r.Degraded)
+		r.Recall, r.NDCG, r.Coverage, r.Mode, r.Degraded,
+		r.PoolDepth, r.PoolHits, r.PoolRecall)
 	if err != nil {
 		return 0, fmt.Errorf("record eval run: %w", err)
 	}
@@ -74,7 +83,8 @@ func (s *Store) EvalRuns(ctx context.Context, limit int) ([]EvalRun, error) {
 	}
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT id, ran_at, k, readers, bookmarks, evaluated, failures,
-		       held_out, hits, recall_at_k, ndcg_at_k, coverage, mode, degraded
+		       held_out, hits, recall_at_k, ndcg_at_k, coverage, mode, degraded,
+		       pool_depth, pool_hits, pool_recall
 		  FROM eval_runs
 		 ORDER BY id DESC
 		 LIMIT ?`, limit)
@@ -88,7 +98,8 @@ func (s *Store) EvalRuns(ctx context.Context, limit int) ([]EvalRun, error) {
 		var r EvalRun
 		if err := rows.Scan(&r.ID, &r.RanAt, &r.K, &r.Readers, &r.Bookmarks,
 			&r.Evaluated, &r.Failures, &r.HeldOut, &r.Hits,
-			&r.Recall, &r.NDCG, &r.Coverage, &r.Mode, &r.Degraded); err != nil {
+			&r.Recall, &r.NDCG, &r.Coverage, &r.Mode, &r.Degraded,
+			&r.PoolDepth, &r.PoolHits, &r.PoolRecall); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
