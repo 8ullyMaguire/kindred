@@ -35,7 +35,7 @@ Four statuses:
 |---|---|---|---|
 | 31 | Tag trend detection (90-day vs corpus average) | OPEN | `corpusquery` has four runners — `FandomRanking`, `Underrated`, `TagNeighbours`, `Surprise` — and none compares time windows; `/eval` has no time slice. |
 | 32 | Completion-aware ranking | PARTIAL | Completion is a tri-state **filter** (`engine.Request.Complete`: `CompleteAny`/`CompleteOnly`/`CompleteWIP`) and a tag-page sort; no tune carries a completion weight. |
-| 33 | Multi-seed intersection scoring | OPEN | `rank.Score` sums per-signal values, and each signal scores against the **best** seed (`signal.go`: `"shares %d tags with seed %d"`), so matching 3/3 scores the same as 1/3 when the best seed overlaps equally. |
+| 33 | Multi-seed intersection scoring | **BUILT** | `signal.SeedAgreement`: IDF-weighted coverage of each seed, averaged over seeds INCLUDING zeros, so a perfect match on 1 of 4 seeds scores 0.25 and partial matches on all 4 score 0.625. Skips (and names itself in `meta.degraded`) with fewer than two usable seeds, because one seed is `idf_overlap` under a second name. Weight 0.10, and the ablation is a flag (`kindred eval --tune ablate_no_agreement`). |
 | 34 | "Works this tag needs" gap analysis | OPEN | No writer-facing surface, and no query diffs a tag's neighbours against its own co-occurrence. |
 | 35 | Author-author co-readership | OPEN | `/api/v1/authors/similar` is **IDF-weighted tag-profile overlap** (`engine/authors.go`), not a co-bookmark matrix aggregated to authors. |
 | 36 | Session taste vector export/import | OPEN | No `/api/v1/taste`; session taste is derived per request (`signal/session_taste.go`) and never serialised. |
@@ -108,15 +108,21 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 8 | 46, 56, 57, 63, 64, 67, 70, 71 |
+| BUILT | 9 | 33, 46, 56, 57, 63, 64, 67, 70, 71 |
 | PARTIAL | 12 | 32, 38, 41, 42, 45, 49, 50, 54, 66, 72, 79, 89 |
-| OPEN | 46 | 31, 33, 34, 35, 36, 37, 39, 40, 43, 44, 47, 48, 52, 53, 55, 58, 59, 60, 61, 62, 65, 68, 69, 73, 74, 75, 76, 77, 78, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 45 | 31, 34, 35, 36, 37, 39, 40, 43, 44, 47, 48, 52, 53, 55, 58, 59, 60, 61, 62, 65, 68, 69, 73, 74, 75, 76, 77, 78, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
 open of 30), the whole list stood at 22 built, 13 partial, 61 open, 4 without a premise.
-Four of the open ones (46, 64, 67, 71) shipped on 2026-10-23, so the live total
-is **26 built, 13 partial, 57 open, 4 without a premise** — 100 accounted for.
+Five of the open ones (33, 46, 64, 67, 71) shipped on 2026-10-23, so the live
+total is **27 built, 13 partial, 56 open, 4 without a premise** — 100 accounted
+for. The measurement that matters more than the count: **pool recall@1000 is
+0.0284** (run #8), i.e. even a perfect ranking of the 1000 candidates could
+find at most 2.8% of held-out works, and the current recall@10 of 0.0056 is a
+fifth of that ceiling. The remaining ideas are worth less than candidate
+generation, and #11 (embeddings over the whole corpus) is the lever with the
+most headroom.
 
 ## What the audit changed about the group story
 

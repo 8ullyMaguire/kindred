@@ -518,6 +518,51 @@ reports degraded only for a seed work with no co-bookmark neighbours — the
 index covers 9,365 of 112,937 works. Worth stating because the three appear
 together in `meta.degraded` and read like three broken signals.
 
+## Session 2026-10-23 (second batch): the weights were never the problem
+
+Four units, each one forced by the previous measurement.
+
+- [x] **#33 seed_agreement.** Every tag signal scored against the BEST seed.
+      With one seed that is the only sensible reading; with the twenty that the
+      evaluator passes, a work hitting one of a reader's fandoms ranked beside
+      one hitting most of them. The new signal averages IDF-weighted coverage
+      over seeds INCLUDING zeros (perfect match on 1 of 4 = 0.25; partial on all
+      4 = 0.625) and refuses to run on fewer than two usable seeds.
+- [x] **The evaluator was blind.** Five runs came back byte-identical because
+      `kindred eval` built its engine without the document-frequency table, so
+      `idf_overlap` and `seed_agreement` skipped for every candidate — the
+      evaluator had never measured the recommender that serves requests. Fixed,
+      plus `eval_runs.degraded` (migrated in place) and a `--tune` flag so an
+      ablation is a flag rather than a rebuild.
+- [x] **Neighbourhood was 100× out of scale.** A live request's evidence:
+      `neighbourhood value 123.431 weight 0.32 → contributes 39.5` while
+      tag_overlap/popularity/quality contributed 0.05 each. One unbounded
+      signal decided the ranking, which is why no tune could matter. It now
+      saturates into [0,1) (`raw/(raw+100)`, calibrated to the observed 20-130
+      range). **This is why the weights were inert, and it was invisible until
+      a real request's evidence was read.**
+- [x] **Pool recall, the number that reframes the roadmap.** `--pool-depth`
+      asks for 1000 ids and counts how many held-out works are in that list at
+      all. Run #8: **recall@10 0.0056, pool recall@1000 0.0284**. Two thirds of
+      the remaining loss is candidate generation, not ranking — a perfect
+      re-rank of the current pool at most quintuples recall, and #11
+      (embeddings as an enumeration source over the whole corpus) is the lever.
+
+Numbers, all on the same 38 readers / 495 held-out works:
+
+| run | change | recall@10 | ndcg@10 | coverage |
+|-----|--------|-----------|---------|----------|
+| 2-3 | baseline (IDF signals blind) | 0.0067 | 0.0096 | 0.0789 |
+| 4 | control tune, seed_agreement weight 0 | 0.0067 | 0.0096 | 0.0789 |
+| 6 | neighbourhood weight 0 (ordering test) | 0.0035 | 0.0060 | 0.0526 |
+| 7-8 | neighbourhood saturated to [0,1) | 0.0056 | 0.0101 | 0.0789 |
+
+Two lessons worth keeping. **An experiment whose instrument is blind reports a
+null result**, and three identical runs read as "the new signal does nothing"
+when the truth was "two signals never ran". And **ordering does matter**
+(run #6 proves it) — but it matters five times less than candidate generation,
+which no amount of ranking work can fix.
+
 ## Standing caveat
 
 `complete=true` means COMPLETE ONLY, not "no filter". It reads like a vacuous
