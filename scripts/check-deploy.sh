@@ -819,7 +819,10 @@ if [ -n "${WORK_A:-}" ]; then
   check "the work page names its author"   "$TARGET/work/$WORK_A" 'data-testid="work-byline"'
   # A byline that renders but does not link is the defect the row names: the
   # author-similarity endpoint needs a way IN from a work.
-  check "and links it to the shelf"        "$TARGET/work/$WORK_A" '/author?q='
+  # Pattern has no regex metacharacter on purpose: `?` in an ERE makes the
+  # preceding character optional, so a check written as /author?q= can never
+  # match — it reported a working link as missing on the first deploy.
+  check "and links it to the shelf"        "$TARGET/work/$WORK_A" 'href="/author'
   check "and names authors who write alike" "$TARGET/work/$WORK_A" 'data-testid="work-authors"|work-authors-error'
   AUTHOR=""
   if [ -r "$CORPUS_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
