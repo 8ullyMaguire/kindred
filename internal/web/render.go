@@ -605,6 +605,17 @@ type EvalPage struct {
 	// Arms and Pairs are the interleaving results.
 	Arms  []store.InterleaveArmStat
 	Pairs []store.InterleavePairStat
+	// Slices is the newest run's per-group breakdown, weakest first. Two
+	// axes, because a fandom is what a reader recognises and a tag is what
+	// the recommender actually scores with.
+	FandomSlices []store.EvalSlice
+	TagSlices    []store.EvalSlice
+	// SliceRunID names whose run the slices belong to, so the section cannot
+	// be read as a summary of the whole table above.
+	SliceRunID int64
+	// SliceMinN is the floor the page states, so the reader can tell a group
+	// that is absent from a group with no failures.
+	SliceMinN int
 	// Coverage: what the numbers above were measured across.
 	Works    int64
 	Tags     int64

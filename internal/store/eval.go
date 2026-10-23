@@ -90,3 +90,81 @@ func (s *Store) EvalRuns(ctx context.Context, limit int) ([]EvalRun, error) {
 	}
 	return out, rows.Err()
 }
+
+// EvalSlice is one group's share of a run's held-out works.
+type EvalSlice struct {
+	Axis    string  `json:"axis"`
+	Name    string  `json:"name"`
+	N       int     `json:"n"`
+	Hits    int     `json:"hits"`
+	HitRate float64 `json:"hit_rate"`
+}
+
+// RecordEvalSlices stores a run's per-group breakdown.
+//
+// It replaces whatever the run had before rather than appending: a run is one
+// measurement, and a second call for the same run is a correction, not a
+// second measurement. Recording slices is separate from recording the run
+// because the run is the thing worth keeping even if the slicing fails.
+func (s *Store) RecordEvalSlices(ctx context.Context, runID int64, slices []EvalSlice) error {
+	if s == nil || s.DB == nil {
+		return fmt.Errorf("no store")
+	}
+	if runID <= 0 {
+		return fmt.Errorf("eval slices: run id %d is not a record", runID)
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("eval slices: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM eval_slices WHERE run_id = ?`, runID); err != nil {
+		return fmt.Errorf("eval slices: clear run %d: %w", runID, err)
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO eval_slices (run_id, axis, name, n, hits)
+		VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("eval slices: %w", err)
+	}
+	defer stmt.Close()
+	for _, sl := range slices {
+		if sl.Axis == "" || sl.Name == "" {
+			return fmt.Errorf("eval slice %+v: axis and name are required", sl)
+		}
+		if _, err := stmt.ExecContext(ctx, runID, sl.Axis, sl.Name, sl.N, sl.Hits); err != nil {
+			return fmt.Errorf("eval slice %s/%s: %w", sl.Axis, sl.Name, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// EvalSlices returns a run's per-group breakdown, by axis then hit rate
+// descending, so the weakest groups of a fandom axis print last and the page
+// can reverse them without re-sorting.
+func (s *Store) EvalSlices(ctx context.Context, runID int64) ([]EvalSlice, error) {
+	if s == nil || s.DB == nil {
+		return nil, fmt.Errorf("no store")
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT axis, name, n, hits
+		  FROM eval_slices
+		 WHERE run_id = ?
+		 ORDER BY axis, CAST(hits AS REAL) / n DESC, name`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("eval slices: %w", err)
+	}
+	defer rows.Close()
+
+	var out []EvalSlice
+	for rows.Next() {
+		var sl EvalSlice
+		if err := rows.Scan(&sl.Axis, &sl.Name, &sl.N, &sl.Hits); err != nil {
+			return nil, fmt.Errorf("eval slices: %w", err)
+		}
+		sl.HitRate = float64(sl.Hits) / float64(sl.N)
+		out = append(out, sl)
+	}
+	return out, rows.Err()
+}

@@ -1017,6 +1017,17 @@ var pageRenderCases = []pageRenderCase{
 				Readers: 214, Bookmarks: 5100, Evaluated: 199, HeldOut: 1020,
 				Hits: 143, Recall: 0.1402, NDCG: 0.0931, Coverage: 0.6120,
 			}},
+			// The slices section is below the runs table and renders only
+			// when a run has them, so the sweep carries both axes.
+			SliceRunID: 7,
+			SliceMinN:  20,
+			FandomSlices: []store.EvalSlice{
+				{Axis: "fandom", Name: "rare fandom", N: 40, Hits: 2, HitRate: 0.05},
+				{Axis: "fandom", Name: "big fandom", N: 300, Hits: 60, HitRate: 0.20},
+			},
+			TagSlices: []store.EvalSlice{
+				{Axis: "tag", Name: "selkie au", N: 25, Hits: 1, HitRate: 0.04},
+			},
 			Algos: []store.AlgoStanding{{Algo: "default", Judged: 30, Wins: 17, Losses: 11, Ties: 2}},
 			Arms: []store.InterleaveArmStat{{
 				Arm: "default", Impressions: 200, Credits: 14, CreditRate: 0.07,

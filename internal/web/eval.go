@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"sort"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
@@ -33,6 +34,43 @@ func (d Deps) renderEval(w http.ResponseWriter, r *http.Request) {
 		page.Err = err.Error()
 	} else {
 		page.Runs = runs
+		// The newest run's slices, weakest first, so the page answers "where
+		// is it failing" and not only "how did it do overall". A run recorded
+		// before slices existed simply has none: the section is omitted
+		// rather than shown empty with an apology.
+		if len(runs) > 0 {
+			if slices, serr := d.Eval.EvalSlices(ctx, runs[0].ID); serr == nil && len(slices) > 0 {
+				// Set only when there is something to show. The page keys its
+				// heading off SliceRunID, so setting it for a run with no
+				// slices would print "Where run #3 was weak" above nothing —
+				// the test below caught exactly that.
+				page.SliceRunID = runs[0].ID
+				page.SliceMinN = evalSliceMinN
+				for _, sl := range slices {
+					switch sl.Axis {
+					case "fandom":
+						page.FandomSlices = append(page.FandomSlices, sl)
+					case "tag":
+						page.TagSlices = append(page.TagSlices, sl)
+					}
+				}
+				// Weakest first: the store orders by hit rate descending so a
+				// caller can take a head; reversing here is what makes the
+				// first row the one worth looking at.
+				weakestFirst := func(list []store.EvalSlice) {
+					sort.SliceStable(list, func(i, j int) bool {
+						if list[i].HitRate != list[j].HitRate {
+							return list[i].HitRate < list[j].HitRate
+						}
+						return list[i].Name < list[j].Name
+					})
+				}
+				weakestFirst(page.FandomSlices)
+				weakestFirst(page.TagSlices)
+				page.FandomSlices = headSlices(page.FandomSlices, evalSliceRows)
+				page.TagSlices = headSlices(page.TagSlices, evalSliceRows)
+			}
+		}
 	}
 
 	// The global standings: ownerKey "" means every reader's votes, which is
@@ -67,4 +105,23 @@ func (d Deps) renderEval(w http.ResponseWriter, r *http.Request) {
 // rows is a second definition of what a "run" is.
 type EvalStore interface {
 	EvalRuns(ctx context.Context, limit int) ([]store.EvalRun, error)
+	EvalSlices(ctx context.Context, runID int64) ([]store.EvalSlice, error)
+}
+
+// evalSliceRows is how many groups of each axis the dashboard prints.
+//
+// Ten: the page's job is to point at a fandom worth investigating, not to be
+// the whole table. The full set is in the database and one query away.
+const evalSliceRows = 10
+
+// evalSliceMinN mirrors the floor `kindred eval` applied when it recorded the
+// slices. It is a constant of the page rather than a column because the page
+// states the rule; the numbers it prints were filtered by it.
+const evalSliceMinN = 20
+
+func headSlices(list []store.EvalSlice, n int) []store.EvalSlice {
+	if len(list) > n {
+		return list[:n]
+	}
+	return list
 }

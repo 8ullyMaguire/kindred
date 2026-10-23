@@ -69,3 +69,74 @@ func TestEvalRunsNewestFirstAndLimited(t *testing.T) {
 		t.Fatalf("runs are not newest-first: %+v", runs)
 	}
 }
+
+// TestEvalSlicesRoundTripAndReplace pins the two things the dashboard relies
+// on: the order (best hit rate first within an axis) and the fact that a
+// second record for the same run REPLACES the first rather than doubling it.
+// A run is one measurement; two rows for one group would make the page's
+// weakest-first head depend on insertion order.
+func TestEvalSlicesRoundTripAndReplace(t *testing.T) {
+	ctx := context.Background()
+	s := algoTestStore(t)
+
+	runID, err := s.RecordEvalRun(ctx, EvalRun{
+		K: 10, Readers: 40, Bookmarks: 400, Evaluated: 40,
+		HeldOut: 120, Hits: 12, Recall: 0.1, NDCG: 0.05, Coverage: 0.5, Mode: "full",
+	})
+	if err != nil {
+		t.Fatalf("RecordEvalRun: %v", err)
+	}
+
+	if err := s.RecordEvalSlices(ctx, runID, []EvalSlice{
+		{Axis: "fandom", Name: "quiet", N: 25, Hits: 0},
+		{Axis: "fandom", Name: "loud", N: 300, Hits: 90},
+		{Axis: "tag", Name: "selkie au", N: 30, Hits: 1},
+	}); err != nil {
+		t.Fatalf("RecordEvalSlices: %v", err)
+	}
+
+	got, err := s.EvalSlices(ctx, runID)
+	if err != nil {
+		t.Fatalf("EvalSlices: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d slices, want 3: %+v", len(got), got)
+	}
+	// Ordered by axis, then hit rate descending: "loud" (0.30) before "quiet".
+	var fandom []string
+	for _, sl := range got {
+		if sl.Axis == "fandom" {
+			fandom = append(fandom, sl.Name)
+		}
+		if sl.Axis == "fandom" && sl.Name == "loud" && sl.HitRate != 0.3 {
+			t.Errorf("loud hit rate = %v, want 0.3", sl.HitRate)
+		}
+		if sl.Axis == "fandom" && sl.Name == "quiet" && sl.HitRate != 0 {
+			t.Errorf("quiet hit rate = %v, want 0", sl.HitRate)
+		}
+	}
+	if len(fandom) != 2 || fandom[0] != "loud" {
+		t.Errorf("fandom slices = %v, want loud first (hit rate desc)", fandom)
+	}
+
+	// Re-recording replaces: running eval twice on one run id is a
+	// correction, and a corrections-not-duplicates rule is the one that keeps
+	// the table readable.
+	if err := s.RecordEvalSlices(ctx, runID, []EvalSlice{
+		{Axis: "fandom", Name: "loud", N: 300, Hits: 60},
+	}); err != nil {
+		t.Fatalf("second RecordEvalSlices: %v", err)
+	}
+	again, err := s.EvalSlices(ctx, runID)
+	if err != nil {
+		t.Fatalf("EvalSlices: %v", err)
+	}
+	if len(again) != 1 || again[0].Name != "loud" || again[0].Hits != 60 {
+		t.Errorf("after the correction: %+v, want one row for loud with 60 hits", again)
+	}
+
+	// A run id that is not a record is refused rather than written as 0.
+	if err := s.RecordEvalSlices(ctx, 0, nil); err == nil {
+		t.Errorf("RecordEvalSlices(0) did not refuse")
+	}
+}

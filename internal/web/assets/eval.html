@@ -63,6 +63,50 @@
   </p>
 {{end}}
 
+{{if .SliceRunID}}
+<h2>Where run #{{.SliceRunID}} was weak</h2>
+  <p class="count">
+    The same run, split by the works themselves: how often a held-out work
+    <em>in that group</em> was found in the top k. This is a rate over WORKS,
+    not the mean per-user recall above, so the two are not comparable — the
+    question here is whether the recommender works for a reader's own corner
+    of the archive. Weakest first; groups of at least {{.SliceMinN}} held-out
+    works only.
+  </p>
+  {{if .FandomSlices}}
+    <h3>By fandom</h3>
+    <table class="standings" data-testid="eval-slices-fandom">
+      <thead><tr><th>Fandom</th><th class="num">Held out</th><th class="num">Found</th><th class="num">Hit rate</th></tr></thead>
+      <tbody>
+      {{range .FandomSlices}}
+        <tr>
+          <td>{{.Name}}</td>
+          <td class="num">{{.N}}</td>
+          <td class="num">{{.Hits}}</td>
+          <td class="num">{{printf "%.3f" .HitRate}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{end}}
+  {{if .TagSlices}}
+    <h3>By tag</h3>
+    <table class="standings" data-testid="eval-slices-tag">
+      <thead><tr><th>Tag</th><th class="num">Held out</th><th class="num">Found</th><th class="num">Hit rate</th></tr></thead>
+      <tbody>
+      {{range .TagSlices}}
+        <tr>
+          <td>{{.Name}}</td>
+          <td class="num">{{.N}}</td>
+          <td class="num">{{.Hits}}</td>
+          <td class="num">{{printf "%.3f" .HitRate}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{end}}
+{{end}}
+
 <h2>Online, explicit: algorithm votes</h2>
 {{if .Algos}}
   <table class="standings" data-testid="eval-algos">

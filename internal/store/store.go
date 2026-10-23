@@ -688,6 +688,24 @@ CREATE INDEX IF NOT EXISTS idx_interleave_shown
    measurements, and a table that puts them in one column invites a comparison
    that is not one. mode is a column for the same reason: a lite run skips the
    embedding signal, so lite and full are two recommenders. */
+/* Where a run was weak and where it was strong, grouped by a corpus
+   dimension. A run's recall is one number for the whole mirror; a fandom
+   whose held-out works are never found is invisible in it, and that is the
+   number that tells a reader whether the recommender works for THEIR corner
+   of the archive. One row per (run, axis, group).
+
+   n and hits are stored rather than only the rate: a rate over four works is
+   not comparable with one over four hundred, and the page has to be able to
+   print both. */
+CREATE TABLE IF NOT EXISTS eval_slices (
+	run_id INTEGER NOT NULL,
+	axis   TEXT NOT NULL,
+	name   TEXT NOT NULL,
+	n      INTEGER NOT NULL,
+	hits   INTEGER NOT NULL,
+	PRIMARY KEY (run_id, axis, name)
+);
+
 CREATE TABLE IF NOT EXISTS eval_runs (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
 	ran_at      TEXT NOT NULL DEFAULT (datetime('now')),

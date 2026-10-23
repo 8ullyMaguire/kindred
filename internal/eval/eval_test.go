@@ -185,3 +185,86 @@ func TestRunIgnoresDuplicatesInTheRecommendation(t *testing.T) {
 		t.Fatalf("hits = %d, want 1: a repeated id must not be paid twice", rep.Hits)
 	}
 }
+
+// TestPlacementsRecordWhereEachHeldOutWorkLanded pins the per-work detail the
+// slices are grouped from. Without it, idea 46/71 could only be faked: a slice
+// computed from aggregate sums cannot say which fandom was short.
+func TestPlacementsRecordWhereEachHeldOutWorkLanded(t *testing.T) {
+	split := Split{
+		Users:     1,
+		Bookmarks: 4,
+		Train:     map[int64][]int64{1: {100}},
+		Test:      map[int64][]int64{1: {7, 8, 9}},
+	}
+	// 7 is found at position 1, 8 at position 3, 9 is absent.
+	rec := &fakeRecommender{order: []int64{7, 55, 8}}
+	rep, err := Run(context.Background(), rec, split, 3)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := map[int64]int{7: 1, 8: 3, 9: 0}
+	if len(rep.Placements) != 3 {
+		t.Fatalf("got %d placements, want 3: %+v", len(rep.Placements), rep.Placements)
+	}
+	for _, p := range rep.Placements {
+		if p.Rank != want[p.Work] {
+			t.Errorf("work %d ranked %d, want %d", p.Work, p.Rank, want[p.Work])
+		}
+	}
+	// The aggregate must still be the aggregate: two of three found.
+	if rep.Hits != 2 {
+		t.Errorf("Hits = %d, want 2", rep.Hits)
+	}
+}
+
+// TestByGroupCountsAWorkInEveryGroupAndDropsSmallOnes is the slice rule:
+// a work belongs to each of its fandoms, and a group below minN is not
+// reported at all rather than reported with a number nobody can read.
+func TestByGroupCountsAWorkInEveryGroupAndDropsSmallOnes(t *testing.T) {
+	placements := []Placement{
+		{Work: 1, Rank: 1},
+		{Work: 2, Rank: 0},
+		{Work: 3, Rank: 2},
+		{Work: 4, Rank: 0},
+	}
+	groups := map[int64][]string{
+		1: {"alpha", "crossover"},
+		2: {"alpha"},
+		3: {"beta"},
+		4: {"beta"},
+	}
+	slices := ByGroup(placements, "fandom", 1, func(w int64) []string { return groups[w] })
+
+	by := map[string]Slice{}
+	for _, s := range slices {
+		by[s.Name] = s
+	}
+	if g := by["alpha"]; g.N != 2 || g.Hits != 1 || g.HitRate != 0.5 {
+		t.Errorf("alpha = %+v, want n=2 hits=1 rate=0.5", g)
+	}
+	if g := by["beta"]; g.N != 2 || g.Hits != 1 {
+		t.Errorf("beta = %+v, want n=2 hits=1", g)
+	}
+	// A work in two fandoms counts in both, and the totals may therefore
+	// exceed the placements: that is the point, not a bug.
+	if g := by["crossover"]; g.N != 1 || g.Hits != 1 {
+		t.Errorf("crossover = %+v, want n=1 hits=1", g)
+	}
+
+	// minN drops the small group.
+	big := ByGroup(placements, "fandom", 2, func(w int64) []string { return groups[w] })
+	for _, s := range big {
+		if s.Name == "crossover" {
+			t.Errorf("minN=2 kept crossover (%+v)", s)
+		}
+	}
+	// Ordering is deterministic: N desc, then name.
+	for i := 1; i < len(big); i++ {
+		if big[i-1].N < big[i].N {
+			t.Errorf("slices are not ordered by N desc: %+v", big)
+		}
+		if big[i-1].N == big[i].N && big[i-1].Name > big[i].Name {
+			t.Errorf("equal-N slices are not ordered by name: %+v", big)
+		}
+	}
+}

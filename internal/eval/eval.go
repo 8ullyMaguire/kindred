@@ -199,6 +199,88 @@ type Report struct {
 	// cover most readers, or the reverse, and the two are different
 	// products.
 	Coverage float64 `json:"coverage"`
+	// Placements is where each held-out work landed, for the per-group
+	// slices. It is the only per-work detail the report carries, and it is
+	// emitted in JSON only when asked, because a full run has one row per
+	// held-out bookmark.
+	Placements []Placement `json:"placements,omitempty"`
+}
+
+// Placement is one held-out work and where the recommender put it.
+//
+// The aggregate metrics are computed per reader, because averaging per user
+// keeps a prolific reader from dominating. A slice has the opposite shape: it
+// asks "of the held-out works in this fandom, how many were found", which is a
+// question about WORKS. So each work travels with its own rank and the slices
+// are grouped from these rows — deriving them from the per-user sums after the
+// fact is not possible, and recomputing the ranking per group would measure
+// the recommender several times and call it one run.
+type Placement struct {
+	// Work is the held-out work's id.
+	Work int64 `json:"work"`
+	// Rank is 1-based; 0 means the recommender did not return it in the top K.
+	Rank int `json:"rank"`
+}
+
+// Slice is one group's share of the held-out works.
+//
+// HitRate is hits/N over WORKS, so it is not the mean per-user recall and must
+// not be printed beside it as though the two were the same statistic. It
+// answers "how often does this fandom's held-out work get found".
+type Slice struct {
+	Axis    string  `json:"axis"`
+	Name    string  `json:"name"`
+	N       int     `json:"n"`
+	Hits    int     `json:"hits"`
+	HitRate float64 `json:"hit_rate"`
+}
+
+// ByGroup groups placements by every key the key function returns for a work.
+//
+// A work belongs to several groups (it carries several fandom tags), and it
+// counts in each: a fandom's hit rate is about that fandom's works, not about
+// a partition of the corpus. Groups smaller than minN are dropped, because a
+// fandom with two held-out works has a hit rate of 0, 0.5 or 1 and a table
+// that ranks it beside one with 300 is noise wearing a number.
+//
+// The result is ordered by N descending, then by name, so two runs over the
+// same data print the same table in the same order.
+func ByGroup(placements []Placement, axis string, minN int, key func(work int64) []string) []Slice {
+	type acc struct{ n, hits int }
+	groups := map[string]*acc{}
+	for _, p := range placements {
+		for _, name := range key(p.Work) {
+			if name == "" {
+				continue
+			}
+			a := groups[name]
+			if a == nil {
+				a = &acc{}
+				groups[name] = a
+			}
+			a.n++
+			if p.Rank > 0 {
+				a.hits++
+			}
+		}
+	}
+	out := make([]Slice, 0, len(groups))
+	for name, a := range groups {
+		if a.n < minN {
+			continue
+		}
+		out = append(out, Slice{
+			Axis: axis, Name: name, N: a.n, Hits: a.hits,
+			HitRate: float64(a.hits) / float64(a.n),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].N != out[j].N {
+			return out[i].N > out[j].N
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
 
 // Run evaluates rec against split.
@@ -254,6 +336,7 @@ func Run(ctx context.Context, rec Recommender, split Split, k int) (Report, erro
 		// The first occurrence of a work is the one that counts. A
 		// recommender returning the same id twice must not be paid twice.
 		seen := make(map[int64]bool, len(recs))
+		rankOf := make(map[int64]int, len(recs))
 		for i, id := range recs {
 			if i >= k {
 				break
@@ -266,6 +349,14 @@ func Run(ctx context.Context, rec Recommender, split Split, k int) (Report, erro
 				hits++
 				dcg += 1 / math.Log2(float64(i+2))
 			}
+			// The FIRST position counts, the same rule the metric uses: a
+			// recommender that repeats a work must not get two placements.
+			rankOf[id] = i + 1
+		}
+		// One placement per held-out work, in the split's own order, so a
+		// slice is computed over the same set the aggregate was.
+		for _, id := range test {
+			rep.Placements = append(rep.Placements, Placement{Work: id, Rank: rankOf[id]})
 		}
 		rep.Hits += hits
 		recallSum += float64(hits) / float64(len(test))

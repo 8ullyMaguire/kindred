@@ -13,6 +13,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/eval"
+	"git.polarisocial.xyz/kindred/kindred/internal/fandom"
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
@@ -163,6 +164,7 @@ func runEval(ctx context.Context, args []string) error {
 	// reason this arm exists is comparing one run with the next. A failure to
 	// record is a WARNING, not an error: the numbers are already computed and
 	// a read-only state database must not make an evaluation impossible.
+	runID := int64(0)
 	if id, rerr := s.RecordEvalRun(ctx, store.EvalRun{
 		K: rep.K, Readers: rep.Users, Bookmarks: rep.Bookmarks,
 		Evaluated: rep.Evaluated, Failures: rep.Failures,
@@ -171,8 +173,24 @@ func runEval(ctx context.Context, args []string) error {
 		Mode: c.Mode,
 	}); rerr != nil {
 		fmt.Fprintf(os.Stderr, "eval: could not record this run (it was still measured): %v\n", rerr)
-	} else if !*asJSON {
-		fmt.Printf("recorded as run #%d\n", id)
+	} else {
+		runID = id
+		if !*asJSON {
+			fmt.Printf("recorded as run #%d\n", id)
+		}
+	}
+
+	// Where the run was weak. The aggregate recall is one number for the whole
+	// mirror, and a fandom whose held-out works are never found is invisible in
+	// it — which is the number that tells a reader whether this works for their
+	// corner of the archive. Recorded after the run so a failure here cannot
+	// lose the measurement.
+	if runID > 0 && len(rep.Placements) > 0 {
+		if serr := recordSlices(ctx, s, ao3, runID, rep.Placements); serr != nil {
+			fmt.Fprintf(os.Stderr, "eval: could not record per-group slices (the run was still measured): %v\n", serr)
+		} else if !*asJSON {
+			fmt.Printf("recorded per-fandom and per-tag slices for run #%d\n", runID)
+		}
 	}
 
 	if *asJSON {
@@ -194,4 +212,93 @@ func runEval(ctx context.Context, args []string) error {
 		fmt.Printf("%d recommendations failed; first: %s\n", rep.Failures, rep.Errors[0])
 	}
 	return nil
+}
+
+// sliceMinN is the smallest group worth reporting.
+//
+// A fandom with two held-out works has a hit rate of 0, 0.5 or 1. Printing it
+// beside a group of 300 invites a comparison that is not one, so small groups
+// are dropped rather than shown with a warning nobody reads.
+const sliceMinN = 20
+
+// sliceKeep bounds how many groups are stored per axis, by size: the point is
+// to find the fandoms where the recommender is failing, and that is legible in
+// the twenty-five biggest groups.
+const sliceKeep = 25
+
+// recordSlices groups a run's placements by fandom and by tag.
+//
+// The works' tags are read in CHUNKS because SQLite bounds how many parameters
+// one statement may carry; asking for 36,000 ids at once is a failure that
+// looks like "no tags" rather than a limit.
+func recordSlices(ctx context.Context, s *store.Store, ao3 *corpus.AO3, runID int64, placements []eval.Placement) error {
+	ids := make([]int64, 0, len(placements))
+	seenWork := make(map[int64]bool, len(placements))
+	for _, p := range placements {
+		if !seenWork[p.Work] {
+			seenWork[p.Work] = true
+			ids = append(ids, p.Work)
+		}
+	}
+
+	pairs := make(map[int64][]corpus.TagPair, len(ids))
+	for start := 0; start < len(ids); start += 400 {
+		end := start + 400
+		if end > len(ids) {
+			end = len(ids)
+		}
+		got, err := ao3.TagPairs(ctx, ids[start:end])
+		if err != nil {
+			return fmt.Errorf("tags for slices: %w", err)
+		}
+		for id, ps := range got {
+			pairs[id] = ps
+		}
+	}
+
+	// A work belongs to EVERY fandom it carries: a crossover is evidence about
+	// both, not half a vote each.
+	fandomOf := func(work int64) []string {
+		var out []string
+		seen := map[string]bool{}
+		for _, p := range pairs[work] {
+			if !fandom.LooksLikeFandom(p.Name) {
+				continue
+			}
+			key := fandom.Canonical(p.Name)
+			if key == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, key)
+		}
+		return out
+	}
+	tagOf := func(work int64) []string {
+		out := make([]string, 0, len(pairs[work]))
+		for _, p := range pairs[work] {
+			out = append(out, p.Name)
+		}
+		return out
+	}
+
+	var toStore []store.EvalSlice
+	for _, axis := range []struct {
+		name string
+		key  func(int64) []string
+	}{{"fandom", fandomOf}, {"tag", tagOf}} {
+		slices := eval.ByGroup(placements, axis.name, sliceMinN, axis.key)
+		if len(slices) > sliceKeep {
+			slices = slices[:sliceKeep]
+		}
+		for _, sl := range slices {
+			toStore = append(toStore, store.EvalSlice{
+				Axis: sl.Axis, Name: sl.Name, N: sl.N, Hits: sl.Hits,
+			})
+		}
+	}
+	if len(toStore) == 0 {
+		return nil
+	}
+	return s.RecordEvalSlices(ctx, runID, toStore)
 }
