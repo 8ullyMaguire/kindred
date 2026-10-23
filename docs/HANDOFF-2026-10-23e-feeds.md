@@ -179,6 +179,28 @@ that work seen removed it from the list and refilled from below. A boundary of
 20 Oct returned zero — the corpus's newest `first_seen` is 15 Oct, so zero was
 the right answer and the page printed the boundary that made it checkable.
 
+## The gate now covers today's surfaces (f52f7d2)
+
+48 → 63 checks. Two helpers were needed and neither existed:
+
+  status NAME URL EXPECTED     a REFUSAL (404 unknown tag, 400 work-with-itself)
+  check_absent NAME URL PATTERN a promise the server must NOT make
+
+Measured that the section bites by re-adding the `format=rss` descriptor URL and
+deploying it: the gate said `FAIL opensearch advertises no url it cannot answer`
+and `DRIFTED: 1 of 63`. A gate that has never been observed to fail is a gate
+nobody knows the shape of.
+
+Two attempts at that mutation were worthless before the third worked, and both
+shapes recur:
+
+  - the first did not COMPILE (a `%s` with two verbs and one argument) — a build
+    failure is not a survivor;
+  - the second ran against a stale `/tmp/check-deploy.sh` from an earlier deploy
+    while a `git stash` I had used to get a clean tree had silently removed the
+    new section from the tree. The deploy still reported "all 48 checks pass",
+    which was true of the script it ran and false of the tree.
+
 ## Next
 
 Untouched rows with a real input behind them: 60 (`interleave_impressions` now

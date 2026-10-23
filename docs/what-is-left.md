@@ -4,6 +4,17 @@ Status as of 2026-10-07. Every line below was verified by running it, not by
 reading the code. A line marked DONE names the test or the tool output that
 established it.
 
+## The deploy gate covers what shipped (2026-10-23d, commit f52f7d2)
+
+- [x] **15 new checks, 48 → 63** — feeds, descriptor, pair report, reading path
+      and `/new` are now checked on the DEPLOYED binary, not only by `go test`.
+- [x] **`status`** helper for a REFUSAL (404 for an unknown tag, 400 for a work
+      paired with itself) and **`check_absent`** for a promise the server must
+      not make.
+- [x] **Measured that the section bites**: re-added the `format=rss` descriptor
+      URL, deployed, and the gate answered `FAIL opensearch advertises no url it
+      cannot answer — found /format=rss/` · `DRIFTED: 1 of 63`. Restored → 63/63.
+
 ## New since your last visit (2026-10-23d, commit 90941c5)
 
 - [x] **`/new`** — works the mirror first saw after the reader's PREVIOUS visit
