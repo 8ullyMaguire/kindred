@@ -81,6 +81,11 @@ func Apply(in []rank.Candidate, opts Options) Result {
 	}
 
 	selected := make([]rank.Candidate, 0, requested)
+	// selectedIdx is the same list as positions into `working`. The pre-rewrite
+	// loop kept `selected` and then searched `working` for each chosen candidate's
+	// POSITION to reach its tag set — a linear scan inside two nested loops, which
+	// is where a 200-result request spent 10 s (see mmr_order_test.go).
+	selectedIdx := make([]int, 0, requested)
 	taken := make([]bool, len(working))
 	groupCount := map[string]int{}
 
@@ -96,10 +101,19 @@ func Apply(in []rank.Candidate, opts Options) Result {
 		tagSets[i] = set
 	}
 
+	// maxSim[i] is the maximum similarity between candidate i and anything
+	// chosen so far — the "redundancy" half of marginal relevance.
+	//
+	// Maintained incrementally: when a candidate is chosen, one pass over the
+	// unchosen candidates raises their maximum if the new choice is closer than
+	// anything already picked. That is the same value the pre-rewrite loop
+	// recomputed from scratch every round (it took the maximum over `selected`),
+	// at one pass per selection instead of one per selection per candidate.
+	maxSim := make([]float64, len(working))
+
 	for len(selected) < requested {
 		bestIdx := -1
 		bestVal := 0.0
-		bestCand := rank.Candidate{}
 		for i := range working {
 			if taken[i] {
 				continue
@@ -112,15 +126,9 @@ func Apply(in []rank.Candidate, opts Options) Result {
 			}
 			// Marginal relevance: the score, discounted by how similar
 			// this is to everything already chosen.
-			maxSim := 0.0
-			for _, s := range selected {
-				if sim := jaccard(tagSets[i], tagSets[indexOf(working, s)]); sim > maxSim {
-					maxSim = sim
-				}
-			}
-			val := lambda*working[i].Score - (1-lambda)*maxSim
+			val := lambda*working[i].Score - (1-lambda)*maxSim[i]
 			if bestIdx == -1 || val > bestVal {
-				bestIdx, bestVal, bestCand = i, val, working[i]
+				bestIdx, bestVal = i, val
 			}
 		}
 		if bestIdx == -1 {
@@ -129,10 +137,19 @@ func Apply(in []rank.Candidate, opts Options) Result {
 			break
 		}
 		taken[bestIdx] = true
-		selected = append(selected, bestCand)
+		selected = append(selected, working[bestIdx])
+		selectedIdx = append(selectedIdx, bestIdx)
 		if opts.MaxPerGroup > 0 && opts.GroupOf != nil {
-			if g := opts.GroupOf(bestCand); g != "" {
+			if g := opts.GroupOf(working[bestIdx]); g != "" {
 				groupCount[g]++
+			}
+		}
+		for i := range working {
+			if taken[i] {
+				continue
+			}
+			if sim := jaccard(tagSets[i], tagSets[bestIdx]); sim > maxSim[i] {
+				maxSim[i] = sim
 			}
 		}
 	}
@@ -159,17 +176,6 @@ func Apply(in []rank.Candidate, opts Options) Result {
 		}
 	}
 	return res
-}
-
-// indexOf finds a candidate's position by identity, so a selected
-// candidate can be mapped back to its tag set without rebuilding a lookup.
-func indexOf(list []rank.Candidate, c rank.Candidate) int {
-	for i := range list {
-		if list[i].ID == c.ID && list[i].Kind == c.Kind {
-			return i
-		}
-	}
-	return 0
 }
 
 func jaccard(a, b map[int32]struct{}) float64 {
