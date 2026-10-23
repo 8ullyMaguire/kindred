@@ -53,6 +53,12 @@ type Engine struct {
 	// EmbedDim is the embedding width, for the reason string.
 	EmbedDim int
 
+	// Pools memoises the tag-pool query, which the CPU profile measured at
+	// 87% of a recommendation's time. Nil disables caching, which is what
+	// the engine's own tests want: a cache in front of a ranking tested for
+	// determinism would hide exactly the nondeterminism under test.
+	Pools *PoolCache
+
 	// tagIdx is the tag-embedding matrix, loaded lazily by tagIndex(). See
 	// embedindex.go for why it is resident rather than read per request.
 	tagIdx tagIndexState
@@ -1083,9 +1089,32 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 		// for a pool that was identical. The ordering is the same either way,
 		// so the rows past the reserve are exactly what the top-up would have
 		// fetched.
-		tagRows, err := runTagPool(limit)
-		if err != nil {
-			return nil, nil, nil, err
+		// The cache in front of that query. Keyed on every input that can
+		// change the result, so a hit is indistinguishable from a miss: see
+		// internal/engine/poolcache.go for the profile that motivated it and
+		// for why a per-reader `seen` set bypasses it entirely.
+		var tagRows []int64
+		if e.Pools != nil && cacheable(req) {
+			key := keyFor(tagList, seedIDs, req.BlockedTagIDs, limit, exclude, f)
+			if cached, ok := e.Pools.get(key); ok {
+				tagRows = cached
+			} else {
+				rows, err := runTagPool(limit)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				e.Pools.put(key, rows)
+				tagRows = rows
+			}
+		} else {
+			if e.Pools != nil {
+				e.Pools.bypass()
+			}
+			rows, err := runTagPool(limit)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			tagRows = rows
 		}
 		reserved := tagBudget
 		if reserved > len(tagRows) {

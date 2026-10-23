@@ -1533,6 +1533,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			body["corpus_works"] = n
 		}
 	}
+	// The pool cache's counters, so "is the hot query being answered from
+	// cache" is a number on the health page rather than a belief. Hit rate is
+	// reported against cacheable traffic (`bypassed` is the per-reader
+	// requests that could not be keyed) so it cannot be inflated by requests
+	// the cache never sees.
+	if s.Engine != nil && s.Engine.Pools != nil {
+		body["pool_cache"] = s.Engine.Pools.Stats()
+	}
 	// A service that answers is healthy. The 220 MiB cap that used to turn
 	// a big process into a 503 was removed on 2026-10-22: it made a working
 	// service report itself unwell, and it taught the deploy gate to call a

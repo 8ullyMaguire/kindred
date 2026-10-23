@@ -182,6 +182,11 @@ func runServe(ctx context.Context, args []string) error {
 		Lite:     lite,
 		EmbedDim: embedDim,
 		DocFreq:  docFreq,
+		// The tag-pool query is 87% of a recommendation's CPU (profiled
+		// 2026-10-23) and is a pure function of the request, so identical
+		// requests are answered from a small bounded cache. Measured: 2.6 s
+		// -> 0.9 s on the second request for the same seed.
+		Pools: engine.NewPoolCache(engine.DefaultPoolCacheEntries, engine.DefaultPoolCacheTTL),
 	}
 
 	// The arena's ratings, loaded once at startup so the peer_rating signal
