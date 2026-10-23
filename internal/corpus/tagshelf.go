@@ -14,7 +14,20 @@ package corpus
 // told "average length 41,000 words" will open the tag expecting something that
 // does not exist. The median is the work a reader is actually likely to meet, so
 // that is what the page prints — and the mean is kept beside it, labelled, so the
-// skew is visible rather than hidden.
+// skew is visible rather than hidden. Measured on the live mirror, tag 29:
+// median 30,603 words against a mean of 76,222.
+//
+// # Why one pass, not five queries
+//
+// The first version asked SQLite four separate questions — aggregates, median
+// words, median kudos, top work, trend — each a full scan of the tag's works, and
+// the two medians sorted the tag's whole work list inside the query. Measured on
+// tag 29 (55,810 works) the tag page went from 0.35 s to 4.06 s, which is a page
+// nobody waits for twice.
+//
+// This reads (words, kudos, bookmarks, year) for the tag's works ONCE and computes
+// everything here: two sorts in Go over 55k int64s cost milliseconds, and the scan
+// happens once.
 //
 // # Why the trend is by UPDATE year and says so
 //
@@ -25,9 +38,8 @@ package corpus
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
+	"sort"
 )
 
 // YearCount is one bar of the trend.
@@ -67,128 +79,93 @@ type TagShelf struct {
 // that the numbers do not become the page.
 const trendYears = 12
 
-// chronologicalYear is the four-digit year of an update_date in either shape the
-// corpus holds: AO3's "17 Sep 2008" and ISO "2008-09-17".
+// TagShelf computes the summary for one tag in a single pass over its works.
 //
-// It deliberately does NOT reimplement the month table: a year is the last four
-// characters of one form and the first four of the other, and duplicating the
-// month CASE here would be a second place for the two orderings to disagree.
-const chronologicalYear = `
-CASE
-	WHEN w.update_date IS NULL OR w.update_date = '' THEN ''
-	WHEN instr(w.update_date, ' ') > 0 THEN substr(w.update_date, -4)
-	ELSE substr(w.update_date, 1, 4)
-END`
-
-// TagShelf computes the summary for one tag.
-//
-// Every query starts from `SELECT DISTINCT work_id FROM work_tags WHERE tag_id`,
-// not from a plain join. `work_tags` is keyed by (work_id, tag_id, tag_type), so
-// a work can carry the same tag under two types — the live mirror's duplicate-name
-// shape and the fixture reproduce it — and a plain join counts that work twice,
-// inflating every number on the page by one per duplicate. Measured on the
-// fixture: 43 works where there are 42.
-//
-// Every query is keyed on work_tags.tag_id, which is indexed; the aggregates are
-// three full passes over the tag's works and are the reason the tag page reports
-// its own timing.
+// The query starts from `SELECT DISTINCT work_id FROM work_tags WHERE tag_id`.
+// `work_tags` is keyed by (work_id, tag_id, tag_type), so a work can carry the
+// same tag under two types — the live mirror's duplicate-name shape, reproduced by
+// the fixture — and a plain join counts that work twice, inflating every number on
+// the page by one per duplicate. Measured on the fixture: 43 works where there are
+// 42.
 func (a *AO3) TagShelf(ctx context.Context, tagID int64) (TagShelf, error) {
 	var s TagShelf
 
-	// One pass for the scalars. `COUNT(w.word_count)` rather than COUNT(*) so a
-	// NULL length does not count as a zero-length work in the mean.
-	err := a.DB.QueryRowContext(ctx, `
+	rows, err := a.DB.QueryContext(ctx, `
 		WITH t AS (SELECT DISTINCT work_id FROM work_tags WHERE tag_id = ?)
-		SELECT COUNT(*),
-		       COALESCE(SUM(w.word_count),0),
-		       CAST(COALESCE(AVG(w.word_count),0) AS INTEGER),
-		       CAST(COALESCE(AVG(COALESCE(w.kudos,0)),0) AS INTEGER),
-		       COALESCE(SUM(CASE WHEN w.update_date IS NULL OR w.update_date = '' THEN 1 ELSE 0 END),0)
-		FROM t JOIN works w ON w.id = t.work_id`, tagID).
-		Scan(&s.Works, &s.TotalWords, &s.MeanWords, &s.MeanKudos, &s.Undated)
+		SELECT w.id, w.title, COALESCE(w.word_count,0), COALESCE(w.kudos,0),
+		       w.bookmarks, COALESCE(w.update_date,'')
+		FROM t JOIN works w ON w.id = t.work_id`, tagID)
 	if err != nil {
-		return s, fmt.Errorf("tag %d shelf scalars: %w", tagID, err)
+		return s, fmt.Errorf("tag %d shelf: %w", tagID, err)
+	}
+	defer rows.Close()
+
+	words := make([]int64, 0, 1024)
+	kudos := make([]int64, 0, 1024)
+	byYear := make(map[string]int, 32)
+	// Only the best-so-far travels with its title, so the shelf never holds 55k
+	// titles just to print one of them.
+	var top TopWork
+	topBM := int64(-1)
+	var totalWords int64
+
+	for rows.Next() {
+		var id int64
+		var title string
+		var wc, kd int64
+		var bm *int64
+		var updated string
+		if err := rows.Scan(&id, &title, &wc, &kd, &bm, &updated); err != nil {
+			return s, err
+		}
+		words = append(words, wc)
+		kudos = append(kudos, kd)
+		totalWords += wc
+		s.Works++
+		if bm != nil && *bm > topBM {
+			topBM = *bm
+			top = TopWork{ID: id, Title: title, Bookmarks: *bm}
+		}
+		if y := updateYear(updated); y == "" {
+			s.Undated++
+		} else {
+			byYear[y]++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return s, err
 	}
 	if s.Works == 0 {
 		return s, nil
 	}
 
-	// Medians. SQLite has no median aggregate, so this is the middle row by
-	// value — the standard LIMIT 1 OFFSET n/2 form, which is exact for an odd
-	// count and the upper of the two middles for an even one. Saying "median"
-	// about the upper middle is a half-work difference nobody reads as a lie.
-	median := func(expr string) (int64, error) {
-		var v sql.NullInt64
-		q := `WITH t AS (SELECT DISTINCT work_id FROM work_tags WHERE tag_id = ?)
-		      SELECT ` + expr + ` FROM t JOIN works w ON w.id = t.work_id
-		      ORDER BY ` + expr + ` LIMIT 1 OFFSET ?`
-		if err := a.DB.QueryRowContext(ctx, q, tagID, s.Works/2).Scan(&v); err != nil {
-			return 0, err
-		}
-		if !v.Valid {
-			return 0, nil
-		}
-		return v.Int64, nil
+	s.TotalWords = totalWords
+	s.MeanWords = totalWords / int64(s.Works)
+	s.MedianWords = medianOf(words)
+	var sumKudos int64
+	for _, k := range kudos {
+		sumKudos += k
 	}
-	if s.MedianWords, err = median("COALESCE(w.word_count,0)"); err != nil {
-		return s, fmt.Errorf("tag %d median words: %w", tagID, err)
-	}
-	if s.MedianKudos, err = median("COALESCE(w.kudos,0)"); err != nil {
-		return s, fmt.Errorf("tag %d median kudos: %w", tagID, err)
-	}
-
-	// The single most-saved work. A NULL bookmarks column (the corpus has them)
-	// must not win the ordering.
-	//
-	// The `IS NOT NULL` filter is DEFENSIVE and, measured on SQLite, redundant:
-	// NULL sorts as smaller than every value, so `ORDER BY bookmarks DESC` puts
-	// NULLs last by itself, and the mutant deleting the filter survives every
-	// test — because it changes no row. It stays because the claim "most saved"
-	// must not depend on a collation detail, and the test pins the OUTCOME (the
-	// maximum wins) rather than the clause.
-	var top TopWork
-	var topBM sql.NullInt64
-	err = a.DB.QueryRowContext(ctx, `
-		WITH t AS (SELECT DISTINCT work_id FROM work_tags WHERE tag_id = ?)
-		SELECT w.id, w.title, w.bookmarks
-		FROM t JOIN works w ON w.id = t.work_id
-		WHERE w.bookmarks IS NOT NULL
-		ORDER BY w.bookmarks DESC, w.id LIMIT 1`, tagID).
-		Scan(&top.ID, &top.Title, &topBM)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		// A tag whose works carry no bookmark counts at all: no claim.
-	case err != nil:
-		return s, fmt.Errorf("tag %d top work: %w", tagID, err)
-	default:
-		top.Bookmarks = topBM.Int64
+	s.MeanKudos = sumKudos / int64(s.Works)
+	s.MedianKudos = medianOf(kudos)
+	if topBM >= 0 {
 		s.Top = top
 	}
 
-	// The trend, most recent year first.
-	rows, err := a.DB.QueryContext(ctx, `
-		WITH t AS (SELECT DISTINCT work_id FROM work_tags WHERE tag_id = ?)
-		SELECT `+chronologicalYear+` AS yr, COUNT(*)
-		FROM t JOIN works w ON w.id = t.work_id
-		WHERE `+chronologicalYear+` <> ''
-		GROUP BY yr ORDER BY yr DESC LIMIT ?`, tagID, trendYears)
-	if err != nil {
-		return s, fmt.Errorf("tag %d trend: %w", tagID, err)
+	// The trend, most recent year first, capped. The busiest year inside the
+	// window sets the bar scale, so a quiet recent year is visibly quiet.
+	for y, n := range byYear {
+		s.Years = append(s.Years, YearCount{Year: y, Works: n})
 	}
-	defer rows.Close()
-	var busiest int
-	for rows.Next() {
-		var y YearCount
-		if err := rows.Scan(&y.Year, &y.Works); err != nil {
-			return s, err
-		}
+	sort.Slice(s.Years, func(i, j int) bool { return s.Years[i].Year > s.Years[j].Year })
+	if len(s.Years) > trendYears {
+		s.Years = s.Years[:trendYears]
+	}
+	busiest := 0
+	for _, y := range s.Years {
 		if y.Works > busiest {
 			busiest = y.Works
 		}
-		s.Years = append(s.Years, y)
-	}
-	if err := rows.Err(); err != nil {
-		return s, err
 	}
 	if busiest > 0 {
 		for i := range s.Years {
@@ -196,4 +173,53 @@ func (a *AO3) TagShelf(ctx context.Context, tagID int64) (TagShelf, error) {
 		}
 	}
 	return s, nil
+}
+
+// medianOf returns the middle value, sorting in place.
+//
+// The upper of the two middles for an even count: SQLite has no median aggregate,
+// and a half-work difference between conventions is not something a reader can act
+// on. An empty slice returns 0, which the caller only prints when there are works
+// at all.
+func medianOf(v []int64) int64 {
+	if len(v) == 0 {
+		return 0
+	}
+	sort.Slice(v, func(i, j int) bool { return v[i] < v[j] })
+	return v[len(v)/2]
+}
+
+// updateYear extracts a four-digit year from either shape the corpus holds:
+// AO3's "17 Sep 2008" and ISO "2008-09-17".
+//
+// It deliberately does NOT reimplement the month table used by
+// ChronologicalUpdateDateDesc: a year is the last four characters of one form and
+// the first four of the other, and a second month CASE would be a second place for
+// the two orderings to disagree.
+func updateYear(s string) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) >= 10 && s[4] == '-' {
+		if isYearDigits(s[:4]) {
+			return s[:4]
+		}
+		return ""
+	}
+	if len(s) >= 4 && isYearDigits(s[len(s)-4:]) {
+		return s[len(s)-4:]
+	}
+	return ""
+}
+
+func isYearDigits(s string) bool {
+	if len(s) != 4 {
+		return false
+	}
+	for i := 0; i < 4; i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
