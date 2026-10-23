@@ -32,6 +32,7 @@
         <th>Run</th><th>When</th><th class="num">k</th><th>Mode</th>
         <th class="num">Readers</th><th class="num">Evaluated</th>
         <th class="num">Recall</th><th class="num">NDCG</th><th class="num">Coverage</th>
+        <th>Signals blind</th>
       </tr>
     </thead>
     <tbody>
@@ -46,11 +47,17 @@
           <td class="num">{{printf "%.4f" .Recall}}</td>
           <td class="num">{{printf "%.4f" .NDCG}}</td>
           <td class="num">{{printf "%.4f" .Coverage}}</td>
+          <td data-testid="eval-degraded">{{if .Degraded}}{{.Degraded}}{{else}}none{{end}}</td>
         </tr>
       {{end}}
     </tbody>
   </table>
   <p class="hint">
+    <strong>Signals blind</strong> names the signals that skipped for every
+    candidate in that run. A run with <code>idf_overlap</code> there measured a
+    different recommender from the one answering requests, so its recall is not
+    comparable with a run where every signal contributed — three runs came back
+    byte-identical for exactly that reason.
     Recall is the mean per-user recall, not hits divided by held-out works:
     averaging per reader keeps a prolific reader from dominating the number.
     A failed recommendation is counted separately from a miss — an outage and a

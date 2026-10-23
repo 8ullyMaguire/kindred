@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"testing"
 )
 
@@ -82,6 +84,7 @@ func TestEvalSlicesRoundTripAndReplace(t *testing.T) {
 	runID, err := s.RecordEvalRun(ctx, EvalRun{
 		K: 10, Readers: 40, Bookmarks: 400, Evaluated: 40,
 		HeldOut: 120, Hits: 12, Recall: 0.1, NDCG: 0.05, Coverage: 0.5, Mode: "full",
+		Degraded: "idf_overlap,seed_agreement",
 	})
 	if err != nil {
 		t.Fatalf("RecordEvalRun: %v", err)
@@ -138,5 +141,101 @@ func TestEvalSlicesRoundTripAndReplace(t *testing.T) {
 	// A run id that is not a record is refused rather than written as 0.
 	if err := s.RecordEvalSlices(ctx, 0, nil); err == nil {
 		t.Errorf("RecordEvalSlices(0) did not refuse")
+	}
+}
+
+// TestEvalRunRemembersWhichSignalsWereBlind pins the column that makes two
+// recall numbers comparable: a run whose idf_overlap never executed measured a
+// different recommender, and the numbers alone cannot say so. Three runs on
+// 2026-10-23 were byte-identical for exactly this reason.
+func TestEvalRunRemembersWhichSignalsWereBlind(t *testing.T) {
+	ctx := context.Background()
+	s := algoTestStore(t)
+
+	blind, err := s.RecordEvalRun(ctx, EvalRun{
+		K: 10, Readers: 1, Evaluated: 1, HeldOut: 1, Mode: "full",
+		Degraded: "idf_overlap,seed_agreement",
+	})
+	if err != nil {
+		t.Fatalf("RecordEvalRun: %v", err)
+	}
+	complete, err := s.RecordEvalRun(ctx, EvalRun{
+		K: 10, Readers: 1, Evaluated: 1, HeldOut: 1, Mode: "full",
+	})
+	if err != nil {
+		t.Fatalf("RecordEvalRun: %v", err)
+	}
+
+	runs, err := s.EvalRuns(ctx, 10)
+	if err != nil {
+		t.Fatalf("EvalRuns: %v", err)
+	}
+	byID := map[int64]EvalRun{}
+	for _, r := range runs {
+		byID[r.ID] = r
+	}
+	if got := byID[blind].Degraded; got != "idf_overlap,seed_agreement" {
+		t.Errorf("blind run degraded = %q, want the two names back", got)
+	}
+	// A complete run records the empty string, not a NULL and not "none":
+	// the page decides how to say "none", and a stored "none" would be
+	// indistinguishable from a signal actually named that.
+	if got, ok := byID[complete]; !ok || got.Degraded != "" {
+		t.Errorf("complete run degraded = %q (present=%v), want empty", got.Degraded, ok)
+	}
+}
+
+// TestAnOlderDatabaseGainsTheDegradedColumn is the migration test, and it is
+// the one that matters: the deployed database already has eval_runs without
+// this column, so the code path that upgrades it must be exercised rather than
+// assumed. The test drops the column (SQLite 3.35+) and re-opens the store,
+// which is exactly the shape of an operator upgrade.
+func TestAnOlderDatabaseGainsTheDegradedColumn(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+
+	open := func() *Store {
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatalf("sql.Open: %v", err)
+		}
+		db.SetMaxOpenConns(1)
+		s := &Store{DB: db, Path: path}
+		if err := s.Migrate(ctx); err != nil {
+			db.Close()
+			t.Fatalf("Migrate: %v", err)
+		}
+		return s
+	}
+
+	s := open()
+	if _, err := s.DB.ExecContext(ctx, `ALTER TABLE eval_runs DROP COLUMN degraded`); err != nil {
+		s.Close()
+		t.Skipf("this SQLite cannot drop a column (%v); the round trip above still covers the write path", err)
+	}
+	s.Close()
+
+	again := open()
+	defer again.Close()
+
+	var has int
+	if err := again.DB.QueryRowContext(ctx,
+		`SELECT count(*) FROM pragma_table_info('eval_runs') WHERE name='degraded'`).Scan(&has); err != nil {
+		t.Fatalf("table_info: %v", err)
+	}
+	if has != 1 {
+		t.Fatalf("eval_runs.degraded was not added back on open")
+	}
+	// And the column must be usable: rows written after the upgrade read as
+	// the empty string, not NULL.
+	if _, err := again.RecordEvalRun(ctx, EvalRun{K: 10, Readers: 1, Evaluated: 1, HeldOut: 1, Mode: "full"}); err != nil {
+		t.Fatalf("RecordEvalRun after upgrade: %v", err)
+	}
+	runs, err := again.EvalRuns(ctx, 5)
+	if err != nil {
+		t.Fatalf("EvalRuns after upgrade: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Degraded != "" {
+		t.Fatalf("after upgrade: %+v, want one run with no degraded signals", runs)
 	}
 }

@@ -719,7 +719,13 @@ CREATE TABLE IF NOT EXISTS eval_runs (
 	recall_at_k REAL NOT NULL,
 	ndcg_at_k   REAL NOT NULL,
 	coverage    REAL NOT NULL DEFAULT 0,
-	mode        TEXT NOT NULL DEFAULT 'full'
+	mode        TEXT NOT NULL DEFAULT 'full',
+	/* degraded is the comma-separated list of signals that skipped for every
+	   candidate in this run. A run whose idf_overlap never executed measured a
+	   different recommender from the one in production, and the number alone
+	   cannot say so -- three runs on 2026-10-23 came back byte-identical
+	   because the evaluator had no document-frequency table. */
+	degraded    TEXT NOT NULL DEFAULT ''
 );
 
 /* Works a reader has already been shown or has marked as read.
@@ -882,6 +888,23 @@ func (s *Store) migrate(ctx context.Context) error {
 			ALTER TABLE embeddings_new RENAME TO embeddings;
 			COMMIT;`); err != nil {
 			return fmt.Errorf("migrate embeddings: %w", err)
+		}
+	}
+
+	// eval_runs gained a `degraded` column: a run must be able to say which
+	// signals never executed. Without it, an evaluation missing the
+	// document-frequency table records the same recall as a complete one, and
+	// the two are indistinguishable in the numbers -- which is how three
+	// identical runs were read as "the new signal changed nothing" rather than
+	// "the instrument was blind".
+	has, err = s.columnExists(ctx, "eval_runs", "degraded")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := s.DB.ExecContext(ctx,
+			`ALTER TABLE eval_runs ADD COLUMN degraded TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("migrate eval_runs.degraded: %w", err)
 		}
 	}
 

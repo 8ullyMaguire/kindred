@@ -31,6 +31,11 @@ type EvalRun struct {
 	Recall   float64 `json:"recall_at_k"`
 	NDCG     float64 `json:"ndcg_at_k"`
 	Coverage float64 `json:"coverage"`
+	// Degraded names the signals that skipped for every candidate in this
+	// run, comma separated. A run with idf_overlap in this list measured a
+	// different recommender from the one serving requests, and the recall
+	// number cannot say so by itself.
+	Degraded string `json:"degraded,omitempty"`
 	// Mode is "full" or "lite". The lite mode skips the embedding signal, so
 	// a lite run and a full run measure different recommenders and must not
 	// be plotted as one line.
@@ -45,10 +50,10 @@ func (s *Store) RecordEvalRun(ctx context.Context, r EvalRun) (int64, error) {
 	res, err := s.DB.ExecContext(ctx, `
 		INSERT INTO eval_runs
 			(k, readers, bookmarks, evaluated, failures, held_out, hits,
-			 recall_at_k, ndcg_at_k, coverage, mode)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 recall_at_k, ndcg_at_k, coverage, mode, degraded)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.K, r.Readers, r.Bookmarks, r.Evaluated, r.Failures, r.HeldOut, r.Hits,
-		r.Recall, r.NDCG, r.Coverage, r.Mode)
+		r.Recall, r.NDCG, r.Coverage, r.Mode, r.Degraded)
 	if err != nil {
 		return 0, fmt.Errorf("record eval run: %w", err)
 	}
@@ -69,7 +74,7 @@ func (s *Store) EvalRuns(ctx context.Context, limit int) ([]EvalRun, error) {
 	}
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT id, ran_at, k, readers, bookmarks, evaluated, failures,
-		       held_out, hits, recall_at_k, ndcg_at_k, coverage, mode
+		       held_out, hits, recall_at_k, ndcg_at_k, coverage, mode, degraded
 		  FROM eval_runs
 		 ORDER BY id DESC
 		 LIMIT ?`, limit)
@@ -83,7 +88,7 @@ func (s *Store) EvalRuns(ctx context.Context, limit int) ([]EvalRun, error) {
 		var r EvalRun
 		if err := rows.Scan(&r.ID, &r.RanAt, &r.K, &r.Readers, &r.Bookmarks,
 			&r.Evaluated, &r.Failures, &r.HeldOut, &r.Hits,
-			&r.Recall, &r.NDCG, &r.Coverage, &r.Mode); err != nil {
+			&r.Recall, &r.NDCG, &r.Coverage, &r.Mode, &r.Degraded); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

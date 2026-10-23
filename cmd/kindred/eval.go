@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/collab"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
@@ -26,13 +27,27 @@ import (
 // would then be free to import eval and make the dependency circular.
 type engineRecommender struct {
 	eng *engine.Engine
+	// tune is the weight tune to rank with; empty means the built-in default.
+	// It is a field rather than a package setting so an ablation is one flag
+	// (`--tune no_agreement`) instead of a rebuild: the whole point of the
+	// evaluator is comparing two rankers on the same split.
+	tune string
+	// degraded records the signals that skipped for every candidate, from the
+	// first request that completed. One request is enough -- meta.degraded is
+	// a property of the engine's configuration, not of a particular reader --
+	// and it must be captured here because eval.Recommender returns ids only.
+	degraded []string
 }
+
+// Degraded returns the signals that never executed, sorted and deduplicated.
+func (r engineRecommender) Degraded() []string { return r.degraded }
 
 func (r engineRecommender) Recommend(ctx context.Context, seeds []int64, n int) ([]int64, error) {
 	req := engine.Request{
 		Kind:    corpus.AO3Kind,
 		N:       n,
 		Exclude: true,
+		Tune:    r.tune,
 		// Every training bookmark is seen, not just the seeds. The question
 		// is whether the recommender finds works this reader has NOT kept;
 		// leaving the other training bookmarks in the pool lets them take
@@ -47,6 +62,9 @@ func (r engineRecommender) Recommend(ctx context.Context, seeds []int64, n int) 
 	res, err := r.eng.Recommend(ctx, req)
 	if err != nil {
 		return nil, err
+	}
+	if r.degraded == nil && len(res.Meta.Degraded) > 0 {
+		r.degraded = append([]string(nil), res.Meta.Degraded...)
 	}
 	out := make([]int64, 0, len(res.Items))
 	for _, item := range res.Items {
@@ -71,6 +89,7 @@ func runEval(ctx context.Context, args []string) error {
 		asJSON = fs.Bool("json", false, "print the report as JSON")
 		pool   = fs.Int("pool", 0, "candidate pool size (0 = the mode's default)")
 		lite   = fs.Bool("lite", c.Mode == "lite", "skip the embedding signal (set from --mode lite)")
+		tune   = fs.String("tune", "", "weight tune to evaluate (see `kindred tune --list`; empty = the built-in default)")
 	)
 	c, err := finishConfig(c, fs, args)
 	if err != nil {
@@ -113,9 +132,26 @@ func runEval(ctx context.Context, args []string) error {
 		collabIdx = idx
 	}
 
+	// The document-frequency table is LOADED here for the same reason serve.go
+	// loads it: the two IDF signals cannot score without it, and an evaluation
+	// that quietly skips them measures a different recommender from the one
+	// answering requests. This was a live defect: three runs came back
+	// byte-identical because the evaluator never had the table.
+	var docFreq *corpus.DocFreq
+	if df, dfErr := corpus.LoadDocFreq(c.CorpusDB); dfErr != nil {
+		if !errors.Is(dfErr, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "eval: docfreq: %v\n", dfErr)
+		}
+		fmt.Fprintf(os.Stderr, "eval: no document-frequency table at %s; idf_overlap and seed_agreement will skip — run \"kindred ingest\"\n",
+			corpus.DocFreqPath(c.CorpusDB))
+	} else {
+		docFreq = df
+	}
+
 	eng := &engine.Engine{
 		Store: s, Corpus: ao3, Graph: g, Collab: collabIdx,
 		PoolSize: *pool, TopN: c.TopN, Lite: *lite, EmbedDim: c.EmbedDim,
+		DocFreq: docFreq,
 	}
 	if ratings, median, rerr := s.EffectiveRatings(ctx); rerr == nil {
 		eng.SetArenaRatings(ratings, median)
@@ -154,10 +190,18 @@ func runEval(ctx context.Context, args []string) error {
 			split.Users, split.TooFew)
 	}
 
-	rep, err := eval.Run(ctx, engineRecommender{eng: eng}, split, *n)
+	if *tune != "" {
+		fmt.Printf("evaluating tune %q\n", *tune)
+	}
+	rec := engineRecommender{eng: eng, tune: *tune}
+	rep, err := eval.Run(ctx, rec, split, *n)
 	if err != nil {
 		return err
 	}
+	// What never ran. Recorded before the numbers are stored so a run with a
+	// blind signal cannot be compared with a complete one as if they were the
+	// same recommender.
+	rep.Degraded = rec.Degraded()
 
 	// Store the run before printing it. A measurement that is not stored can
 	// only be compared with someone's memory of last week, and the whole
@@ -170,7 +214,7 @@ func runEval(ctx context.Context, args []string) error {
 		Evaluated: rep.Evaluated, Failures: rep.Failures,
 		HeldOut: rep.HeldOut, Hits: rep.Hits,
 		Recall: rep.RecallAtK, NDCG: rep.NDCGAtK, Coverage: rep.Coverage,
-		Mode: c.Mode,
+		Mode: c.Mode, Degraded: strings.Join(rep.Degraded, ","),
 	}); rerr != nil {
 		fmt.Fprintf(os.Stderr, "eval: could not record this run (it was still measured): %v\n", rerr)
 	} else {
@@ -210,6 +254,16 @@ func runEval(ctx context.Context, args []string) error {
 		rep.K, rep.RecallAtK, rep.K, rep.NDCGAtK, rep.Coverage)
 	if rep.Failures > 0 {
 		fmt.Printf("%d recommendations failed; first: %s\n", rep.Failures, rep.Errors[0])
+	}
+	// Say what did not run, on every run rather than only when something looks
+	// wrong. "recall 0.0067" means one thing with every signal live and
+	// another with two of them blind, and the two printed identically until
+	// this line existed.
+	if len(rep.Degraded) > 0 {
+		fmt.Printf("signals that never ran: %s -- this run is not production's ranking\n",
+			strings.Join(rep.Degraded, ", "))
+	} else {
+		fmt.Println("every registered signal contributed")
 	}
 	return nil
 }

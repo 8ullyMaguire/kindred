@@ -199,6 +199,13 @@ type Report struct {
 	// cover most readers, or the reverse, and the two are different
 	// products.
 	Coverage float64 `json:"coverage"`
+	// Degraded names the signals that skipped for every candidate, recorded
+	// from the first successful request. It is filled by the caller (the
+	// recommender knows its own meta; this package does not import the
+	// engine), and it exists because a run that never executed idf_overlap or
+	// seed_agreement is not comparable with one that did -- three runs came
+	// back byte-identical for exactly that reason.
+	Degraded []string `json:"degraded,omitempty"`
 	// Placements is where each held-out work landed, for the per-group
 	// slices. It is the only per-work detail the report carries, and it is
 	// emitted in JSON only when asked, because a full run has one row per
