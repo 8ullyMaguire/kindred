@@ -151,3 +151,33 @@ func TestTheBlockQuotesTheNewestRun(t *testing.T) {
 		t.Fatalf("rate = %q, want 50%% (30 of 60)", v.Bands[0].Percent)
 	}
 }
+
+// The reader count in the sentence must be the number of LISTS the bands were
+// computed over, not the number of users in the split: "40 readers" beside 111
+// observed positions across three bands is a claim nobody can check, while "37"
+// is 111/3.
+func TestTheSentenceQuotesTheListsTheBandsWereBuiltFrom(t *testing.T) {
+	ctx := context.Background()
+	d, s := calibrationDeps(t)
+	runID, err := s.RecordEvalRun(ctx, store.EvalRun{
+		K: 10, Readers: 40, Evaluated: 38, Mode: "full",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 37 lists reached position 1; one evaluated reader returned nothing.
+	if err := s.RecordEvalPositions(ctx, runID, []store.EvalPosition{
+		{Position: 1, Hits: 12, Observed: 37},
+		{Position: 2, Hits: 8, Observed: 37},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v := d.calibrationView(ctx)
+	if v.Readers != 37 {
+		t.Fatalf("readers = %d, want 37 (the lists the positions were observed in, "+
+			"not the 40 users in the split)", v.Readers)
+	}
+	if !strings.Contains(v.Sentence, "37 readers") {
+		t.Fatalf("sentence does not quote the measured list count: %q", v.Sentence)
+	}
+}

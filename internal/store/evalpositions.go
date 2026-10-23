@@ -86,10 +86,11 @@ func (s *Store) LatestCalibration(ctx context.Context) (StoredCalibration, error
 		return StoredCalibration{}, fmt.Errorf("no store")
 	}
 	var out StoredCalibration
+	var evaluated int
 	row := s.DB.QueryRowContext(ctx, `
-		SELECT id, k, readers FROM eval_runs
+		SELECT id, k, readers, evaluated FROM eval_runs
 		WHERE id = (SELECT MAX(run_id) FROM eval_positions)`)
-	if err := row.Scan(&out.RunID, &out.K, &out.Readers); err != nil {
+	if err := row.Scan(&out.RunID, &out.K, &out.Readers, &evaluated); err != nil {
 		// "No recorded positions" is a state; a broken query is not. Folding the
 		// two together is how this method first shipped: the column was spelled
 		// run_id where eval_runs has id, the query errored, and every deployment
@@ -115,6 +116,18 @@ func (s *Store) LatestCalibration(ctx context.Context) (StoredCalibration, error
 	}
 	if err := rows.Err(); err != nil {
 		return StoredCalibration{}, fmt.Errorf("latest calibration: %w", err)
+	}
+	// The reader count that travels with the rates is the number of LISTS the
+	// positions were observed in, not the number of users in the split. They are
+	// different numbers (40 users, 38 evaluated, 37 lists long enough to have a
+	// first item) and the sentence quotes this one beside a denominator that was
+	// built from it: "37 readers" next to 111 observed positions is checkable,
+	// "40 readers" next to 111 is not. Derived from position 1 rather than
+	// remembered, for the same reason the roadmap total is.
+	if len(out.Positions) > 0 && out.Positions[0].Position == 1 && out.Positions[0].Observed > 0 {
+		out.Readers = out.Positions[0].Observed
+	} else if evaluated > 0 {
+		out.Readers = evaluated
 	}
 	out.OK = len(out.Positions) > 0
 	return out, nil
