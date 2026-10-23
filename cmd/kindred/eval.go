@@ -284,6 +284,24 @@ func runEval(ctx context.Context, args []string) error {
 		}
 	}
 
+	// Where the hits landed. Recorded with the run for the same reason the slices
+	// are: the aggregate says how many were found and this says how far down the
+	// reader had to go, which is the only number the recommendation page can quote
+	// about trusting the order.
+	if runID > 0 {
+		positions := make([]store.EvalPosition, 0, len(rep.Calibration.Positions))
+		for _, p := range rep.Calibration.Positions {
+			positions = append(positions, store.EvalPosition{
+				Position: p.Position, Hits: p.Hits, Observed: p.Observed,
+			})
+		}
+		if perr := s.RecordEvalPositions(ctx, runID, positions); perr != nil {
+			fmt.Fprintf(os.Stderr, "eval: could not record per-position calibration (the run was still measured): %v\n", perr)
+		} else if !*asJSON {
+			fmt.Printf("recorded per-position calibration for run #%d: %s\n", runID, calibrationLine(rep.Calibration))
+		}
+	}
+
 	// Where the run was weak. The aggregate recall is one number for the whole
 	// mirror, and a fandom whose held-out works are never found is invisible in
 	// it — which is the number that tells a reader whether this works for their
@@ -446,4 +464,29 @@ func recordSlices(ctx context.Context, s *store.Store, ao3 *corpus.AO3, runID in
 		return nil
 	}
 	return s.RecordEvalSlices(ctx, runID, toStore)
+}
+
+// calibrationLine is the short form printed after a run: the three bands the page
+// shows, with the reader count they were measured over. A band with no observations
+// is omitted rather than printed as a zero.
+func calibrationLine(c eval.Calibration) string {
+	if !c.Measured() {
+		return "not calibrated (the run recorded no positions)"
+	}
+	var parts []string
+	for _, b := range []struct {
+		name     string
+		from, to int
+	}{{"first three", 1, 3}, {"next four", 4, 7}, {"the rest", 8, c.K}} {
+		p := c.Band(b.from, b.to)
+		rate, ok := p.Rate()
+		if !ok {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s %.1f%% (%d of %d reached)", b.name, rate*100, p.Hits, p.Observed))
+	}
+	if len(parts) == 0 {
+		return "not calibrated (no position was reached)"
+	}
+	return fmt.Sprintf("%d readers: %s", c.Readers, strings.Join(parts, "; "))
 }

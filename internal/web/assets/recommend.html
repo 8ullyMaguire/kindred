@@ -131,6 +131,40 @@
 {{end}}
 
 {{if .Similar}}
+  {{/* What the ORDER is worth. Every score above is a weight, and a weight is not
+       a probability: 0.41 means "this signal preferred it", not "41% chance".
+       The only calibrated claim available is measured offline — in the last
+       evaluation, how often a work at this band of positions was one the reader
+       went on to bookmark. Bands, not ten rows: the tail of a top-ten is noise in
+       table form. A band that was never reached prints a dash and the count, never
+       0%, and a run under MinReaders prints no percentage at all. */}}
+  <section class="calibration" data-testid="calibration">
+    <h2>How much the order is worth</h2>
+    <p data-testid="calibration-sentence">{{.Calibration.Sentence}}</p>
+    {{if .Calibration.Measured}}
+      <table data-testid="calibration-table">
+        <thead>
+          <tr><th>Positions</th><th>Right</th><th>Reached</th><th>Rate</th></tr>
+        </thead>
+        <tbody>
+          {{range .Calibration.Bands}}
+            <tr data-testid="calibration-band">
+              <td>{{.Label}}</td>
+              <td>{{.Hits}}</td>
+              <td>{{.Observed}}</td>
+              <td>{{if .Percent}}{{.Percent}}{{if .OneIn}} ({{.OneIn}}){{end}}{{else}}&mdash;{{end}}</td>
+            </tr>
+          {{end}}
+        </tbody>
+      </table>
+      <p class="hint">
+        From evaluation run #{{.Calibration.RunID}} over {{.Calibration.Readers}} readers.
+        A dash means that band was never reached, or the run was too small to quote a
+        rate ({{.Calibration.Needed}} readers needed).
+      </p>
+    {{end}}
+  </section>
+
   <div class="recommend" data-testid="results">
     {{range .Similar}}
       <div class="work">

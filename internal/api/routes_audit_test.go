@@ -78,6 +78,10 @@ var routeTable = map[string]routeAudit{
 	// Embedding drift is on /mirror: the operator page that already answers
 	// "what does this deployment hold and does it agree with itself".
 	"GET /api/v1/embed/drift": {Page: "/mirror"},
+	// Where hits land, position by position. The recommendation page prints a
+	// three-band summary of this block, so the two must agree: the page's "18%"
+	// is 14 of 80 here, and a reader who wants the unrounded numbers has a route.
+	"GET /api/v1/calibration": {Page: "/recommend"},
 	// The merged-list experiment. Both routes are the /algo page seen
 	// through its other mode: the page renders the merged list and records
 	// the impressions, and the standings are the same table the page prints.

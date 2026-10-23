@@ -757,6 +757,26 @@ CREATE TABLE IF NOT EXISTS eval_runs (
    itself, which is a different complaint from "I have read this", which is
    about the work itself. Collapsing them would mean a reader cannot ask for
    one without getting the other. */
+/* Where hits LAND, position by position, for one eval run.
+
+   The run row says how many held-out works were found; these rows say how far
+   down the list a reader had to go to find them, which is the only claim the
+   recommendation page can make about trusting the order. observed counts the
+   readers whose list was long enough to HAVE this position -- a recommender
+   that returned five ids for one reader has no observation at position 8, and
+   counting the short list as a miss there would report a failure the ranking
+   never had the chance to make.
+
+   Position 0 or a row with observed = 0 is never stored: a stored 0/0 is read
+   as a total miss by anything that divides without checking. */
+CREATE TABLE IF NOT EXISTS eval_positions (
+	run_id   INTEGER NOT NULL,
+	position INTEGER NOT NULL,
+	hits     INTEGER NOT NULL,
+	observed INTEGER NOT NULL,
+	PRIMARY KEY (run_id, position)
+);
+
 CREATE TABLE IF NOT EXISTS seen_works (
 	owner_key TEXT NOT NULL,
 	entity_id TEXT NOT NULL,

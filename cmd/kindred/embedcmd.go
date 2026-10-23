@@ -201,29 +201,29 @@ func runEmbed(ctx context.Context, args []string) error {
 					component, *dim)
 			}
 			// The drift fingerprint (#76). Taken AFTER the table is stored and AFTER
-	// meta is updated, because it must describe what is now on disk: a
-	// fingerprint written before the checkpoint would describe a build that
-	// never landed.
-	run, derr := s.RecordEmbedRun(ctx, 64)
-	if derr != nil {
-		// Not fatal: the embeddings are correct and usable, and refusing to
-		// finish would turn a monitoring gap into a failed build. It is
-		// reported by name so a silent gap is still visible.
-		fmt.Printf("embed: drift fingerprint failed (%v); the table is stored but this "+
-			"build cannot be compared with the next one\n", derr)
-	} else {
-		prev, _ := s.EmbedRuns(ctx, 2)
-		if len(prev) == 2 {
-			d := store.DriftBetween(prev[1], prev[0])
-			fmt.Printf("embed drift: %s\n", d.Verdict)
-			fmt.Printf("  sampled tags %d, cosine %.4f, centroid %.4f, scale %.3f, rows %d->%d\n",
-				d.SampleN, d.SampleCosine, d.CentroidCosine, d.MeanNormRatio, d.RowsBefore, d.RowsAfter)
-		} else {
-			fmt.Printf("embed drift: first fingerprint for this deployment (%d rows, dim %d)\n",
-				run.Rows, run.Dim)
-		}
-	}
-	if overBudget(*budgetMB) {
+			// meta is updated, because it must describe what is now on disk: a
+			// fingerprint written before the checkpoint would describe a build that
+			// never landed.
+			run, derr := s.RecordEmbedRun(ctx, 64)
+			if derr != nil {
+				// Not fatal: the embeddings are correct and usable, and refusing to
+				// finish would turn a monitoring gap into a failed build. It is
+				// reported by name so a silent gap is still visible.
+				fmt.Printf("embed: drift fingerprint failed (%v); the table is stored but this "+
+					"build cannot be compared with the next one\n", derr)
+			} else {
+				prev, _ := s.EmbedRuns(ctx, 2)
+				if len(prev) == 2 {
+					d := store.DriftBetween(prev[1], prev[0])
+					fmt.Printf("embed drift: %s\n", d.Verdict)
+					fmt.Printf("  sampled tags %d, cosine %.4f, centroid %.4f, scale %.3f, rows %d->%d\n",
+						d.SampleN, d.SampleCosine, d.CentroidCosine, d.MeanNormRatio, d.RowsBefore, d.RowsAfter)
+				} else {
+					fmt.Printf("embed drift: first fingerprint for this deployment (%d rows, dim %d)\n",
+						run.Rows, run.Dim)
+				}
+			}
+			if overBudget(*budgetMB) {
 				return fmt.Errorf("embed: over the %d MiB budget at component %d; "+
 					"lower --dim or run on a host with more memory", *budgetMB, component)
 			}

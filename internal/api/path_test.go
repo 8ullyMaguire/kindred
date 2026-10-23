@@ -27,11 +27,11 @@ func TestPathWithoutEmbeddingsSaysSo(t *testing.T) {
 	body, _ := io.ReadAll(res.Body)
 	var doc struct {
 		Seed      struct{ ID int64 } `json:"seed"`
-		Steps     []any             `json:"steps"`
-		Requested int               `json:"requested"`
-		Returned  int               `json:"returned"`
-		Note      string            `json:"note"`
-		Missing   []string          `json:"missing"`
+		Steps     []any              `json:"steps"`
+		Requested int                `json:"requested"`
+		Returned  int                `json:"returned"`
+		Note      string             `json:"note"`
+		Missing   []string           `json:"missing"`
 	}
 	if err := json.Unmarshal(body, &doc); err != nil {
 		t.Fatalf("decode: %v\n%s", err, body)

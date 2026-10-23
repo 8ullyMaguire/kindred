@@ -155,6 +155,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/algo/choice", s.handleAlgoChoice)
 	mux.HandleFunc("GET /api/v1/related", s.handleRelated)
 	mux.HandleFunc("GET /api/v1/embed/drift", s.handleEmbedDrift)
+	// Where hits land, position by position. The recommendation page prints a
+	// band summary of this; the summary has to be checkable against numbers that
+	// were not rounded on the way out.
+	mux.HandleFunc("GET /api/v1/calibration", s.handleCalibration)
 
 	// Interleaved ranking: one list, both algorithms contributing, and a read
 	// mark as the vote. /standings is the online counterpart of the arena's

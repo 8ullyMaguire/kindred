@@ -2725,6 +2725,10 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 
 	page.Tune = weightRows(res.Tune)
 	page.HideSeen = hideSeen
+	// What the order is worth, measured offline. A store failure inside this
+	// leaves a sentence saying so rather than failing the page: the list is still
+	// correct without it.
+	page.Calibration = d.calibrationView(ctx)
 	// Which results this reader has already liked or disliked, so the buttons
 	// render in their pressed state rather than resetting on every view. The
 	// read is one query for the whole list, NOT one per result: the work page

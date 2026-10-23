@@ -664,6 +664,18 @@ var pageRenderCases = []pageRenderCase{
 			MaxSeeds:        5,
 			SeedOrigin:      "No seed was given, so this starts from the 3 most-kudosed works in the mirror.",
 			ShortfallReason: "The cap of 3 per fandom removed the rest.",
+			// The calibration block, populated. Every field is set because a
+			// template referencing a field that does not exist renders empty
+			// and a sweep that never populated it would not notice.
+			Calibration: CalibrationView{
+				Sentence: "In the last evaluation, 40 readers' lists were right at: first three 18%.",
+				Measured: true, Enough: true, Readers: 40, Needed: 20, RunID: 7,
+				Bands: []CalibrationBand{
+					{Label: "the first three", Hits: 14, Observed: 80, Percent: "18%", OneIn: "1 in 6"},
+					{Label: "the next four", Hits: 6, Observed: 80, Percent: "8%", OneIn: "1 in 13"},
+					{Label: "the rest", Hits: 0, Observed: 0},
+				},
+			},
 			Tune: []WeightRow{
 				{Name: "co_occurrence", Weight: 0.8},
 				{Name: "arena", Weight: 0.2},

@@ -603,6 +603,12 @@ type RecommendPage struct {
 	Base
 	Similar []rank.Candidate
 
+	// Calibration is what the ORDER is worth, from the last evaluation: how
+	// often a work at each band of positions was one the reader went on to
+	// bookmark. It is not per-item evidence and must not be printed as though a
+	// reader's own list had been measured.
+	Calibration CalibrationView
+
 	// Seeds echo back what was ranked, so the form can show them and so a
 	// reader can see that a sixth seed was dropped rather than silently
 	// ignored.

@@ -217,10 +217,15 @@ type Report struct {
 	// DiversitySkipped says why it could not be computed at all. A run with
 	// DiversityRuns==0 did NOT measure a perfectly diverse list: unmeasured and
 	// zero overlap are different facts.
-	TagOverlap       float64 `json:"tag_overlap"`
-	DistinctFandoms  float64 `json:"distinct_fandoms"`
-	DiversityRuns    int     `json:"diversity_runs"`
-	DiversitySkipped string  `json:"diversity_skipped,omitempty"`
+	// Calibration records where hits LAND, position by position. Every other
+	// metric here says how many held-out works were found; this one says how
+	// far down the list a reader had to go, which is the only claim the page
+	// can make about trusting the order. See calibration.go.
+	Calibration      Calibration `json:"calibration"`
+	TagOverlap       float64     `json:"tag_overlap"`
+	DistinctFandoms  float64     `json:"distinct_fandoms"`
+	DiversityRuns    int         `json:"diversity_runs"`
+	DiversitySkipped string      `json:"diversity_skipped,omitempty"`
 	// Degraded names the signals that skipped for every candidate, recorded
 	// from the first successful request. It is filled by the caller (the
 	// recommender knows its own meta; this package does not import the
@@ -380,6 +385,11 @@ func Run(ctx context.Context, rec Recommender, split Split, k int, opts ...Optio
 	}
 
 	var recallSum, ndcgSum, poolSum, overlapSum, fandomsSum float64
+	// Position counters, one slot per position to k, filled as the list is
+	// walked. Observed counts past the end of a short list stay zero rather
+	// than becoming misses: see PositionRate.
+	posHits := make([]int, k)
+	posSeen := make([]int, k)
 	for _, user := range users {
 		if err := ctx.Err(); err != nil {
 			return rep, err
@@ -410,6 +420,9 @@ func Run(ctx context.Context, rec Recommender, split Split, k int, opts ...Optio
 		// The first occurrence of a work is the one that counts. A
 		// recommender returning the same id twice must not be paid twice.
 		seen := make(map[int64]bool, len(recs))
+		// The position counter is PER READER: carrying it across readers would
+		// put the second reader's first hit at the fifth slot.
+		posWalked := 0
 		rankOf := make(map[int64]int, len(recs))
 		// The pool count walks the WHOLE returned list, the ranking count only
 		// the first k. Counting pool hits as ranking hits is the mistake this
@@ -432,6 +445,16 @@ func Run(ctx context.Context, rec Recommender, split Split, k int, opts ...Optio
 				continue
 			}
 			seen[id] = true
+			// The position is the one the reader sees, so it counts the
+			// deduplicated list: a repeat does not occupy a new slot and its
+			// neighbours do not shift down.
+			if posWalked < k {
+				posSeen[posWalked]++
+				if wanted[id] {
+					posHits[posWalked]++
+				}
+			}
+			posWalked++
 			if wanted[id] {
 				hits++
 				dcg += 1 / math.Log2(float64(i+2))
@@ -483,6 +506,17 @@ func Run(ctx context.Context, rec Recommender, split Split, k int, opts ...Optio
 	rep.PoolDepth = depth
 	if rep.Evaluated > 0 {
 		rep.PoolRecall = poolSum / float64(rep.Evaluated)
+		rep.Calibration = Calibration{K: k, Readers: rep.Evaluated}
+		for i := 0; i < k; i++ {
+			if posSeen[i] == 0 {
+				continue
+			}
+			rep.Calibration.Positions = append(rep.Calibration.Positions,
+				PositionRate{Position: i + 1, Hits: posHits[i], Observed: posSeen[i]})
+		}
+		if len(rep.Calibration.Positions) == 0 {
+			rep.Calibration.Skipped = "no reader's list reached a position, so nothing could be calibrated"
+		}
 		rep.RecallAtK = recallSum / float64(rep.Evaluated)
 		rep.NDCGAtK = ndcgSum / float64(rep.Evaluated)
 		rep.Coverage /= float64(rep.Evaluated)

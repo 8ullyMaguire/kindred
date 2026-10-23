@@ -835,6 +835,15 @@ check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped
 check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
 
 echo
+echo "what the order is worth (#42)"
+# The block must be present even with no calibration recorded: a page that hides
+# the block until data exists teaches a reader nothing about why it is missing.
+check "the recommendation page says what the order is worth" "$TARGET/recommend" 'data-testid="calibration-sentence"'
+# And the endpoint must answer the question "calibrated or not" explicitly, rather
+# than returning an empty object a consumer would read as "zero".
+check "the calibration endpoint reports whether it is calibrated" "$TARGET/api/v1/calibration" '"calibrated"'
+
+echo
 echo "diversity, recorded with each offline run (#79)"
 # The columns must exist AND the page must say "not measured" for a run that did
 # not measure them: rendering 0.000 there would claim a perfectly diverse list.

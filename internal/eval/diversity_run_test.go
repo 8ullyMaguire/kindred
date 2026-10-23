@@ -101,7 +101,7 @@ func TestARecommenderWithoutTagsReportsUnmeasuredRatherThanZero(t *testing.T) {
 // item report a beautifully diverse corpus.
 func TestASingleItemListDoesNotPullTheAverageDown(t *testing.T) {
 	rec := taggedRec{
-		ids: map[int64][]int64{1: {1}},
+		ids:  map[int64][]int64{1: {1}},
 		tags: map[int64]WorkTags{1: tags(10, 11)},
 	}
 	rep, err := Run(context.Background(), rec, diversitySplit(), 4)
