@@ -192,6 +192,15 @@ func allPages() []pageSpec {
 				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, arg string) { d.renderTag(w, r, arg) },
 			},
 			{
+				Template: "path.html",
+				Paths:    []string{"/path/"},
+				Prefix:   true,
+				// A detail page that renders a list of rows. The list is the
+				// page, so an empty one needs its marker like any other list.
+				List:    true,
+				Handler: func(d Deps, w http.ResponseWriter, r *http.Request, arg string) { d.renderPath(w, r, arg) },
+			},
+			{
 				Template: "author.html",
 				Paths:    []string{"/author"},
 				List:     true,

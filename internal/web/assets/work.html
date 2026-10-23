@@ -117,6 +117,15 @@
   </p>
 {{end}}
 
+{{/* A reading path (#40). A link rather than a section: a walk is ten
+     embedding queries, and making every work page pay for it would cost every
+     reader who came here for the work. */}}
+<p class="note">
+  <a href="/path/{{.Work.ID}}">A path from here</a>
+  — a walk where each stop is the work nearest the one before it, so it drifts
+  instead of pointing back at this one.
+</p>
+
 {{/* Work-pair similarity (#78). A form rather than a link, because the other
      half of the pair is a number the reader has to supply -- and the report is
      rendered IN PLACE, so the reader keeps the work they were reading. */}}

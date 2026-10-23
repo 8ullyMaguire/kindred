@@ -227,6 +227,61 @@ var pageRenderCases = []pageRenderCase{
 		wantNotContains: []string{"<tbody"},
 	},
 	{
+		tpl:  "path.html",
+		name: "path.html with a walk",
+		data: PathPage{
+			Base:   sweepBase,
+			Steps:  10,
+			LastID: 208,
+			Path: &engine.ReadingPath{
+				Seed:          engine.WorkRef{ID: 1, Title: "A Work"},
+				Requested:     10,
+				Returned:      2,
+				DriftFromSeed: 2,
+				Steps: []engine.PathStep{
+					{
+						WorkRef:        engine.WorkRef{ID: 207, Title: "Next Door"},
+						Step:           1,
+						SimToPrev:      0.81,
+						SharedWithPrev: []string{"fluff"},
+						SharesSeedTag:  true,
+					},
+					{
+						WorkRef:       engine.WorkRef{ID: 208, Title: "Further Out"},
+						Step:          2,
+						SimToPrev:     0.42,
+						SharesSeedTag: false,
+					},
+				},
+			},
+		},
+		// The drift marker only renders on a step that shares nothing with the
+		// seed, so a sweep with every step still on the seed's tags would not
+		// execute that branch at all.
+		wantContains: []string{"Next Door", "Further Out", "0.42", "left-the-seed", "2 of 10 steps"},
+	},
+	{
+		tpl:  "path.html",
+		name: "path.html whose walk took no step",
+		data: PathPage{
+			Base:  sweepBase,
+			Steps: 10,
+			Path: &engine.ReadingPath{
+				Seed:      engine.WorkRef{ID: 1, Title: "A Work"},
+				Requested: 10,
+				Note:      "No step could be taken from this work.",
+			},
+		},
+		hasEmptyList: true,
+		wantContains: []string{"No step could be taken"},
+	},
+	{
+		tpl:          "path.html",
+		name:         "path.html with no work named",
+		data:         PathPage{Base: sweepBase, Steps: 10},
+		wantContains: []string{"/path/17249318", "A path starts from a work"},
+	},
+	{
 		tpl:  "work.html",
 		name: "work.html whose recommendations are empty but not failed",
 		data: WorkPage{

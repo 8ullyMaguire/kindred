@@ -1745,6 +1745,51 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 	d.page(w, "work.html", page, http.StatusOK)
 }
 
+// renderPath draws a reading path (#40).
+//
+// A page of its own rather than a section on the work page: a walk is ten
+// embedding queries, and the work page already runs a full ranking. Putting it
+// behind /work/{id} would make every work page pay for a feature most readers
+// never touch.
+func (d Deps) renderPath(w http.ResponseWriter, r *http.Request, arg string) {
+	base := d.baseOf(r, "Reading path", "Reading path")
+	page := PathPage{Base: base, Steps: 10}
+	if s := r.URL.Query().Get("steps"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 40 {
+			page.Steps = n
+		}
+	}
+	if !d.hasCorpus() {
+		d.fail(w, r, http.StatusServiceUnavailable, errNoCorpus)
+		return
+	}
+	id, err := strconv.ParseInt(strings.Trim(strings.TrimSpace(arg), "/"), 10, 64)
+	if err != nil || id <= 0 {
+		// No id is the untouched form: the page has to be able to ask for one in
+		// its own voice rather than 404 on its own address.
+		d.page(w, "path.html", page, http.StatusOK)
+		return
+	}
+	res, err := d.Engine.ReadingPath(r.Context(), id, page.Steps)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, corpus.ErrNotFound) {
+			// The page still renders: a mistyped id should leave the reader on
+			// the form they typed into, not on a bare 404.
+			page.Err = "No work with that id is in this mirror."
+			d.page(w, "path.html", page, http.StatusOK)
+			return
+		}
+		d.fail(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	page.Path = res
+	if n := len(res.Steps); n > 0 {
+		page.LastID = res.Steps[n-1].ID
+	}
+	page.Base.Title = "A path from " + res.Seed.Title
+	d.page(w, "path.html", page, http.StatusOK)
+}
+
 func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	ctx := r.Context()
 	id, err := strconv.ParseInt(idStr, 10, 64)

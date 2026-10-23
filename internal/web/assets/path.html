@@ -1,0 +1,68 @@
+{{define "content"}}
+{{/* A reading path (#40).
+
+     Each step is measured from the PREVIOUS work, not from the seed, so the
+     numbers are meant to be read DOWN the list: a fall from 0.62 to 0.31 says
+     the walk has reached the edge of what the space knows about; a list of
+     numbers all near the seed's would be the "more like this" list, which the
+     work page already has. */}}
+<h1>A reading path</h1>
+
+<p class="note">
+  Each step is the work nearest the one before it, so the list drifts away from
+  where it started. The number is how close each stop is to the <em>previous</em>
+  one — not to the first, which is what "more like this" reports.
+</p>
+
+<form method="get" class="path-form">
+  <label for="steps">Steps</label>
+  <input type="number" id="steps" name="steps" min="1" max="40" value="{{.Steps}}">
+  <button type="submit">Redraw</button>
+</form>
+
+{{if .Err}}
+  <p class="note" data-testid="path-error">{{.Err}}</p>
+{{else if not .Path}}
+  <p class="note">
+    A path starts from a work. Open any work and follow
+    “A path from here”, or add a work id to this address: <code>/path/17249318</code>.
+  </p>
+{{else}}
+  <h2>From <a href="/work/{{.Path.Seed.ID}}">{{.Path.Seed.Title}}</a></h2>
+
+  {{if .Path.Note}}
+    <p class="note" data-testid="path-note">{{.Path.Note}}</p>
+  {{end}}
+
+  {{if .Path.Steps}}
+    <ol class="path">
+      {{range .Path.Steps}}
+      <li>
+        <a href="/work/{{.ID}}">{{.Title}}</a>
+        <span class="count">step {{.Step}} · {{printf "%.2f" .SimToPrev}} from the step before</span>
+        {{if .SharedWithPrev}}
+          <span class="count">shares {{range $i, $t := .SharedWithPrev}}{{if $i}}, {{end}}{{$t}}{{end}}</span>
+        {{end}}
+        {{if not .SharesSeedTag}}
+          <span class="count" data-testid="left-the-seed">no tag in common with the seed</span>
+        {{end}}
+      </li>
+      {{end}}
+    </ol>
+    <p class="count">
+      {{.Path.Returned}} of {{.Path.Requested}} steps
+      {{if .Path.DriftFromSeed}}· the walk left the seed’s own tags at step
+      {{.Path.DriftFromSeed}}{{else}}· every step still shares a tag with the
+      seed, so this path has not gone anywhere the work page could not{{end}}.
+    </p>
+    <p>
+      {{if .LastID}}<a href="/path/{{.LastID}}">Continue from the last stop</a>{{end}}
+      — a path that ends is just a shorter path.
+    </p>
+  {{else}}
+    <p class="note" data-empty="true">
+      No step could be taken from this work.
+    </p>
+  {{end}}
+{{end}}
+{{end}}

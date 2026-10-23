@@ -59,6 +59,9 @@ var routeTable = map[string]routeAudit{
 	// Work-pair similarity (#78). The page is the work page's compare form,
 	// which renders the report in place under ?compare={other}.
 	"GET /api/v1/works/{id}/similarity/{other}": {Page: "/work/{id}?compare={other}"},
+	// A reading path (#40) has its own page: a walk is ten embedding queries and
+	// the work page must not pay for it.
+	"GET /api/v1/works/{id}/path": {Page: "/path/{id}"},
 	// The algorithm A/B surface. An algorithm is a named tune; the page
 	// shows one seed ranked through two of them, side by side, and records
 	// which list the reader preferred.

@@ -189,6 +189,23 @@ type TagHit struct {
 	Name string
 }
 
+// PathPage is a reading path (#40): a walk through embedding space where each
+// step is measured from the PREVIOUS work, so the list drifts instead of
+// describing the seed ten times.
+type PathPage struct {
+	Base
+	Path *engine.ReadingPath
+	// Steps echoes what the reader asked for, so the control is not reset by
+	// the answer it produced.
+	Steps int
+	// Err is the reason there is no path (an unknown work, most often). The page
+	// still renders its form.
+	Err string
+	// LastID is the final stop, so the page can offer to continue from there. A
+	// path that ends is just a shorter path, and the walk is the product.
+	LastID int64
+}
+
 // WorkPage is a single work, with the tags it carries and what the
 // recommender makes of it.
 type WorkPage struct {

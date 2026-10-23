@@ -133,6 +133,9 @@ func (s *Server) Routes() http.Handler {
 	// Work-pair similarity: the components behind "these two are alike",
 	// separately, because a single score hides which axis carried it.
 	mux.HandleFunc("GET /api/v1/works/{id}/similarity/{other}", s.handleWorkSimilarity)
+	// A reading path: a walk where each step is measured from the previous
+	// work, so the list drifts instead of describing the seed N times.
+	mux.HandleFunc("GET /api/v1/works/{id}/path", s.handlePath)
 	// The algorithm A/B arena. An "algorithm" is a named tune (a weight
 	// vector over the scoring signals), which is the registry this
 	// deployment already has. Votes go to algo_comparisons, NOT to
