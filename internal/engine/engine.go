@@ -528,6 +528,15 @@ func DefaultTune() rank.Tune {
 			// tag at all and skip, where tag_overlap always has an
 			// opinion. A tune can raise it on a large mirror.
 			"idf_overlap": 0.12,
+			// seed_agreement asks a different question from idf_overlap:
+			// not "match one seed well" but "speak to most of them".
+			// With one seed it is a restatement of idf_overlap and skips,
+			// so a one-seed request pays nothing for it.
+			//
+			// It starts level with idf_overlap and is measured, not
+			// assumed: `kindred eval` records recall and the per-fandom
+			// slices, and the tune exists to be changed on that evidence.
+			"seed_agreement": 0.10,
 		},
 	}
 }
@@ -1464,6 +1473,22 @@ func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, 
 		}
 	}
 	sigs = append(sigs, signal.IDFWeightedOverlap{
+		DocFreq: docFreq,
+		Total:   corpusTotal,
+	})
+
+	// seed_agreement is the same rarity weighting, averaged over the seeds
+	// instead of maximised over them. Every other tag signal here answers
+	// "how well does this work match your best seed"; with twenty bookmarks
+	// that question lets a work which hits one of the reader's fandoms rank
+	// beside a work which hits most of them.
+	//
+	// Registered unconditionally like the rest: with fewer than two usable
+	// seeds it skips for every candidate and names itself in
+	// meta.degraded[], which is the difference between "you gave me one
+	// seed, so agreement is not a question" and "the signal is broken".
+	sigs = append(sigs, signal.SeedAgreement{
+		MaxTags: 200,
 		DocFreq: docFreq,
 		Total:   corpusTotal,
 	})

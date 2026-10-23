@@ -61,14 +61,27 @@ func (s IDFWeightedOverlap) Name() string { return "idf_overlap" }
 // frequency table is a table-completeness gap, not a reason to fail the
 // whole ranking.
 func (s IDFWeightedOverlap) idf(id int32) float64 {
-	df, ok := s.DocFreq[id]
+	return idfOf(s.DocFreq, s.Total, id)
+}
+
+// idfOf is the one definition of "how rare is this tag", shared by every
+// signal that weights a match by rarity. Two copies of this formula would
+// drift: one of them would end up treating a universal tag as evidence.
+//
+// A tag on every work in the corpus contributes 0 -- it discriminates nothing.
+// A tag on one work contributes log(M). A tag absent from the table is treated
+// as maximally rare rather than as an error: the frequency table and a work's
+// tag list are built by different walks, and a gap in the table is not a
+// reason to fail the whole ranking.
+func idfOf(docFreq map[int32]float64, total float64, id int32) float64 {
+	df, ok := docFreq[id]
 	if !ok || df <= 0 {
-		return math.Log(s.Total)
+		return math.Log(total)
 	}
-	if df >= s.Total {
+	if df >= total {
 		return 0
 	}
-	return math.Log(s.Total / df)
+	return math.Log(total / df)
 }
 
 // Score returns the candidate's IDF-weighted agreement with the seeds.
