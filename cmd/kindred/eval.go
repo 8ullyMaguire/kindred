@@ -36,6 +36,12 @@ type engineRecommender struct {
 	// reason tune is: widening the pool is an ablation (`--pool-mode
 	// tags+collab+embed`), and an ablation must not need a rebuild.
 	poolMode engine.PoolMode
+	// lambda is the relevance/diversity trade-off the diversification pass
+	// uses. 0 means the engine's own default (0.75), so an unchanged command
+	// line keeps today's behaviour; 1.0 turns diversification off, which is
+	// the ablation that gives the diversity metric something to be compared
+	// against.
+	lambda float64
 	// degraded records the signals that skipped for every candidate, from the
 	// first request that completed. One request is enough -- meta.degraded is
 	// a property of the engine's configuration, not of a particular reader --
@@ -46,6 +52,33 @@ type engineRecommender struct {
 // Degraded returns the signals that never executed, sorted and deduplicated.
 func (r engineRecommender) Degraded() []string { return r.degraded }
 
+// TagsFor implements eval.TagSource: the tags a returned work carries, so the
+// evaluation can measure how much one list repeats itself.
+//
+// It is on the recommender rather than in the evaluator because eval must not
+// import the engine or the corpus (it is the offline arm and has to work against
+// any Recommender), and because the ids the recommender just returned are the
+// only list whose diversity is being measured.
+func (r engineRecommender) TagsFor(ctx context.Context, ids []int64) (map[int64]eval.WorkTags, error) {
+	if r.eng == nil || r.eng.Corpus == nil {
+		return nil, fmt.Errorf("no corpus to read tags from")
+	}
+	pairs, err := r.eng.Corpus.TagPairs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]eval.WorkTags, len(pairs))
+	for id, list := range pairs {
+		wt := eval.WorkTags{IDs: make([]int32, 0, len(list)), Names: make([]string, 0, len(list))}
+		for _, p := range list {
+			wt.IDs = append(wt.IDs, p.ID)
+			wt.Names = append(wt.Names, p.Name)
+		}
+		out[id] = wt
+	}
+	return out, nil
+}
+
 func (r engineRecommender) Recommend(ctx context.Context, seeds []int64, n int) ([]int64, error) {
 	req := engine.Request{
 		Kind:     corpus.AO3Kind,
@@ -53,6 +86,7 @@ func (r engineRecommender) Recommend(ctx context.Context, seeds []int64, n int) 
 		Exclude:  true,
 		Tune:     r.tune,
 		PoolMode: r.poolMode,
+		Lambda:   r.lambda,
 		// Every training bookmark is seen, not just the seeds. The question
 		// is whether the recommender finds works this reader has NOT kept;
 		// leaving the other training bookmarks in the pool lets them take
@@ -97,6 +131,8 @@ func runEval(ctx context.Context, args []string) error {
 		tune     = fs.String("tune", "", "weight tune to evaluate (see `kindred tune --list`; empty = the built-in default)")
 		probe    = fs.Int("pool-depth", 0, "also measure candidate-generation recall at this depth (0 = off)")
 		poolMode = fs.String("pool-mode", engine.DefaultPoolMode.String(), "candidate sources: tags, tags+collab, tags+embed, tags+collab+embed")
+
+		lambda = fs.Float64("lambda", 0, "relevance vs diversity for the MMR pass (0 = engine default 0.75; 1 = no diversification). Changing it is how the diversity numbers in eval_runs earn their keep")
 	)
 	c, err := finishConfig(c, fs, args)
 	if err != nil {
@@ -204,7 +240,13 @@ func runEval(ctx context.Context, args []string) error {
 	if *tune != "" {
 		fmt.Printf("evaluating tune %q\n", *tune)
 	}
-	rec := engineRecommender{eng: eng, tune: *tune, poolMode: pmode}
+	if *lambda < 0 || *lambda > 1 {
+		return fmt.Errorf("--lambda must be between 0 and 1, got %v", *lambda)
+	}
+	if *lambda > 0 {
+		fmt.Printf("diversification lambda %.2f\n", *lambda)
+	}
+	rec := engineRecommender{eng: eng, tune: *tune, poolMode: pmode, lambda: *lambda}
 	var runOpts []eval.Option
 	if *probe > 0 {
 		runOpts = append(runOpts, eval.WithPoolDepth(*probe))
@@ -231,6 +273,8 @@ func runEval(ctx context.Context, args []string) error {
 		Recall: rep.RecallAtK, NDCG: rep.NDCGAtK, Coverage: rep.Coverage,
 		Mode: c.Mode, Degraded: degradedField(rep.Degraded),
 		PoolDepth: rep.PoolDepth, PoolHits: rep.PoolHits, PoolRecall: rep.PoolRecall,
+		TagOverlap: rep.TagOverlap, DistinctFandoms: rep.DistinctFandoms,
+		DiversityRuns: rep.DiversityRuns,
 	}); rerr != nil {
 		fmt.Fprintf(os.Stderr, "eval: could not record this run (it was still measured): %v\n", rerr)
 	} else {
@@ -268,6 +312,17 @@ func runEval(ctx context.Context, args []string) error {
 		rep.HeldOut, rep.Bookmarks, *ratio)
 	fmt.Printf("recall@%d %.4f  ndcg@%d %.4f  coverage %.4f\n",
 		rep.K, rep.RecallAtK, rep.K, rep.NDCGAtK, rep.Coverage)
+	// What the ranking bought and what it cost. Recall alone cannot tell a
+	// list of twelve variations on one fic from twelve different works, and the
+	// MMR pass spends recall to avoid the first — so the two numbers print
+	// together. "not measured" prints as its own sentence: zero overlap is a
+	// good result and unmeasured is not.
+	if rep.DiversityRuns > 0 {
+		fmt.Printf("diversity: tag overlap %.3f (0 = no shared tags), %.1f fandoms per list, over %d readers\n",
+			rep.TagOverlap, rep.DistinctFandoms, rep.DiversityRuns)
+	} else {
+		fmt.Printf("diversity: not measured -- %s\n", rep.DiversitySkipped)
+	}
 	if rep.Failures > 0 {
 		fmt.Printf("%d recommendations failed; first: %s\n", rep.Failures, rep.Errors[0])
 	}

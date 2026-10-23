@@ -38,6 +38,16 @@ type EvalRun struct {
 	PoolDepth  int     `json:"pool_depth,omitempty"`
 	PoolHits   int     `json:"pool_hits,omitempty"`
 	PoolRecall float64 `json:"pool_recall,omitempty"`
+	// TagOverlap and DistinctFandoms are what the ranking BOUGHT and COST:
+	// recall says how many held-out works were found, these say whether the
+	// list was twelve variations on one fic. Stored per run so a tune that
+	// quietly turned diversification off shows up as an overlap rise rather
+	// than as an unexplained recall gain. DiversityRuns is how many readers
+	// they were averaged over; zero means the run did not measure them, which
+	// is NOT the same as zero overlap.
+	TagOverlap      float64 `json:"tag_overlap"`
+	DistinctFandoms float64 `json:"distinct_fandoms"`
+	DiversityRuns   int     `json:"diversity_runs"`
 	// Degraded names the signals that skipped for every candidate in this
 	// run, comma separated. A run with idf_overlap in this list measured a
 	// different recommender from the one serving requests, and the recall
@@ -58,11 +68,13 @@ func (s *Store) RecordEvalRun(ctx context.Context, r EvalRun) (int64, error) {
 		INSERT INTO eval_runs
 			(k, readers, bookmarks, evaluated, failures, held_out, hits,
 			 recall_at_k, ndcg_at_k, coverage, mode, degraded,
-			 pool_depth, pool_hits, pool_recall)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 pool_depth, pool_hits, pool_recall,
+		 tag_overlap, distinct_fandoms, diversity_runs)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.K, r.Readers, r.Bookmarks, r.Evaluated, r.Failures, r.HeldOut, r.Hits,
 		r.Recall, r.NDCG, r.Coverage, r.Mode, r.Degraded,
-		r.PoolDepth, r.PoolHits, r.PoolRecall)
+		r.PoolDepth, r.PoolHits, r.PoolRecall,
+		r.TagOverlap, r.DistinctFandoms, r.DiversityRuns)
 	if err != nil {
 		return 0, fmt.Errorf("record eval run: %w", err)
 	}
@@ -84,7 +96,8 @@ func (s *Store) EvalRuns(ctx context.Context, limit int) ([]EvalRun, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT id, ran_at, k, readers, bookmarks, evaluated, failures,
 		       held_out, hits, recall_at_k, ndcg_at_k, coverage, mode, degraded,
-		       pool_depth, pool_hits, pool_recall
+		       pool_depth, pool_hits, pool_recall,
+		       tag_overlap, distinct_fandoms, diversity_runs
 		  FROM eval_runs
 		 ORDER BY id DESC
 		 LIMIT ?`, limit)
@@ -99,7 +112,8 @@ func (s *Store) EvalRuns(ctx context.Context, limit int) ([]EvalRun, error) {
 		if err := rows.Scan(&r.ID, &r.RanAt, &r.K, &r.Readers, &r.Bookmarks,
 			&r.Evaluated, &r.Failures, &r.HeldOut, &r.Hits,
 			&r.Recall, &r.NDCG, &r.Coverage, &r.Mode, &r.Degraded,
-			&r.PoolDepth, &r.PoolHits, &r.PoolRecall); err != nil {
+			&r.PoolDepth, &r.PoolHits, &r.PoolRecall,
+			&r.TagOverlap, &r.DistinctFandoms, &r.DiversityRuns); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

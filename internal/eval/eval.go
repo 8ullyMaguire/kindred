@@ -207,6 +207,20 @@ type Report struct {
 	PoolDepth  int     `json:"pool_depth,omitempty"`
 	PoolHits   int     `json:"pool_hits,omitempty"`
 	PoolRecall float64 `json:"pool_recall,omitempty"`
+	// TagOverlap is the mean pairwise Jaccard similarity of the tag sets in
+	// each reader's returned list, and DistinctFandoms the mean number of
+	// distinct fandom groups in it. Both are the PRICE PAID for recall by the
+	// MMR pass, recorded so a tune that quietly turned diversification off
+	// cannot look like an improvement. See diversity.go.
+	//
+	// DiversityRuns counts the readers the measurement was computed for, and
+	// DiversitySkipped says why it could not be computed at all. A run with
+	// DiversityRuns==0 did NOT measure a perfectly diverse list: unmeasured and
+	// zero overlap are different facts.
+	TagOverlap       float64 `json:"tag_overlap"`
+	DistinctFandoms  float64 `json:"distinct_fandoms"`
+	DiversityRuns    int     `json:"diversity_runs"`
+	DiversitySkipped string  `json:"diversity_skipped,omitempty"`
 	// Degraded names the signals that skipped for every candidate, recorded
 	// from the first successful request. It is filled by the caller (the
 	// recommender knows its own meta; this package does not import the
@@ -358,7 +372,14 @@ func Run(ctx context.Context, rec Recommender, split Split, k int, opts ...Optio
 	}
 	sort.Slice(users, func(i, j int) bool { return users[i] < users[j] })
 
-	var recallSum, ndcgSum, poolSum float64
+	// The optional half: a recommender that can say what tags a work carries.
+	// Asserted once, because the answer cannot change between readers.
+	tagSrc, canMeasureDiversity := rec.(TagSource)
+	if !canMeasureDiversity {
+		rep.DiversitySkipped = "the recommender cannot supply tags, so intra-list diversity was not measured"
+	}
+
+	var recallSum, ndcgSum, poolSum, overlapSum, fandomsSum float64
 	for _, user := range users {
 		if err := ctx.Err(); err != nil {
 			return rep, err
@@ -432,6 +453,32 @@ func Run(ctx context.Context, rec Recommender, split Split, k int, opts ...Optio
 		if hits > 0 {
 			rep.Coverage++
 		}
+		// Intra-list diversity over the same first-k ids the ranking metrics
+		// use. A failure here does NOT fail the reader: the recall number is
+		// already computed and a tag lookup that went wrong must not throw away
+		// a measurement. It is recorded as why the diversity number is absent.
+		if canMeasureDiversity {
+			topIDs := make([]int64, 0, k)
+			topSeen := make(map[int64]bool, k)
+			for i, id := range recs {
+				if i >= k {
+					break
+				}
+				if topSeen[id] {
+					continue
+				}
+				topSeen[id] = true
+				topIDs = append(topIDs, id)
+			}
+			div, derr := Measure(ctx, tagSrc, topIDs, k)
+			if derr != nil {
+				rep.DiversitySkipped = "the tag lookup failed: " + derr.Error()
+			} else if div.Items >= 2 {
+				overlapSum += div.TagOverlap
+				fandomsSum += float64(div.DistinctFandoms)
+				rep.DiversityRuns++
+			}
+		}
 	}
 	rep.PoolDepth = depth
 	if rep.Evaluated > 0 {
@@ -439,6 +486,10 @@ func Run(ctx context.Context, rec Recommender, split Split, k int, opts ...Optio
 		rep.RecallAtK = recallSum / float64(rep.Evaluated)
 		rep.NDCGAtK = ndcgSum / float64(rep.Evaluated)
 		rep.Coverage /= float64(rep.Evaluated)
+		if rep.DiversityRuns > 0 {
+			rep.TagOverlap = overlapSum / float64(rep.DiversityRuns)
+			rep.DistinctFandoms = fandomsSum / float64(rep.DiversityRuns)
+		}
 	} else if rep.Failures > 0 {
 		return rep, fmt.Errorf("every recommendation failed (%d readers); first: %s",
 			rep.Failures, rep.Errors[0])

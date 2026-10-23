@@ -32,7 +32,8 @@
         <th>Run</th><th>When</th><th class="num">k</th><th>Mode</th>
         <th class="num">Readers</th><th class="num">Evaluated</th>
         <th class="num">Recall</th><th class="num">NDCG</th><th class="num">Coverage</th>
-        <th class="num">Pool recall</th><th>Signals blind</th>
+        <th class="num">Pool recall</th>
+        <th class="num">Overlap</th><th class="num">Fandoms</th><th>Signals blind</th>
       </tr>
     </thead>
     <tbody>
@@ -48,6 +49,8 @@
           <td class="num">{{printf "%.4f" .NDCG}}</td>
           <td class="num">{{printf "%.4f" .Coverage}}</td>
           <td class="num" data-testid="eval-pool">{{if .PoolDepth}}{{printf "%.4f" .PoolRecall}} @{{.PoolDepth}}{{else}}—{{end}}</td>
+          <td class="num" data-testid="eval-overlap">{{if .DiversityRuns}}{{printf "%.3f" .TagOverlap}}{{else}}not measured{{end}}</td>
+          <td class="num" data-testid="eval-fandoms">{{if .DiversityRuns}}{{printf "%.1f" .DistinctFandoms}}{{else}}—{{end}}</td>
           <td data-testid="eval-degraded">{{if not .Degraded}}not recorded{{else if eq .Degraded "all"}}none{{else}}{{.Degraded}}{{end}}</td>
         </tr>
       {{end}}
@@ -58,6 +61,15 @@
     the candidate set at all, at the depth shown. Recall above can never exceed
     it: when pool recall is small the ceiling is candidate generation, not the
     weights, and re-tuning cannot help.
+    <strong>Overlap</strong> is the mean pairwise tag similarity inside each
+    reader's list: 0.0 means no two works shared a tag and 1.0 means the same
+    work repeated. <strong>Fandoms</strong> is how many distinct fandom groups a
+    list held. These are the price diversification charges against recall:
+    <code>kindred eval --lambda 1</code> turns the pass off, and the two runs
+    then differ in exactly these two columns and in recall.
+    A row that says <em>not measured</em> predates the metric or was produced by
+    a recommender that cannot supply tags — which is not the same as zero
+    overlap, and is why it does not print 0.000.
     <strong>Signals blind</strong> names the signals that skipped for every
     candidate in that run. A run with <code>idf_overlap</code> there measured a
     different recommender from the one answering requests, so its recall is not

@@ -733,7 +733,16 @@ CREATE TABLE IF NOT EXISTS eval_runs (
 	   ask for it. */
 	pool_depth  INTEGER NOT NULL DEFAULT 0,
 	pool_hits   INTEGER NOT NULL DEFAULT 0,
-	pool_recall REAL NOT NULL DEFAULT 0
+	pool_recall REAL NOT NULL DEFAULT 0,
+	/* What the ranking bought and what it cost. recall_at_k says how many
+	   held-out works were found; these say whether the list was twelve
+	   variations on one fic. Intra-list tag overlap (0 = no shared tags) and
+	   the mean number of distinct fandom groups, averaged per reader, with
+	   diversity_runs saying how many readers they cover -- 0 means the run
+	   did not measure them, which is NOT the same as zero overlap. */
+	tag_overlap      REAL NOT NULL DEFAULT 0,
+	distinct_fandoms REAL NOT NULL DEFAULT 0,
+	diversity_runs   INTEGER NOT NULL DEFAULT 0
 );
 
 /* Works a reader has already been shown or has marked as read.
@@ -1021,6 +1030,12 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"pool_depth", "INTEGER NOT NULL DEFAULT 0"},
 		{"pool_hits", "INTEGER NOT NULL DEFAULT 0"},
 		{"pool_recall", "REAL NOT NULL DEFAULT 0"},
+		// The diversity columns. A run recorded before they existed reads
+		// diversity_runs 0, which the report renders as "not measured" rather
+		// than as a perfectly diverse list.
+		{"tag_overlap", "REAL NOT NULL DEFAULT 0"},
+		{"distinct_fandoms", "REAL NOT NULL DEFAULT 0"},
+		{"diversity_runs", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		has, err = s.columnExists(ctx, "eval_runs", col.name)
 		if err != nil {
