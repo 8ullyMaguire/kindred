@@ -4,6 +4,25 @@ Status as of 2026-10-07. Every line below was verified by running it, not by
 reading the code. A line marked DONE names the test or the tool output that
 established it.
 
+## Reading paths (2026-10-23d, commits 3297257 + f28f02f)
+
+- [x] **`GET /api/v1/works/{id}/path?steps=N`** and **`/path/{id}`** — a walk
+      where each step is chosen against the PREVIOUS work, so the list drifts.
+      Every step publishes `sim_to_prev` and `sim_to_seed`; `drift_from_seed` says
+      where the walk left the seed's tags behind.
+- [x] **A step must be a departure.** Live measurement of the first version: eight
+      steps at 0.93-0.96 from the seed at every step — "more like this" in
+      sequence. With `sim_to_prev - 0.5*sim_to_seed` the same seed gives 0.966 ->
+      0.896 -> 0.798 -> 0.701 while hops stay 0.89-0.97.
+- [ ] **No fandom cap, by finding rather than omission** — `work_tags` is
+      3,890,504 `freeforms` rows of 3,891,300, so a cap keyed on
+      `tag_type='fandoms'` would exclude nothing and report success. The path
+      MEASURES drift instead of forcing it.
+
+The lesson: a green walk test proves the mechanism runs, not that its output is
+the product. The fixture was small enough that the nearest work was the right
+one, so only the live corpus showed the path standing still.
+
 ## Work-pair similarity, and the reserve question (2026-10-23d, commit 1fb7a69)
 
 - [x] **`GET /api/v1/works/{id}/similarity/{other}`** — two axes, published

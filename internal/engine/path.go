@@ -88,11 +88,17 @@ type ReadingPath struct {
 // pathDriftWeight is how much a candidate's distance from the SEED counts
 // against its distance from the previous step.
 //
-// Zero is greedy nearest-neighbour, which on the live mirror produced eight steps
-// all sitting 0.95 from the seed: a path in name only. One would ignore the last
-// step and re-rank the seed's neighbourhood, which is the fan this feature
-// exists to avoid. A half keeps both terms audible: a hop has to be reachable
-// from where the walk IS, and has to be further out than the work it left.
+// Zero is greedy nearest-neighbour, which on the live mirror (work 17249318,
+// eight steps) produced steps sitting 0.93-0.96 from the seed at EVERY step: a
+// path in name only. One would ignore the previous step and re-rank the seed's
+// neighbourhood, which is the fan this feature exists to avoid. A half keeps both
+// terms audible, and measures like this on the same seed:
+//
+//	weight 0    seed distance 0.966 0.966 0.966 0.966 ...   (no drift at all)
+//	weight 0.5  seed distance 0.966 0.896 0.798 0.701 ...   (hops stay 0.89-0.97)
+//
+// The second column is the product: the walk gets further out while every hop
+// remains a hop.
 const pathDriftWeight = 0.5
 
 // pathRank is how a step is chosen: reachable from the previous work, and

@@ -42,7 +42,7 @@ Four statuses:
 | 37 | Tag hierarchy from embedding clusters | OPEN | `internal/tagfamily` holds a hand-written `families.json`; nothing clusters the embeddings into a tree. |
 | 38 | Quality-adjusted co-occurrence | PARTIAL | Co-occurrence edges are shrunk by `DefaultShrinkK` (`collab.go`) — evidence weighting, not per-work kudos weighting. |
 | 39 | Bayesian average for tag quality | OPEN | Shrinkage exists for collab lift only; no per-tag Bayesian average of kudos across a tag's works. |
-| 40 | Ordered "reading path" | OPEN | Candidates are scored independently; no sequential walk through embedding space. |
+| 40 | Ordered "reading path" | **BUILT** | `GET /api/v1/works/{id}/path?steps=N` and `/path/{id}`. Each step is chosen against the PREVIOUS work (`sim_to_prev - 0.5*sim_to_seed`), so the list drifts instead of describing the seed N times; every step publishes both distances. Measured on work 17249318: seed distance falls 0.966 -> 0.896 -> 0.798 -> 0.701 over four steps while hops stay 0.89-0.97, against 0.966 flat for plain nearest-neighbour. |
 | 41 | Length binning for similar-length recs | PARTIAL | `MinWords`/`MaxWords` filter and a `words` sort exist; no same-quartile boost inside a ranking. |
 | 42 | Calibrated recommendation confidence | PARTIAL | Every hit carries `Evidence{Signal, Value, Weight, Reason}` and the page prints it; there is no calibrated probability and no speculative/strong label. |
 | 43 | Anti-recommendations | OPEN | Nothing negates the taste vector. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 12 | 33, 46, 56, 57, 61, 62, 63, 64, 67, 70, 71, 78 |
+| BUILT | 13 | 33, 40, 46, 56, 57, 61, 62, 63, 64, 67, 70, 71, 78 |
 | PARTIAL | 12 | 32, 38, 41, 42, 45, 49, 50, 54, 66, 72, 79, 89 |
-| OPEN | 42 | 31, 34, 35, 36, 37, 39, 40, 43, 44, 47, 48, 52, 53, 55, 58, 59, 60, 65, 68, 69, 73, 74, 75, 76, 77, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 41 | 31, 34, 35, 36, 37, 39, 43, 44, 47, 48, 52, 53, 55, 58, 59, 60, 65, 68, 69, 73, 74, 75, 76, 77, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
@@ -118,9 +118,10 @@ open of 30), the whole list stood at 22 built, 13 partial, 61 open, 4 without a 
 Five of the open ones (33, 46, 64, 67, 71) shipped on 2026-10-23, and #11's
 enumeration half shipped on 2026-10-23b (it moves from OPEN to PARTIAL: the
 candidate source exists, the nearest-tags surface does not), so the live total
-is **30 built, 14 partial, 52 open, 4 without a premise** — 100 accounted
-(#61, #62 and #78 shipped on 2026-10-23d: a tag feed, a seed feed, the search
-descriptor and the work-pair report, all verified on the deployed binary)
+is **31 built, 14 partial, 51 open, 4 without a premise** — 100 accounted
+(#61, #62, #78 and #40 shipped on 2026-10-23d: a tag feed, a seed feed, the
+search descriptor, the work-pair report and the reading path, all verified on the
+deployed binary)
 for. The measurement that matters more than the count: **pool recall@1000 was
 0.0284** (run #8) and is **0.2113** after the candidate work (run #13), i.e. even a perfect ranking of the 1000 candidates could
 find at most 2.8% of held-out works, and the current recall@10 of 0.0056 is a
