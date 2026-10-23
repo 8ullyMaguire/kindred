@@ -10,7 +10,6 @@ package signal
 
 import (
 	"container/list"
-	"context"
 	"encoding/binary"
 	"fmt"
 	"hash/fnv"
@@ -449,40 +448,56 @@ func (Popularity) Score(c rank.Candidate, _ []rank.Candidate, _ rank.Store) (flo
 }
 
 // Embedding scores cosine similarity in the tag-embedding space.
+//
+// It is over TAGS, not works, and that is the only space this mirror has
+// vectors for: `kindred embed` builds one 32-dimensional vector per tag from
+// the tag co-occurrence matrix, and there is no per-work vector anywhere.
+// The previous shape asked the store for a vector keyed by the CANDIDATE's
+// kind and id, so on every deployment it found nothing, skipped for every
+// candidate — and, because the engine had also dropped its weight, never
+// appeared in evidence or in meta.degraded. Two silences, one dimension.
+//
+// A work's position is the mean of its tags' vectors (Centroid); the seeds'
+// position is the mean of each seed work's position. Cosine between them
+// answers "does this work live in the same neighbourhood of tag space",
+// which is a different question from tag_overlap's "does it share a tag"
+// and is the one thing that can connect two works that never share a tag.
 type Embedding struct {
-	Store Store
-	// SeedVec is the mean of the seeds' embeddings.
+	// SeedVec is the seeds' centroid in tag space.
 	SeedVec []float32
+	// Centroid turns a candidate's tag ids into its own centroid. Nil means
+	// the signal cannot place candidates at all and reports that by
+	// skipping, rather than scoring everything 0 and looking measured.
+	Centroid func([]int32) []float32
 }
 
 func (Embedding) Name() string { return "embedding" }
 
-func (s Embedding) Score(c rank.Candidate, _ []rank.Candidate, st rank.Store) (float64, string, error) {
-	store := s.Store
-	if store == nil {
-		store = st
-	}
-	if store == nil {
+func (s Embedding) Score(c rank.Candidate, _ []rank.Candidate, _ rank.Store) (float64, string, error) {
+	if len(s.SeedVec) == 0 || s.Centroid == nil {
 		return 0, "", rank.ErrSkip
 	}
-	vec, ok, err := store.Embedding(context.Background(), c.Kind, c.ID)
-	if err != nil {
-		return 0, "", err
-	}
-	if !ok || len(vec) == 0 || len(s.SeedVec) != len(vec) {
+	vec := s.Centroid(c.TagIDs)
+	if len(vec) == 0 || len(vec) != len(s.SeedVec) {
+		// A candidate with no embedded tags has no position. Skipping is
+		// the honest answer: scoring it 0 would say "measured, and it is
+		// nothing like the seeds", which is a claim about a work nothing
+		// could place.
 		return 0, "", rank.ErrSkip
 	}
 	sim := Cosine(vec, s.SeedVec)
 	if sim <= 0 {
 		return 0, "", rank.ErrSkip
 	}
-	return sim, fmt.Sprintf("cosine similarity %.3f in %d-dim tag space", sim, len(vec)), nil
+	return sim, fmt.Sprintf("cosine similarity %.3f to the seeds over %d tags in %d dimensions",
+		sim, len(c.TagIDs), len(vec)), nil
 }
 
-// Store is the embedding read the Embedding signal needs.
-type Store interface {
-	Embedding(ctx context.Context, kind string, id int64) ([]float32, bool, error)
-}
+// Store is gone with the per-work embedding lookup it served. The tag
+// index lives in the engine, which is the only thing that owns the state
+// database; a signal reading a store was a second way to reach the same
+// table, and the one that could not work (rank.Store still carries the
+// method for the signals that do read per-entity data).
 
 // Cosine returns the cosine similarity of two vectors, 0 if either has no
 // magnitude.

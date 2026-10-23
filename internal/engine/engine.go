@@ -6,6 +6,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -51,6 +52,10 @@ type Engine struct {
 
 	// EmbedDim is the embedding width, for the reason string.
 	EmbedDim int
+
+	// tagIdx is the tag-embedding matrix, loaded lazily by tagIndex(). See
+	// embedindex.go for why it is resident rather than read per request.
+	tagIdx tagIndexState
 
 	// ArenaRatings maps work id to the arena's damped rating, and
 	// ArenaMedian is the centre it was damped around. Nil means the arena
@@ -266,24 +271,50 @@ type Request struct {
 // The signal would be registered, weighted, non-degraded, and unable to
 // change the ranking on exactly the cases that justify it.
 //
+// The same argument applies one level out to the tag EMBEDDINGS: a work whose
+// tags never co-occur with a seed's tags is invisible to the tag query even
+// when it sits next to the seed in the 32-dimensional tag space. The embed
+// source enumerates from that space instead of from the co-occurrence graph,
+// which is the one thing tag pooling structurally cannot do.
+//
 // The modes are additive rather than exclusive: the union keeps the old
-// behaviour intact when no index is present, so a mirror without bookmarks
-// behaves identically to before rather than returning nothing.
+// behaviour intact when no index is present, so a mirror without bookmarks or
+// without embeddings behaves identically to before rather than returning
+// nothing.
+//
+// The values are FLAGS, not an enum: "tags+embed" and "tags+collab" are two
+// independent dimensions, and the four combinations are not four behaviours
+// that need four code paths.
 type PoolMode int
 
 const (
 	// PoolTags is the historical behaviour: candidates share a tag with a
 	// seed. The zero value, so a Request that never sets PoolMode behaves
 	// as it always did.
-	PoolTags PoolMode = iota
+	PoolTags PoolMode = 0
 	// PoolTagsOrCollab adds works co-bookmarked with a seed.
-	PoolTagsOrCollab
+	PoolTagsOrCollab PoolMode = 1 << 0
+	// PoolTagsEmbed adds works whose tags are nearest the seeds in the
+	// tag-embedding space.
+	PoolTagsEmbed PoolMode = 1 << 1
+	// PoolTagsCollabEmbed is both extra sources over the tag pool.
+	PoolTagsCollabEmbed = PoolTagsOrCollab | PoolTagsEmbed
 )
 
+// hasCollab reports whether the mode admits co-bookmarked works.
+func (p PoolMode) hasCollab() bool { return p&PoolTagsOrCollab != 0 }
+
+// hasEmbed reports whether the mode enumerates from the tag-embedding space.
+func (p PoolMode) hasEmbed() bool { return p&PoolTagsEmbed != 0 }
+
 func (p PoolMode) String() string {
-	switch p {
-	case PoolTagsOrCollab:
+	switch {
+	case p.hasCollab() && p.hasEmbed():
+		return "tags+collab+embed"
+	case p.hasCollab():
 		return "tags+collab"
+	case p.hasEmbed():
+		return "tags+embed"
 	default:
 		return "tags"
 	}
@@ -351,6 +382,10 @@ func ParsePoolMode(s string) (PoolMode, error) {
 		return PoolTags, nil
 	case "tags+collab", "collab", "tags_or_collab":
 		return PoolTagsOrCollab, nil
+	case "tags+embed", "embed", "tags_or_embed":
+		return PoolTagsEmbed, nil
+	case "tags+collab+embed", "collab+embed", "all":
+		return PoolTagsCollabEmbed, nil
 	}
 	// The message names the PARAMETER, not just the concept. "unknown pool
 	// mode" is not actionable from a page that has several controls: the
@@ -359,8 +394,8 @@ func ParsePoolMode(s string) (PoolMode, error) {
 	// which the browser suite checks by asserting the parameter name appears
 	// in the error body.
 	return PoolTags, fmt.Errorf(
-		"pool_mode %q is not a mode; use pool_mode=tags, or pool_mode=tags+collab "+
-			"to admit co-bookmarked works", s)
+		"pool_mode %q is not a mode; use pool_mode=tags, tags+collab, tags+embed "+
+			"or tags+collab+embed", s)
 }
 
 // Filter narrows the candidate pool. It is a value, not a pointer, so the
@@ -616,7 +651,7 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 	// collab votes are computed once here and handed to both. Computing them
 	// in signals() separately would be a second walk of the same adjacency
 	// for the same request.
-	poolIDs, collabVotes, err := e.poolFor(ctx, seeds, pool, req.Exclude, seedIDs, req)
+	poolIDs, collabVotes, poolSources, err := e.poolFor(ctx, seeds, pool, req.Exclude, seedIDs, req)
 	if err != nil {
 		return nil, err
 	}
@@ -646,9 +681,10 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 			Seeds: seedNames(req.Seeds),
 			Items: []rank.Candidate{},
 			Meta: rank.Meta{
-				Seeds:     len(seeds),
-				Tune:      tuneName,
-				Shortfall: &rank.Short{Requested: n, Returned: 0, Reason: "no candidates share any seed tag"},
+				Seeds:       len(seeds),
+				Tune:        tuneName,
+				Shortfall:   &rank.Short{Requested: n, Returned: 0, Reason: "no candidates share any seed tag"},
+				PoolSources: poolSources,
 			},
 		}, nil
 	}
@@ -689,7 +725,7 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	sigs, tune := e.signals(seeds, collabVotes, collabScale, tuneWeights, tuneName, !req.NoOwnerTaste,
+	sigs, tune := e.signals(ctx, seeds, collabVotes, collabScale, tuneWeights, tuneName, !req.NoOwnerTaste,
 		signalOptions{
 			sessionTaste:         req.SessionTaste,
 			sessionTasteEvidence: req.SessionTasteEvidence,
@@ -701,6 +737,7 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 	meta.Seeds = len(seeds)
+	meta.PoolSources = poolSources
 	if meta.Tune == "" {
 		meta.Tune = tune.Name
 	}
@@ -802,7 +839,7 @@ func seedNames(seeds []Seed) []string {
 //     even though thousands of qualifying works exist further down.
 //
 // Both failures report success and return a short or empty list.
-func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int, exclude bool, seedIDs []int64, req Request) ([]int64, map[int64]float64, error) {
+func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int, exclude bool, seedIDs []int64, req Request) ([]int64, map[int64]float64, *rank.PoolSources, error) {
 	tagIDs := map[int32]bool{}
 	for _, s := range seeds {
 		for _, id := range s.TagIDs {
@@ -810,6 +847,7 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 		}
 	}
 	f := req.Filter
+	src := &rank.PoolSources{}
 
 	// Collab neighbours are resolved FIRST, before the early return below, so
 	// a seed with no tags can still be recommended from: a work sharing no
@@ -817,171 +855,296 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 	// for, and an early return on len(tagIDs)==0 would make it unreachable
 	// for every tagless seed.
 	var collabVotes map[int64]float64
-	if req.PoolMode == PoolTagsOrCollab && e.Collab != nil {
+	if req.PoolMode.hasCollab() && e.Collab != nil {
 		collabVotes = signal.CollabVotes(e.Collab, seedIDs, collabNeighbourLimit(e.TopN))
 	}
 
-	if len(tagIDs) == 0 {
-		if len(collabVotes) == 0 {
-			return nil, nil, nil
+	// The embedding source's inputs. Resolved here for the same reason the
+	// collab votes are: a seed whose tags never co-occur with anything is
+	// exactly the seed the tag query cannot enumerate from, and an early
+	// return would make the embed source unreachable for it too.
+	//
+	// The seeds' OWN tags are excluded from the nearest-tag list. They are
+	// what the tag half is already built from, so spending an embed slot to
+	// re-enumerate them would spend the one new source on the old answer.
+	var (
+		embedIdx  *tagIndex
+		embedNear []tagSim
+	)
+	if req.PoolMode.hasEmbed() {
+		idx, ierr := e.tagVectors(ctx)
+		if ierr != nil {
+			// A partial index still enumerates from the rows it has, which
+			// is strictly better than dropping the source: the request is
+			// answered and the log says the dimension is incomplete.
+			slog.Warn("embedding pool source is running on a partial tag index", "err", ierr)
 		}
-		ids := collabCandidates(collabVotes, limit, seedIDs, 0, f, req.BlockedTagIDs, req.SeenIDs, e.Corpus)
-		return ids, collabVotes, nil
+		if idx != nil {
+			if centroid := seedCentroid(idx, seeds); centroid != nil {
+				skip := make(map[int32]bool, len(tagIDs))
+				for id := range tagIDs {
+					skip[id] = true
+				}
+				embedNear = idx.nearestTags(centroid, EmbedPoolTags, embedMinSim, skip)
+			}
+			embedIdx = idx
+		}
 	}
 
-	args := make([]any, 0, len(tagIDs)+16)
-	for id := range tagIDs {
-		args = append(args, id)
-	}
-	tagArgCount := len(tagIDs)
-
-	// The LIMIT is pushed into SQL. The first version selected every work
-	// sharing any seed tag and truncated in Go: 8 seed tags over 112,935
-	// works returned tens of thousands of rows, each with a tag id, and
-	// the truncation threw them all away after materialising them. A
-	// budget-gate trace measured that at +33 MiB on a pool of 200 — 165 KiB
-	// retained per candidate, against a candidate that is a few hundred
-	// bytes. The cap belongs where the work is.
+	// The pool, built by admitting one source at a time.
 	//
-	// ORDER BY shared DESC, work_id makes the cut deterministic: the same
-	// seeds must produce the same pool, or two requests with the same
-	// input rank different candidates.
-	//
-	// Sorted tag ids rather than map order, for the same reason: the
-	// argument list is part of the cache key and the pool must not depend
-	// on Go's randomised map iteration.
-	tagList := make([]int32, 0, len(tagIDs))
-	for id := range tagIDs {
-		tagList = append(tagList, id)
-	}
-	sort.Slice(tagList, func(a, b int) bool { return tagList[a] < tagList[b] })
-	args = args[:0]
-	for _, id := range tagList {
-		args = append(args, id)
+	// De-duplication lives HERE rather than in each source, because the
+	// sources overlap by construction (a co-bookmarked work usually shares a
+	// tag, and that is the healthy case). The first version appended the
+	// collab ids to the tag pool without checking, so a work both sources
+	// found was ranked twice and the pool reported a size it did not have.
+	out := make([]int64, 0, limit)
+	inPool := make(map[int64]bool, limit)
+	admit := func(ids []int64, bucket *int) {
+		for _, id := range ids {
+			if inPool[id] {
+				src.Overlap++
+				continue
+			}
+			inPool[id] = true
+			out = append(out, id)
+			*bucket++
+		}
 	}
 
-	where := `wt.tag_id IN (` + corpus.Placeholders(tagArgCount) + `)`
-	// The filter predicates are appended BEFORE the limit argument, because
-	// the limit's placeholder is the last one in the statement. Binding them
-	// out of order is not a compile error and not a runtime error in SQLite
-	// for a well-typed query — it is a silently wrong result, which is why
-	// this ordering is written as a single explicit sequence rather than
-	// interleaved with the SQL string.
-	// The tag half of the pool is capped at the budget MINUS the room
-	// reserved for collaborative filtering.
-	//
-	// This is the bug that made PoolTagsOrCollab a no-op, and it is worth
-	// naming precisely because the code LOOKED correct. The SQL took
-	// `LIMIT limit`, so the tag pool always filled every slot, and the union
-	// below computed `room := limit - len(out)` — which is then always zero,
-	// so collab contributed nothing and returned. Measured on the live
-	// mirror: `pool_mode=tags` and `pool_mode=tags+collab` produced
-	// BYTE-IDENTICAL 8-item lists, and none of the seed's four known
-	// co-bookmarked neighbours appeared in either.
-	//
-	// Reserving a fixed share is a deliberate trade, not a compromise to
-	// paper over that. Tag pooling is the stronger half on this mirror —
-	// measured neighbourhoods are 1-4 works per seed against thousands of
-	// tag matches — so reserving a large share would hand most of the budget
-	// to a much thinner signal. The share is therefore small and explicit,
-	// and the collab half goes first when the budget is tight, because those
-	// works are unreachable any other way.
-	tagBudget := limit
-	if req.PoolMode == PoolTagsOrCollab {
-		tagBudget = limit - collabReserve(limit)
+	if len(tagIDs) > 0 {
+		args := make([]any, 0, len(tagIDs)+16)
+		// Sorted tag ids rather than map order: the argument list is part of
+		// the cache key and the pool must not depend on Go's randomised map
+		// iteration.
+		tagList := make([]int32, 0, len(tagIDs))
+		for id := range tagIDs {
+			tagList = append(tagList, id)
+		}
+		sort.Slice(tagList, func(a, b int) bool { return tagList[a] < tagList[b] })
+		for _, id := range tagList {
+			args = append(args, id)
+		}
+
+		where := `wt.tag_id IN (` + corpus.Placeholders(len(tagList)) + `)`
+		// The filter predicates are appended BEFORE the limit argument,
+		// because the limit's placeholder is the last one in the statement.
+		// Binding them out of order is not a compile error and not a runtime
+		// error in SQLite for a well-typed query — it is a silently wrong
+		// result, which is why this ordering is written as a single explicit
+		// sequence rather than interleaved with the SQL string.
+		//
+		// The tag half of the pool is capped at the budget MINUS the room
+		// reserved for the other sources.
+		//
+		// This is the bug that made PoolTagsOrCollab a no-op, and it is worth
+		// naming precisely because the code LOOKED correct. The SQL took
+		// `LIMIT limit`, so the tag pool always filled every slot, and the
+		// union below computed `room := limit - len(out)` — which is then
+		// always zero, so collab contributed nothing and returned. Measured
+		// on the live mirror: `pool_mode=tags` and `pool_mode=tags+collab`
+		// produced BYTE-IDENTICAL 8-item lists, and none of the seed's four
+		// known co-bookmarked neighbours appeared in either.
+		//
+		// Reserving a fixed share is a deliberate trade, not a compromise to
+		// paper over that. Tag pooling is the stronger half on this mirror —
+		// measured neighbourhoods are 1-4 works per seed against thousands of
+		// tag matches — so reserving a large share would hand most of the
+		// budget to a much thinner source. The share is therefore small and
+		// explicit, and the extra sources go first when the budget is tight,
+		// because those works are unreachable any other way.
+		tagBudget := limit
+		if req.PoolMode.hasCollab() {
+			tagBudget -= collabReserve(limit)
+		}
+		if req.PoolMode.hasEmbed() {
+			tagBudget -= embedReserve(limit)
+		}
 		if tagBudget < 1 {
-			// A pool of 1 cannot be split. Tags win the slot, because on this
+			// A pool too small to split. Tags win the slot, because on this
 			// corpus they are the half that can actually rank.
 			tagBudget = 1
 		}
-	}
-	q := `SELECT wt.work_id, COUNT(*) AS shared FROM work_tags wt
-	      JOIN works w ON w.id = wt.work_id
-	      WHERE ` + where
-	q += filterSQL(f, &args)
-	// Blocks are applied HERE, inside the same pool query, for the same
-	// reason the filters are. Filtering the finished ranking would return a
-	// subset of a ranking rather than a ranking over the works the reader is
-	// willing to see: ask for 20 and get 8, with no way to tell that 60
-	// eligible works sat below the cut-off behind blocked ones.
-	q += blockSQL(req.BlockedTagIDs, &args)
-	q += seenSQL(req.SeenIDs, &args)
-	// ORDER BY shared DESC, work_id ASC. The work_id tiebreak is what makes
-	// two identical requests rank identical candidates.
-	q += ` GROUP BY wt.work_id
-	       ORDER BY shared DESC, wt.work_id ASC
-	       LIMIT ?`
-	args = append(args, tagBudget)
+		q := `SELECT wt.work_id, COUNT(*) AS shared FROM work_tags wt
+		      JOIN works w ON w.id = wt.work_id
+		      WHERE ` + where
+		q += filterSQL(f, &args)
+		// Blocks are applied HERE, inside the same pool query, for the same
+		// reason the filters are. Filtering the finished ranking would return
+		// a subset of a ranking rather than a ranking over the works the
+		// reader is willing to see: ask for 20 and get 8, with no way to tell
+		// that 60 eligible works sat below the cut-off behind blocked ones.
+		q += blockSQL(req.BlockedTagIDs, &args)
+		q += seenSQL(req.SeenIDs, &args)
+		// ORDER BY shared DESC, work_id ASC. The work_id tiebreak is what
+		// makes two identical requests rank identical candidates.
+		q += ` GROUP BY wt.work_id
+		       ORDER BY shared DESC, wt.work_id ASC
+		       LIMIT ?`
+		args = append(args, tagBudget)
 
-	rows, err := e.Corpus.DB.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("pool query: %w", err)
+		rows, err := e.Corpus.DB.QueryContext(ctx, q, args...)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("pool query: %w", err)
+		}
+		excluded := map[int64]bool{}
+		if exclude {
+			for _, id := range seedIDs {
+				excluded[id] = true
+			}
+		}
+		tagRows := make([]int64, 0, tagBudget)
+		for rows.Next() {
+			var id int64
+			var shared int
+			if err := rows.Scan(&id, &shared); err != nil {
+				rows.Close()
+				return nil, nil, nil, err
+			}
+			if excluded[id] {
+				continue
+			}
+			tagRows = append(tagRows, id)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, nil, nil, err
+		}
+		rows.Close()
+		// Most-shared-first, then by id so the pool is reproducible. SQL
+		// already ordered and limited this; re-sorting a truncated slice
+		// would be harmless but would suggest the ordering was not
+		// guaranteed, and a reader could not then tell whether the LIMIT is
+		// trustworthy.
+		admit(tagRows, &src.Tags)
 	}
-	type scored struct {
-		id     int64
-		shared int
-	}
-	var pool []scored
-	excluded := map[int64]bool{}
-	if exclude {
-		for _, id := range seedIDs {
-			excluded[id] = true
+
+	// UNION, not replacement: replacing the tag pool with the extra sources
+	// would make the ranking depend entirely on whether the mirror happened
+	// to sample bookmark rows or hold embeddings for this seed's
+	// neighbourhood — the recommender would silently stop being
+	// content-based, which is the additive behaviour that makes PoolMode
+	// safe to expose as a request parameter.
+	if len(collabVotes) > 0 {
+		if room := limit - len(out); room > 0 {
+			admit(collabCandidates(collabVotes, room, seedIDs, 0, f, req.BlockedTagIDs, req.SeenIDs, e.Corpus), &src.Collab)
 		}
 	}
+	if embedIdx != nil && len(embedNear) > 0 {
+		if room := limit - len(out); room > 0 {
+			extra, err := embedCandidates(ctx, e.Corpus.DB, embedNear, room, seedIDs, f, req.BlockedTagIDs, req.SeenIDs)
+			if err != nil {
+				// A failed extra source is reported and dropped, not fatal:
+				// the pool is a union, and a union that loses one arm still
+				// ranks. Returning an error here would turn a missing
+				// dimension into a failed request.
+				slog.Warn("embedding pool source failed for this request", "err", err)
+			} else {
+				admit(extra, &src.Embedding)
+			}
+		}
+	}
+	return out, collabVotes, src, nil
+}
+
+// EmbedPoolTags is how many tag neighbours the embedding source enumerates
+// from.
+//
+// 32 is the width of the embedding space and the number of tags one seed's
+// nearest neighbourhood plausibly covers; measured on the live mirror a
+// seed's top-32 tags by cosine reach thousands of works between them, which
+// is far more than the source's reserved share of the pool. Raising it
+// raises the SQL join's fan-in linearly without adding candidates the pool
+// has room for.
+const EmbedPoolTags = 32
+
+// embedMinSim is the cosine floor for a tag to count as "near the seeds".
+//
+// Zero would admit orthogonal tags, which by construction carry no shared
+// meaning; 0.25 keeps tags that are at least somewhat aligned, and the
+// source's limit is what really bounds the answer.
+const embedMinSim = 0.25
+
+// embedReserve is how many of a pool's slots are held back for the embedding
+// source when PoolMode includes it. Same shape and same reason as
+// collabReserve: a small explicit share, because tag pooling is the stronger
+// half of this mirror's evidence and an extra source that filled half the
+// pool would outvote it.
+func embedReserve(limit int) int {
+	if limit <= 2 {
+		return 0
+	}
+	r := (limit + 7) / 8
+	if r > limit-1 {
+		return limit - 1
+	}
+	return r
+}
+
+// embedCandidates picks the works carrying the tags nearest the seeds in the
+// embedding space, ordered by how close those tags are.
+//
+// This is the one enumeration this recommender cannot do from tags: a work
+// whose tags never co-occur with a seed's tags is invisible to the tag query
+// above, and the factorisation is what says those tags belong together. It
+// is a SECOND-ORDER use of the same co-occurrence matrix rather than a new
+// data source, and saying so matters — it cannot find works whose tags are
+// absent from the matrix altogether, which is the same blind spot the tag
+// query has.
+//
+// Filters, blocks and seen ids are applied in SQL for the reason poolFor
+// documents at length: a source that post-filters returns fewer than asked
+// even when qualifying works exist further down its own ranking.
+func embedCandidates(ctx context.Context, db *sql.DB, near []tagSim, limit int, seedIDs []int64, f Filter, blocked map[int64]bool, seen map[string]bool) ([]int64, error) {
+	if db == nil || len(near) == 0 || limit <= 0 {
+		return nil, nil
+	}
+	parts := make([]string, 0, len(near))
+	args := make([]any, 0, len(near)*2+16)
+	for i, t := range near {
+		if i == 0 {
+			parts = append(parts, `SELECT ? AS tag_id, ? AS w`)
+		} else {
+			parts = append(parts, `UNION ALL SELECT ?, ?`)
+		}
+		args = append(args, t.ID, t.Sim)
+	}
+	q := `SELECT wt.work_id FROM (` + strings.Join(parts, " ") + `) s
+	      JOIN work_tags wt ON wt.tag_id = s.tag_id
+	      JOIN works w ON w.id = wt.work_id
+	      WHERE 1=1`
+	q += filterSQL(f, &args)
+	q += blockSQL(blocked, &args)
+	q += seenSQL(seen, &args)
+	// Seeds are dropped unconditionally, exactly as collabCandidates does:
+	// recommending the work a reader seeded from is never useful, and a flag
+	// here would only ever be set to false to make a ranking look fuller.
+	if len(seedIDs) > 0 {
+		holders := corpus.Placeholders(len(seedIDs))
+		q += ` AND wt.work_id NOT IN (` + holders + `)`
+		for _, id := range seedIDs {
+			args = append(args, id)
+		}
+	}
+	q += ` GROUP BY wt.work_id
+	       ORDER BY SUM(s.w) DESC, wt.work_id ASC
+	       LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("embed pool query: %w", err)
+	}
+	defer rows.Close()
+	out := make([]int64, 0, limit)
 	for rows.Next() {
 		var id int64
-		var shared int
-		if err := rows.Scan(&id, &shared); err != nil {
-			rows.Close()
-			return nil, nil, err
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
 		}
-		if excluded[id] {
-			continue
-		}
-		pool = append(pool, scored{id: id, shared: shared})
+		out = append(out, id)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, nil, err
-	}
-	rows.Close()
-
-	// Most-shared-first, then by id so the pool is reproducible. Truncating
-	// before scoring is what bounds the request's work.
-	// SQL already ordered and limited this; the sort is not repeated here.
-	// Re-sorting a truncated slice would be harmless but would suggest the
-	// ordering was not guaranteed, and a reader cannot tell whether the
-	// LIMIT is trustworthy.
-	out := make([]int64, 0, len(pool))
-	inPool := make(map[int64]bool, len(pool))
-	for _, p := range pool {
-		out = append(out, p.id)
-		inPool[p.id] = true
-	}
-
-	if len(collabVotes) == 0 {
-		return out, nil, nil
-	}
-
-	// UNION, not replacement, and the tag half keeps its full budget.
-	//
-	// Replacing the tag pool with collab neighbours would make the ranking
-	// depend entirely on whether the mirror happened to sample bookmark rows
-	// for this seed's neighbourhood — the recommender would silently stop
-	// being content-based. So the tag pool keeps most of `limit` and collab
-	// gets a reserved share, which is the additive behaviour that makes
-	// PoolMode safe to expose as a request parameter.
-	//
-	// `limit - len(out)` is correct now BECAUSE the tag half was capped below
-	// `limit` above. Before that split it was always zero, which is how the
-	// whole union stayed unreachable while reading as a working union.
-	room := limit - len(out)
-	if room <= 0 {
-		return out, collabVotes, nil
-	}
-	extra := collabCandidates(collabVotes, room, seedIDs, 0, f, req.BlockedTagIDs, req.SeenIDs, e.Corpus)
-	out = append(out, extra...)
-	return out, collabVotes, nil
+	return out, rows.Err()
 }
 
 // seenSQL excludes entities the reader has already been shown or has read.
@@ -1313,7 +1476,7 @@ type signalOptions struct {
 	corpusTotal          float64
 }
 
-func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, collabScale float64, overrides map[string]float64, tuneName string, personal bool, opts ...signalOptions) ([]rank.Signal, rank.Tune) {
+func (e *Engine) signals(ctx context.Context, seeds []rank.Candidate, collabVotes map[int64]float64, collabScale float64, overrides map[string]float64, tuneName string, personal bool, opts ...signalOptions) ([]rank.Signal, rank.Tune) {
 	tune := DefaultTune()
 	tune.Name = tuneName
 	if len(overrides) > 0 {
@@ -1493,15 +1656,50 @@ func (e *Engine) signals(seeds []rank.Candidate, collabVotes map[int64]float64, 
 		Total:   corpusTotal,
 	})
 
-	if !e.Lite {
-		sigs = append(sigs, signal.Embedding{
-			Store:   e,
-			SeedVec: e.seedVector(seeds),
-		})
-		// Without embeddings the weights must still sum to something
-		// sensible, so the remaining signals absorb the difference rather
-		// than every score shrinking by 10%.
+	// embedding places a work in the tag-embedding space and scores its
+	// cosine to the seeds' position there.
+	//
+	// The weight handling is the whole reason this block was rewritten. The
+	// first version called renormalise INSIDE `if !e.Lite` — i.e. exactly
+	// when the signal is registered — which deleted its 0.10 and rescaled
+	// the others. The signal was therefore registered, weighted at zero, and
+	// invisible: it appeared in neither evidence nor meta.degraded, so the
+	// dimension looked present in every configuration and measured nothing.
+	// Observed live on 2026-10-23 with `?tune=quality` (weight 0.0654
+	// stored): seven signals per item, embedding among neither them nor the
+	// degraded list.
+	//
+	// Now the weight is redistributed only when the dimension really is
+	// absent: lite mode (no signal registered), or a mirror whose `kindred
+	// embed` never ran (signal registered, skips everywhere, names itself).
+	// A deployment WITH vectors keeps its weight and pays for it.
+	if e.Lite {
 		tune.Weights = renormalise(tune.Weights, "embedding")
+	} else {
+		idx, ierr := e.tagVectors(ctx)
+		if ierr != nil {
+			// A partially loaded index is usable for the rows it has and
+			// says so in the log. The signal still skips for candidates
+			// whose tags are missing, and meta.degraded names it if that is
+			// all of them.
+			slog.Warn("tag embeddings loaded with errors", "err", ierr)
+		}
+		// Registered even when there is nothing to read, which is the house
+		// rule for every other signal here: no vectors means it SKIPS for
+		// every candidate and names itself in meta.degraded[], so "this
+		// mirror was never embedded" is distinguishable from "the dimension
+		// does not exist". The weight stays in the tune — a skipped signal
+		// contributes no term, so the ranking is identical to one built
+		// before the signal existed, which is exactly what the deleted
+		// weight was trying to achieve without saying anything.
+		//
+		// idx.centroid is a method value on a possibly-nil receiver: it
+		// checks for nil, so a missing index degrades to "no candidate can
+		// be placed" rather than a panic on the first candidate.
+		sigs = append(sigs, signal.Embedding{
+			SeedVec:  seedCentroid(idx, seeds),
+			Centroid: idx.centroid,
+		})
 	}
 	return sigs, tune
 }
@@ -1578,17 +1776,6 @@ func renormalise(w map[string]float64, drop string) map[string]float64 {
 		w[k] = v * scale
 	}
 	return w
-}
-
-func (e *Engine) seedVector(seeds []rank.Candidate) []float32 {
-	vecs := make([][]float32, 0, len(seeds))
-	for _, s := range seeds {
-		v, ok, err := e.Embedding(context.Background(), s.Kind, s.ID)
-		if err == nil && ok && len(v) > 0 {
-			vecs = append(vecs, v)
-		}
-	}
-	return signal.MeanVec(vecs)
 }
 
 // attachSummaries fills in the summary text for the ranked results.

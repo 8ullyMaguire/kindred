@@ -113,7 +113,7 @@ func TestSessionTasteIsNamedInTheTune(t *testing.T) {
 // signal itself and changes nothing in the product.
 func TestSessionTasteSignalIsRegistered(t *testing.T) {
 	e := newFixtureEngine(t)
-	sigs, _ := e.signals(nil, nil, 0, nil, "default", true,
+	sigs, _ := e.signals(context.Background(), nil, nil, 0, nil, "default", true,
 		signalOptions{
 			sessionTaste:         map[int32]float64{1: 1},
 			sessionTasteEvidence: map[int32]float64{1: 5},

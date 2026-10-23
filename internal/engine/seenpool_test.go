@@ -101,7 +101,7 @@ func TestSeenIDsActuallyLeaveThePool(t *testing.T) {
 		t.Fatalf("load seed tags: %v", err)
 	}
 
-	pool, _, err := e.poolFor(ctx, seeds, 20, true, []int64{10},
+	pool, _, _, err := e.poolFor(ctx, seeds, 20, true, []int64{10},
 		Request{SeenIDs: map[string]bool{}})
 	if err != nil {
 		t.Fatalf("poolFor: %v", err)
@@ -129,7 +129,7 @@ func TestSeenIDsActuallyLeaveThePool(t *testing.T) {
 		corpus.AO3Kind + ":" + itoa(other):  true,
 	}
 
-	after, _, err := e.poolFor(ctx, seeds, 20, true, []int64{10},
+	after, _, _, err := e.poolFor(ctx, seeds, 20, true, []int64{10},
 		Request{SeenIDs: excluded})
 	if err != nil {
 		t.Fatalf("poolFor with exclusions: %v", err)
@@ -171,7 +171,7 @@ func TestSeenExclusionIsNamespaced(t *testing.T) {
 	}
 
 	// A bare id is not a valid exclusion key and must exclude nothing.
-	pool, _, err := e.poolFor(ctx, seeds, 20, true, []int64{10},
+	pool, _, _, err := e.poolFor(ctx, seeds, 20, true, []int64{10},
 		Request{SeenIDs: map[string]bool{"12": true}})
 	if err != nil {
 		t.Fatalf("poolFor: %v", err)

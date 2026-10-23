@@ -86,6 +86,30 @@ type Meta struct {
 	Degraded   []string `json:"degraded,omitempty"`
 	Shortfall  *Short   `json:"shortfall,omitempty"`
 	Truncated  bool     `json:"truncated"`
+	// PoolSources says how many candidates each enumeration source
+	// contributed, counted AFTER de-duplication.
+	//
+	// It exists because the measured ceiling of this recommender is its
+	// candidate set (pool recall@1000 = 0.0284 against recall@10 = 0.0056),
+	// and a union that reports only its total cannot say which source failed
+	// to find anything. Without it, a decision about widening the pool is a
+	// decision about the union rather than about the source that is thin.
+	PoolSources *PoolSources `json:"pool_sources,omitempty"`
+}
+
+// PoolSources is the per-source breakdown of a candidate pool.
+//
+// Tags, Collab and Embedding are ADMISSIONS and sum exactly to the pool size.
+// Overlap is separate: it counts the ids a later source also proposed that an
+// earlier one had already admitted, so it measures how much the sources
+// agree rather than adding to the union. Reporting the proposals instead of
+// the admissions would make the pool look bigger than the candidate set it
+// actually produced.
+type PoolSources struct {
+	Tags      int `json:"tags"`
+	Collab    int `json:"collab"`
+	Embedding int `json:"embedding"`
+	Overlap   int `json:"overlap"`
 }
 
 // Short records that fewer results were returned than asked for, and why.

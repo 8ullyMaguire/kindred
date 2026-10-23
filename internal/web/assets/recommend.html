@@ -80,13 +80,15 @@
     <legend>Ranking</legend>
     {{/* Pool mode. Collaborative filtering adds works co-bookmarked with a
          seed — the works that share no tag with it and that tag pooling
-         therefore cannot reach at all. Off by default because on this mirror
-         the co-bookmark evidence is thin and the tail is sometimes weaker
-         than tag overlap. */}}
+         therefore cannot reach at all. The embedding source adds works whose
+         tags sit nearest the seeds in the tag-embedding space, which is the
+         other way a work can be adjacent without sharing a tag. */}}
     <label for="poolmode">Candidates</label>
     <select id="poolmode" name="pool_mode">
       <option value="tags" {{if eq .PoolMode "tags"}}selected{{end}}>sharing a tag with a seed</option>
       <option value="tags+collab" {{if eq .PoolMode "tags+collab"}}selected{{end}}>also co-bookmarked with a seed</option>
+      <option value="tags+embed" {{if eq .PoolMode "tags+embed"}}selected{{end}}>also near the seeds in tag space</option>
+      <option value="tags+collab+embed" {{if eq .PoolMode "tags+collab+embed"}}selected{{end}}>all three sources</option>
     </select>
     <label for="pool">Pool size</label>
     <input type="number" id="pool" name="pool" min="0" max="5000"

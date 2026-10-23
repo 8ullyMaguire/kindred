@@ -1,8 +1,8 @@
 package signal
 
 import (
-	"context"
 	"math"
+	"strings"
 	"testing"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
@@ -339,39 +339,52 @@ func TestPopularityIsBoundedAndLogScaled(t *testing.T) {
 	}
 }
 
-type stubEmbStore struct {
-	vec []float32
-	ok  bool
-	err error
-}
-
-func (s stubEmbStore) Embedding(context.Context, string, int64) ([]float32, bool, error) {
-	return s.vec, s.ok, s.err
-}
-
 func TestEmbeddingCosineSimilarity(t *testing.T) {
-	store := stubEmbStore{vec: []float32{1, 0, 0}, ok: true}
-	s := Embedding{Store: store, SeedVec: []float32{1, 0, 0}}
-	v, _, err := s.Score(rank.Candidate{ID: 1, Kind: "k"}, nil, nil)
+	// The vector for a candidate is supplied by the engine's tag index; the
+	// signal only turns it into a similarity against the seeds' centroid.
+	vec := map[int64][]float32{1: {1, 0, 0}}
+	s := Embedding{
+		SeedVec:  []float32{1, 0, 0},
+		Centroid: func([]int32) []float32 { return vec[1] },
+	}
+	v, reason, err := s.Score(rank.Candidate{ID: 1, Kind: "k", TagIDs: []int32{7}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if math.Abs(v-1) > 1e-6 {
 		t.Fatalf("identical vectors scored %v, want 1", v)
 	}
+	if !strings.Contains(reason, "cosine") {
+		t.Fatalf("reason %q does not name the measure", reason)
+	}
 }
 
 func TestEmbeddingSkipsOnAbsentOrMismatchedVectors(t *testing.T) {
 	// A dimension mismatch must skip, not read past the end or produce a
 	// cosine over the overlapping prefix.
-	store := stubEmbStore{vec: []float32{1, 0, 0}, ok: true}
-	s := Embedding{Store: store, SeedVec: []float32{1, 0}}
+	s := Embedding{
+		SeedVec:  []float32{1, 0},
+		Centroid: func([]int32) []float32 { return []float32{1, 0, 0} },
+	}
 	if _, _, err := s.Score(rank.Candidate{ID: 1}, nil, nil); err != rank.ErrSkip {
 		t.Fatalf("a dimension mismatch returned %v", err)
 	}
-	absent := Embedding{Store: stubEmbStore{ok: false}, SeedVec: []float32{1}}
-	if _, _, err := absent.Score(rank.Candidate{ID: 1}, nil, nil); err != rank.ErrSkip {
-		t.Fatalf("an absent embedding returned %v", err)
+	// A candidate with no embedded tags has no position: skip, do not score
+	// zero. Zero is a claim about a work nothing could place.
+	none := Embedding{
+		SeedVec:  []float32{1, 0},
+		Centroid: func([]int32) []float32 { return nil },
+	}
+	if _, _, err := none.Score(rank.Candidate{ID: 1}, nil, nil); err != rank.ErrSkip {
+		t.Fatalf("an unplaceable candidate returned %v", err)
+	}
+	// No seed centroid and no centroid function are both configuration-level
+	// absences and must report the same way.
+	if _, _, err := (Embedding{SeedVec: nil, Centroid: none.Centroid}).Score(rank.Candidate{ID: 1}, nil, nil); err != rank.ErrSkip {
+		t.Fatalf("an empty seed centroid returned %v", err)
+	}
+	if _, _, err := (Embedding{SeedVec: []float32{1}, Centroid: nil}).Score(rank.Candidate{ID: 1}, nil, nil); err != rank.ErrSkip {
+		t.Fatalf("a nil centroid function returned %v", err)
 	}
 }
 

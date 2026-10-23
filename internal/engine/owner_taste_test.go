@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -31,7 +32,7 @@ func ownerTasteFrom(t *testing.T, sigs []rank.Signal) signal.OwnerTaste {
 
 func TestOwnerTasteIsRegisteredAndWeightedWithNoOwner(t *testing.T) {
 	e := &Engine{}
-	sigs, tune := e.signals(nil, nil, 0, nil, "default", true)
+	sigs, tune := e.signals(context.Background(), nil, nil, 0, nil, "default", true)
 
 	ot := ownerTasteFrom(t, sigs)
 	// No owner vector: the signal must SKIP for every candidate rather than
@@ -62,7 +63,7 @@ func TestNoOwnerTasteWithholdsTheVectorWithoutRemovingTheSignal(t *testing.T) {
 	e.SetOwnerTaste(map[int32]float64{10: 1})
 
 	// personal=true: the prior is applied.
-	sigs, _ := e.signals(nil, nil, 0, nil, "default", true)
+	sigs, _ := e.signals(context.Background(), nil, nil, 0, nil, "default", true)
 	ot := ownerTasteFrom(t, sigs)
 	got, _, err := ot.Score(rank.Candidate{ID: 1, TagIDs: []int32{10}}, nil, nil)
 	if err != nil {
@@ -76,7 +77,7 @@ func TestNoOwnerTasteWithholdsTheVectorWithoutRemovingTheSignal(t *testing.T) {
 	// still in the set and still says why it skipped. Dropping the signal
 	// instead would make a deliberate request indistinguishable from a broken
 	// installation in the response.
-	sigs, _ = e.signals(nil, nil, 0, nil, "default", false)
+	sigs, _ = e.signals(context.Background(), nil, nil, 0, nil, "default", false)
 	ot = ownerTasteFrom(t, sigs)
 	if _, _, err := ot.Score(rank.Candidate{ID: 1, TagIDs: []int32{10}}, nil, nil); !errors.Is(err, rank.ErrSkip) {
 		t.Fatalf("?personal=0 returned %v; want rank.ErrSkip so meta.degraded names it", err)

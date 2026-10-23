@@ -32,6 +32,10 @@ type engineRecommender struct {
 	// (`--tune no_agreement`) instead of a rebuild: the whole point of the
 	// evaluator is comparing two rankers on the same split.
 	tune string
+	// poolMode selects the candidate sources. It is a field for the same
+	// reason tune is: widening the pool is an ablation (`--pool-mode
+	// tags+collab+embed`), and an ablation must not need a rebuild.
+	poolMode engine.PoolMode
 	// degraded records the signals that skipped for every candidate, from the
 	// first request that completed. One request is enough -- meta.degraded is
 	// a property of the engine's configuration, not of a particular reader --
@@ -44,10 +48,11 @@ func (r engineRecommender) Degraded() []string { return r.degraded }
 
 func (r engineRecommender) Recommend(ctx context.Context, seeds []int64, n int) ([]int64, error) {
 	req := engine.Request{
-		Kind:    corpus.AO3Kind,
-		N:       n,
-		Exclude: true,
-		Tune:    r.tune,
+		Kind:     corpus.AO3Kind,
+		N:        n,
+		Exclude:  true,
+		Tune:     r.tune,
+		PoolMode: r.poolMode,
 		// Every training bookmark is seen, not just the seeds. The question
 		// is whether the recommender finds works this reader has NOT kept;
 		// leaving the other training bookmarks in the pool lets them take
@@ -83,14 +88,15 @@ func runEval(ctx context.Context, args []string) error {
 	fs := newFlagSet("eval")
 	c := bindConfig(fs)
 	var (
-		ratio  = fs.Float64("ratio", eval.DefaultRatio, "fraction of each reader's bookmarks to hold out (0<ratio<1)")
-		n      = fs.Int("n", eval.DefaultK, "recommendation depth (K) to measure at")
-		users  = fs.Int("users", 0, "evaluate at most this many readers (0 = every reader; a full run is minutes, not seconds)")
-		asJSON = fs.Bool("json", false, "print the report as JSON")
-		pool   = fs.Int("pool", 0, "candidate pool size (0 = the mode's default)")
-		lite   = fs.Bool("lite", c.Mode == "lite", "skip the embedding signal (set from --mode lite)")
-		tune   = fs.String("tune", "", "weight tune to evaluate (see `kindred tune --list`; empty = the built-in default)")
-		probe  = fs.Int("pool-depth", 0, "also measure candidate-generation recall at this depth (0 = off)")
+		ratio    = fs.Float64("ratio", eval.DefaultRatio, "fraction of each reader's bookmarks to hold out (0<ratio<1)")
+		n        = fs.Int("n", eval.DefaultK, "recommendation depth (K) to measure at")
+		users    = fs.Int("users", 0, "evaluate at most this many readers (0 = every reader; a full run is minutes, not seconds)")
+		asJSON   = fs.Bool("json", false, "print the report as JSON")
+		pool     = fs.Int("pool", 0, "candidate pool size (0 = the mode's default)")
+		lite     = fs.Bool("lite", c.Mode == "lite", "skip the embedding signal (set from --mode lite)")
+		tune     = fs.String("tune", "", "weight tune to evaluate (see `kindred tune --list`; empty = the built-in default)")
+		probe    = fs.Int("pool-depth", 0, "also measure candidate-generation recall at this depth (0 = off)")
+		poolMode = fs.String("pool-mode", "tags+collab", "candidate sources: tags, tags+collab, tags+embed, tags+collab+embed")
 	)
 	c, err := finishConfig(c, fs, args)
 	if err != nil {
@@ -101,6 +107,10 @@ func runEval(ctx context.Context, args []string) error {
 	}
 	if *n <= 0 {
 		return fmt.Errorf("--n must be positive, got %d", *n)
+	}
+	pmode, err := engine.ParsePoolMode(*poolMode)
+	if err != nil {
+		return err
 	}
 
 	s, err := store.Open(ctx, c.DB, c.CorpusDB)
@@ -194,7 +204,7 @@ func runEval(ctx context.Context, args []string) error {
 	if *tune != "" {
 		fmt.Printf("evaluating tune %q\n", *tune)
 	}
-	rec := engineRecommender{eng: eng, tune: *tune}
+	rec := engineRecommender{eng: eng, tune: *tune, poolMode: pmode}
 	var runOpts []eval.Option
 	if *probe > 0 {
 		runOpts = append(runOpts, eval.WithPoolDepth(*probe))

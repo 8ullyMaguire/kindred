@@ -438,7 +438,7 @@ func TestThePoolIsSplitByBudgetNotByLuck(t *testing.T) {
 
 	for _, limit := range []int{8, 16, 30} {
 		req.PoolSize = limit
-		pool, _, err := e.poolFor(ctx, seeds, limit, true, seedIDs, req)
+		pool, _, _, err := e.poolFor(ctx, seeds, limit, true, seedIDs, req)
 		if err != nil {
 			t.Fatalf("poolFor(limit=%d): %v", limit, err)
 		}
