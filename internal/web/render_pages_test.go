@@ -1370,6 +1370,62 @@ func renderLayout(t *testing.T, name string, data any) string {
 	return buf.String()
 }
 
+// TestTheWorkPageRendersAPairReport: #78's reader-facing half.
+//
+// The section is a FORM, not a link, because the other half of the pair is a
+// number the reader supplies. A test that only asserted the heading would pass
+// on a page that collects the number and does nothing with it, so this asserts
+// the report's own numbers and names.
+func TestTheWorkPageRendersAPairReport(t *testing.T) {
+	page := WorkPage{
+		Base: Base{Title: "A Work"},
+		Work: corpus.Entity{ID: 1, Title: "A Work"},
+		Compare: &engine.PairSimilarity{
+			A:          engine.WorkRef{ID: 1, Title: "A Work"},
+			B:          engine.WorkRef{ID: 2, Title: "The Other"},
+			TagOverlap: 0.5,
+			Score:      0.5,
+			Missing:    []string{"embed_cosine"},
+			SharedTags: []engine.SharedTag{
+				{ID: 7, Name: "rare-tag", IDF: 4.5},
+				{ID: 8, Name: "common-tag", IDF: 1.2},
+			},
+		},
+	}
+	body := renderOne(t, "work.html", page)
+	for _, want := range []string{
+		"How alike is another work?", `name="compare"`, "The Other",
+		"0.50", "rare-tag", "common-tag", "embed_cosine",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the pair report is missing %q", want)
+		}
+	}
+	// The axes that ran are named; the one that did not is explained rather
+	// than rendered as a zero.
+	if !strings.Contains(body, "Not every axis could be measured") {
+		t.Fatal("the missing axis is not explained to the reader")
+	}
+}
+
+// TestTheWorkPageKeepsTheTypedIDOnError: a mistyped id must not empty the field
+// the reader has to correct.
+func TestTheWorkPageKeepsTheTypedIDOnError(t *testing.T) {
+	page := WorkPage{
+		Base:       Base{Title: "A Work"},
+		Work:       corpus.Entity{ID: 1, Title: "A Work"},
+		CompareID:  "12x",
+		CompareErr: "The other work's id must be a number.",
+	}
+	body := renderOne(t, "work.html", page)
+	if !strings.Contains(body, `value="12x"`) {
+		t.Fatal("the mistyped id was emptied out of the form")
+	}
+	if !strings.Contains(body, "must be a number") {
+		t.Fatal("the error is not rendered")
+	}
+}
+
 // TestTagPageOffersItsFeed: a subscription is a thing a reader does once, so
 // the page both DISCOVERS the feed (the layout's rel=alternate, which is what
 // makes a browser offer it) and links it in words. Both halves matter: the head

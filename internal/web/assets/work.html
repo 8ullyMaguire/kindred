@@ -117,6 +117,50 @@
   </p>
 {{end}}
 
+{{/* Work-pair similarity (#78). A form rather than a link, because the other
+     half of the pair is a number the reader has to supply -- and the report is
+     rendered IN PLACE, so the reader keeps the work they were reading. */}}
+<h2>How alike is another work?</h2>
+<form method="get" action="/work/{{.Work.ID}}" class="compare">
+  <label for="compare">Compare with work id</label>
+  <input type="text" id="compare" name="compare" inputmode="numeric"
+         value="{{.CompareID}}" placeholder="e.g. 17249318">
+  <button type="submit">Compare</button>
+</form>
+{{if .CompareErr}}
+  <p class="note" data-testid="compare-error">{{.CompareErr}}</p>
+{{else if .Compare}}
+  <div data-testid="compare-report">
+    <p>
+      <a href="/work/{{.Compare.A.ID}}">{{.Compare.A.Title}}</a> and
+      <a href="/work/{{.Compare.B.ID}}">{{.Compare.B.Title}}</a>:
+      <strong>{{printf "%.2f" .Compare.Score}}</strong> alike overall —
+      tag overlap {{printf "%.2f" .Compare.TagOverlap}}{{if not .Compare.Missing}},
+      embedding cosine {{printf "%.2f" .Compare.EmbedCosine}}{{end}}.
+    </p>
+    {{if .Compare.SharedTags}}
+      <p class="count">Shared tags, rarest first — the first row is the reason
+        the score is what it is:</p>
+      <ul class="shared-tags">
+        {{range .Compare.SharedTags}}
+        <li><a href="/tag/{{.ID}}">{{.Name}}</a>
+          <span class="count">{{printf "%.2f" .IDF}}</span></li>
+        {{end}}
+      </ul>
+    {{else}}
+      <p class="count" data-empty="true">The two works share no tag. Their
+        resemblance, if any, is only in the embedding space.</p>
+    {{end}}
+    {{if .Compare.Missing}}
+      <p class="note">
+        Not every axis could be measured here: {{range $i, $m := .Compare.Missing}}{{if $i}}, {{end}}{{$m}}{{end}}.
+        The score is the average of the axes that ran, so it is comparable to
+        another pair on THIS mirror and not to one measured elsewhere.
+      </p>
+    {{end}}
+  </div>
+{{end}}
+
 {{/* Cross-fandom bridges. A crossover carries a fandom this work does not,
      which is a tag DIFFERENCE rather than a match, so it needs its own
      section: the similarity ranking above cannot surface it. */}}

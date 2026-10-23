@@ -1160,12 +1160,19 @@ func embedReserve(limit int) int {
 	if limit <= 2 {
 		return 0
 	}
-	// EXPERIMENT 2026-10-23d: one quarter instead of one eighth, to be measured
-	// against run #13 (pool recall@1000 0.2113, recall@10 0.1050) before this
-	// constant is decided. The deployed pool filled 125 embed slots with only 97
-	// NEW works because 28 of its candidates were already in the tag half — so
-	// the source is not saturated and a bigger reserve can add distinct works.
-	r := (limit + 3) / 4
+	// MEASURED 2026-10-23d, and this is the answer to "is a bigger reserve
+	// better": no. Doubling it changed nothing and cost a little ranking
+	// quality, on the same reader sample (38 readers, 495 held-out bookmarks):
+	//
+	//   reserve 1/8 (run #13)  pool recall@1000 0.2113  recall@10 0.1050  nDCG@10 0.1959
+	//   reserve 1/4 (run #15)  pool recall@1000 0.2115  recall@10 0.1040  nDCG@10 0.1913
+	//
+	// The pool recall difference is 0.0002 — two held-out works across the whole
+	// sample — so the extra embed slots are filled with works the tag half
+	// already reaches or that no reader held out. The source is saturated at
+	// this reserve, which is the useful part: the next gain has to come from
+	// what the source CAN reach, not from how many slots it is given.
+	r := (limit + 7) / 8
 	if r > limit-1 {
 		return limit - 1
 	}

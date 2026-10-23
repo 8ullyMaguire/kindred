@@ -1673,6 +1673,20 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 
 	page := WorkPage{Base: d.baseOf(r, ent.Title, ent.Title), Work: ent}
 
+	// ?compare={other}: the pair report (#78). Best-effort like the
+	// recommendation below — a comparison that fails must not cost the reader
+	// the work itself.
+	if other := strings.TrimSpace(r.URL.Query().Get("compare")); other != "" {
+		page.CompareID = other
+		if otherID, perr := strconv.ParseInt(other, 10, 64); perr != nil {
+			page.CompareErr = "The other work's id must be a number."
+		} else if sim, serr := d.Engine.Similarity(ctx, id, otherID); serr != nil {
+			page.CompareErr = "That comparison could not be made: " + serr.Error()
+		} else {
+			page.Compare = sim
+		}
+	}
+
 	// How many "more like this" the reader wants. Default 10 (the page's
 	// historical size), ?n= raises it: the list was hard-capped at 10 with
 	// no way to ask for more, which is exactly the limitation ?n= exists

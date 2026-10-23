@@ -201,8 +201,20 @@ type WorkPage struct {
 	// others, and this says what it does not share. Empty when no document
 	// frequency table is loaded, because an unranked "distinctive" list
 	// would be a claim the server cannot support.
-	DNA     []corpus.TagPair
-	Similar []rank.Candidate
+	DNA []corpus.TagPair
+	// Compare is the pair report for ?compare={other}: how this work and the
+	// other one are alike, with the axes separate. Nil when the reader asked for
+	// no comparison, which is the usual case — so the template must test it
+	// rather than render an empty box.
+	Compare *engine.PairSimilarity
+	// CompareErr is set when the reader asked for a comparison that could not be
+	// made (an unknown id, most often). The page still renders the work: losing
+	// the whole page over a mistyped number would be the wrong trade.
+	CompareErr string
+	// CompareID echoes what the reader typed, so the field is not emptied by the
+	// error it produced.
+	CompareID string
+	Similar   []rank.Candidate
 	// CoBookmarked are works that share readers with this one. It is
 	// separate from Similar because it answers a different question: Similar
 	// is "ranked like this" (tags, graph, quality), while this is the

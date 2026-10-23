@@ -130,6 +130,9 @@ func (s *Server) Routes() http.Handler {
 	// fandom is a tag the seed does not carry, which is why neither overlap
 	// nor item-to-item collab surfaces it.
 	mux.HandleFunc("GET /api/v1/works/{id}/bridges", s.handleBridges)
+	// Work-pair similarity: the components behind "these two are alike",
+	// separately, because a single score hides which axis carried it.
+	mux.HandleFunc("GET /api/v1/works/{id}/similarity/{other}", s.handleWorkSimilarity)
 	// The algorithm A/B arena. An "algorithm" is a named tune (a weight
 	// vector over the scoring signals), which is the registry this
 	// deployment already has. Votes go to algo_comparisons, NOT to

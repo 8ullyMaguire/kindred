@@ -56,6 +56,9 @@ var routeTable = map[string]routeAudit{
 	"GET /api/v1/ao3/works/{id}/recommend": {Page: "/work/{id}"},
 	"GET /api/v1/works/{id}/co-bookmarked": {Page: "/work/{id}"},
 	"GET /api/v1/works/{id}/bridges":       {Page: "/work/{id}"},
+	// Work-pair similarity (#78). The page is the work page's compare form,
+	// which renders the report in place under ?compare={other}.
+	"GET /api/v1/works/{id}/similarity/{other}": {Page: "/work/{id}?compare={other}"},
 	// The algorithm A/B surface. An algorithm is a named tune; the page
 	// shows one seed ranked through two of them, side by side, and records
 	// which list the reader preferred.
