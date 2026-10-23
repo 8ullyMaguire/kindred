@@ -67,7 +67,7 @@ Four statuses:
 | 62 | OpenSearch descriptor | **BUILT** | `/opensearch.xml`, OpenSearch 1.1, one Url pointing at `/search?q={searchTerms}`. A second `format=rss` Url was removed: `/search` has no format parameter, so the browser offered a subscription that returned HTML — a promise the reader sees broken. The test counts the Urls. |
 | 63 | Jaccard co-occurrence similarity | **BUILT** | `signal.go` computes and prints a Jaccard ratio; `TagNeighbours` ranks by PMI; `idf_overlap.go` is the weighted variant. |
 | 64 | "Tag DNA" distinctive tags | **BUILT** | `internal/web/distinctive.go` + the work page's "What makes this work distinctive" block: rarest by document frequency, a tag on every work dropped (zero evidence), a zero-frequency tag dropped (the table and the work disagree). |
-| 65 | "New since your last visit" | OPEN | `seen_works` is a set, not a cursor; no `first_seen` comparison per reader. |
+| 65 | "New since your last visit" | **BUILT** | `/new`, backed by `reader_visits` (previous_at = the boundary, current_at = the visit's start, last_at = when we last heard from them). Both halves of `seen_works` are excluded — read AND shown. A first visit says there is no "before" instead of using zero time, and the page prints the boundary it measured from. Live: boundary 1 May 2026 → 40 works, newest first; marking one seen removes it and the list refills. |
 | 66 | Author recs from a single work | PARTIAL | `/api/v1/authors/similar` exists (`engine/authors.go`); the work page does not link to it and no template renders it (`grep` for `authors/similar` in `work.html`/`handlers.go`: 0). |
 | 67 | Smart default seeds for new readers | **BUILT** | `/recommend` with no seed ranks from the most-kudosed work (`corpus.AO3.TopByKudos`; ONE, because three from three fandoms measured 4.2 s a page against 2.6 s for one) and names it as popularity in `data-testid="seed-origin"`; no corpus still renders the empty form. |
 | 68 | Tag "temperature" (contested tags) | OPEN | No per-tag variance over comparisons. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 13 | 33, 40, 46, 56, 57, 61, 62, 63, 64, 67, 70, 71, 78 |
+| BUILT | 14 | 33, 40, 46, 56, 57, 61, 62, 63, 64, 65, 67, 70, 71, 78 |
 | PARTIAL | 12 | 32, 38, 41, 42, 45, 49, 50, 54, 66, 72, 79, 89 |
-| OPEN | 41 | 31, 34, 35, 36, 37, 39, 43, 44, 47, 48, 52, 53, 55, 58, 59, 60, 65, 68, 69, 73, 74, 75, 76, 77, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 40 | 31, 34, 35, 36, 37, 39, 43, 44, 47, 48, 52, 53, 55, 58, 59, 60, 68, 69, 73, 74, 75, 76, 77, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
@@ -118,10 +118,10 @@ open of 30), the whole list stood at 22 built, 13 partial, 61 open, 4 without a 
 Five of the open ones (33, 46, 64, 67, 71) shipped on 2026-10-23, and #11's
 enumeration half shipped on 2026-10-23b (it moves from OPEN to PARTIAL: the
 candidate source exists, the nearest-tags surface does not), so the live total
-is **31 built, 14 partial, 51 open, 4 without a premise** — 100 accounted
-(#61, #62, #78 and #40 shipped on 2026-10-23d: a tag feed, a seed feed, the
-search descriptor, the work-pair report and the reading path, all verified on the
-deployed binary)
+is **32 built, 14 partial, 50 open, 4 without a premise** — 100 accounted
+(#61, #62, #78, #40 and #65 shipped on 2026-10-23d: a tag feed, a seed feed,
+the search descriptor, the work-pair report, the reading path and the
+new-since-visit list, all verified on the deployed binary)
 for. The measurement that matters more than the count: **pool recall@1000 was
 0.0284** (run #8) and is **0.2113** after the candidate work (run #13), i.e. even a perfect ranking of the 1000 candidates could
 find at most 2.8% of held-out works, and the current recall@10 of 0.0056 is a

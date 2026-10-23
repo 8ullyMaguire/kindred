@@ -151,6 +151,34 @@ already documents. The path measures drift instead of forcing it.
 Also: a work never appears twice, and no embeddings is a zero-step path with the
 axis named and a note saying where to go instead.
 
+## #65 — new since your last visit (commit 90941c5)
+
+    /new
+
+`seen_works` is a SET with no time order, so nothing could answer "what arrived
+since I last looked". `reader_visits` stores three instants: `previous_at` (the
+BOUNDARY the list is measured from), `current_at` (the visit's start) and
+`last_at` (when we last heard from them).
+
+`last_at` exists because the gap that decides "a new visit" must be measured from
+ACTIVITY, not from the visit's start: a reader who browses for an hour is one
+visit. The mutation that measures from `current_at` splits one visit into two and
+the test says so by name ("an hour of browsing in 20-minute steps counted as 2
+visits, want 1").
+
+Both halves of `seen_works` are excluded, read AND shown: a work the reader
+scrolled past was still put in front of them.
+
+The exclusion is bound as an IN list because `seen_works` lives in the STATE
+database and `works` in the CORPUS database — SQLite cannot join across two
+files, so the shorter code would not have run at all.
+
+Live: backdating the boundary to 1 May 2026 returned 40 works newest-first
+(90553521 "Bad Moon Rising" first, matching the tag feed's newest), and marking
+that work seen removed it from the list and refilled from below. A boundary of
+20 Oct returned zero — the corpus's newest `first_seen` is 15 Oct, so zero was
+the right answer and the page printed the boundary that made it checkable.
+
 ## Next
 
 Untouched rows with a real input behind them: 60 (`interleave_impressions` now

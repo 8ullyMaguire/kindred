@@ -4,6 +4,30 @@ Status as of 2026-10-07. Every line below was verified by running it, not by
 reading the code. A line marked DONE names the test or the tool output that
 established it.
 
+## New since your last visit (2026-10-23d, commit 90941c5)
+
+- [x] **`/new`** — works the mirror first saw after the reader's PREVIOUS visit
+      began, minus everything they have read or been shown. Live: boundary 1 May
+      2026 → 40 works newest-first; marking one seen removes it and the list
+      refills from below.
+- [x] **`reader_visits`** — three instants per reader, each for a different
+      question: `previous_at` is the boundary, `current_at` the visit's start,
+      `last_at` when we last heard from them. The gap is measured from
+      `last_at`, so an hour of browsing is ONE visit (that mutation splits it in
+      two, and the test names it).
+- [x] **A first visit has no boundary and says so**, rather than comparing
+      against zero time.
+
+Two notes for whoever touches this next:
+
+- `seen_works` and `works` are in two different SQLite files. There is no join
+  across them, so the exclusion is read first and bound as an IN list in chunks
+  of 400. Joining would have been shorter to write and impossible to run.
+- The `first_seen IS NOT NULL AND <> ''` guard is redundant by measurement:
+  `datetime('')` is NULL and `NULL > datetime(?)` is NULL, so undated works are
+  already excluded. The mutation deleting it leaves the test green, and the code
+  says so rather than pretending otherwise.
+
 ## Reading paths (2026-10-23d, commits 3297257 + f28f02f)
 
 - [x] **`GET /api/v1/works/{id}/path?steps=N`** and **`/path/{id}`** — a walk
