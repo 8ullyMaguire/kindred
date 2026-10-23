@@ -80,7 +80,7 @@ Four statuses:
 | 75 | Cross-fandom trope transfer | OPEN | Bridges surface works that **are** in both fandoms; "same non-fandom tags, a different fandom" is a different query and no runner does it. |
 | 76 | Embedding drift monitoring | OPEN | `embedcmd` rewrites `embeddings`; nothing compares old and new vectors. |
 | 77 | Tag suggestions for writers | OPEN | No writer surface. |
-| 78 | Work-pair similarity API | OPEN | No `/works/{id}/similarity/{other}`. |
+| 78 | Work-pair similarity API | **BUILT** | `GET /api/v1/works/{id}/similarity/{other}` and `/work/{id}?compare={other}`. Two components, published separately: IDF-weighted Jaccard over the tag sets and the cosine between the works' tag centroids; the shared tags travel rarest-first, and every axis that could not run is named in `missing`. Popularity/recency are deliberately NOT components. Live: works 17249318 vs 65141041 share 18 tags, overlap 0.111, cosine 0.869, score 0.490. |
 | 79 | Recommendation diversity metric | PARTIAL | `diversify` enforces MMR and per-group caps and reports what it dropped; `eval_runs` stores recall/NDCG only, so intra-list diversity is not tracked over time. |
 | 80 | Seasonal tag auto-detection | OPEN | No temporal frequency model over tags. |
 | 81 | Federated taste profiles | OPEN | `dump`/`fetch` move mirror snapshots (`cmd/kindred/dumpcmd.go`); no taste vector is exchanged. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 11 | 33, 46, 56, 57, 61, 62, 63, 64, 67, 70, 71 |
+| BUILT | 12 | 33, 46, 56, 57, 61, 62, 63, 64, 67, 70, 71, 78 |
 | PARTIAL | 12 | 32, 38, 41, 42, 45, 49, 50, 54, 66, 72, 79, 89 |
-| OPEN | 43 | 31, 34, 35, 36, 37, 39, 40, 43, 44, 47, 48, 52, 53, 55, 58, 59, 60, 65, 68, 69, 73, 74, 75, 76, 77, 78, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 42 | 31, 34, 35, 36, 37, 39, 40, 43, 44, 47, 48, 52, 53, 55, 58, 59, 60, 65, 68, 69, 73, 74, 75, 76, 77, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
@@ -118,9 +118,9 @@ open of 30), the whole list stood at 22 built, 13 partial, 61 open, 4 without a 
 Five of the open ones (33, 46, 64, 67, 71) shipped on 2026-10-23, and #11's
 enumeration half shipped on 2026-10-23b (it moves from OPEN to PARTIAL: the
 candidate source exists, the nearest-tags surface does not), so the live total
-is **29 built, 14 partial, 53 open, 4 without a premise** — 100 accounted
-(#61 and #62 shipped on 2026-10-23d: a tag feed, a seed feed and the search
-descriptor, all three verified on the deployed binary)
+is **30 built, 14 partial, 52 open, 4 without a premise** — 100 accounted
+(#61, #62 and #78 shipped on 2026-10-23d: a tag feed, a seed feed, the search
+descriptor and the work-pair report, all verified on the deployed binary)
 for. The measurement that matters more than the count: **pool recall@1000 was
 0.0284** (run #8) and is **0.2113** after the candidate work (run #13), i.e. even a perfect ranking of the 1000 candidates could
 find at most 2.8% of held-out works, and the current recall@10 of 0.0056 is a

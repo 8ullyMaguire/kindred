@@ -4,6 +4,27 @@ Status as of 2026-10-07. Every line below was verified by running it, not by
 reading the code. A line marked DONE names the test or the tool output that
 established it.
 
+## Work-pair similarity, and the reserve question (2026-10-23d, commit 1fb7a69)
+
+- [x] **`GET /api/v1/works/{id}/similarity/{other}`** — two axes, published
+      separately: IDF-weighted Jaccard over the tag sets and the cosine between
+      the works' tag centroids. Shared tags rarest-first; every axis that could
+      not run is named in `missing`. Live: 17249318 vs 65141041 — 18 shared
+      tags, overlap 0.111, cosine 0.869, score 0.490.
+- [x] **`/work/{id}?compare={other}`** — the same report rendered in place, in a
+      form that keeps the typed id when it is wrong.
+- [x] **The embed reserve ablation** — 1/4 instead of 1/8 changed nothing on the
+      same reader sample (pool recall@1000 0.2113 -> 0.2115, recall@10 0.1050 ->
+      0.1040), so the constant stays. The source is saturated at 1/8.
+- [ ] **`co_bookmark` as a third axis** — needs a per-pair lookup the collab
+      index does not carry (it walks pairs from a seed). Named in the doc comment
+      and in `missing` rather than invented here.
+
+Method note worth keeping: the first ablation attempt read 0.2024 pool recall and
+looked like a regression. It had run with `--users 38` instead of 40, which
+samples DIFFERENT readers (36 usable instead of 38). **Two eval runs are only
+comparable at the same `--users`.**
+
 ## Feeds and the search descriptor (2026-10-23d, commits fc21e12/8eea88a/e06b92d)
 
 - [x] **`/feed/tag/{id}`** — RSS 2.0 of the works under a tag, newest first by

@@ -79,12 +79,50 @@ recorded. They now say why they have no page: a feed is read by a subscriber's
 client, the descriptor by a browser's search settings, and `/tag/{id}` carries
 the page half.
 
+## #78 — the work-pair report (commit 1fb7a69)
+
+    GET /api/v1/works/{id}/similarity/{other}
+    /work/{id}?compare={other}
+
+Two axes, published separately: `tag_overlap` (IDF-weighted Jaccard) and
+`embed_cosine` (cosine of the works' tag centroids), with the shared tags
+rarest-first and every axis that could not run named in `missing`. The score is a
+renormalised mean of what ran. Popularity and recency are deliberately NOT
+components.
+
+The test that gives this teeth: a pair sharing a RARE tag versus a pair sharing a
+COMMON one, unions the same size. A plain Jaccard index scores them equal, so an
+implementation that forgot the IDF fails. Its sibling: a pair with nothing in
+common must score exactly 0, or the positive case passes on something that scores
+everything alike.
+
+The fixture had to LOAD the document-frequency table. Without it the engine
+weighs every tag the same, names `tag_idf` in `missing`, and the weighting test
+fails for a reason that has nothing to do with the code under test — which is
+exactly how the first run of it failed.
+
+## The reserve question: answered, no change
+
+Measured on the same reader sample (38 readers, 495 held-out bookmarks):
+
+| reserve | pool recall@1000 | recall@10 | nDCG@10 |
+|---|---|---|---|
+| 1/8 (run #13) | 0.2113 | 0.1050 | 0.1959 |
+| 1/4 (run #15) | 0.2115 | 0.1040 | 0.1913 |
+
+Two held-out works across the whole sample: the embedding source is saturated at
+1/8, so the constant stays and now carries the numbers.
+
+**The measurement trap.** The first attempt (run #14) read pool recall 0.2024 and
+looked like a real regression. It was run with `--users 38` rather than 40, and
+`--users` chooses the SAMPLE: 36 usable readers instead of 38, 463 held-out
+bookmarks instead of 495. Two eval runs are only comparable at the same
+`--users`. The eval's own split is deterministic per reader (PCG seeded by user
+id) — the sampling above it is not.
+
 ## Next
 
-- The embed reserve question is answered by the numbers already in hand: the
-  deployed pool was 902 tags + 1 collab + 97 embed with a 125-slot reserve, so
-  the embed source under-fills its reserve and raising the reserve cannot help
-  until it has more than 125 candidates to offer. The next measurement is why it
-  offers 97 — likely the nearest-tag fan-out, not the reserve.
-- Then the untouched rows with a real input behind them: 60 (`interleave_
-  impressions` exists), 65 (`seen_works.shown_at` exists), 78 (no pair route).
+Untouched rows with a real input behind them: 60 (`interleave_impressions` now
+records what was shown), 65 (`seen_works.shown_at` is a per-reader timestamp),
+43 (nothing negates the taste vector), 40 (no sequential walk). Then 76 (embedding
+drift) now that the index is resident and its rows are in one slab.
