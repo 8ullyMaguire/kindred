@@ -70,6 +70,18 @@ func getFeed(t *testing.T, url string) (*feedDoc, string, int) {
 
 // workURL is the corpus url for a fixture work, empty for the one that tests
 // the minted-link fallback.
+// linkWorkID is the work id a feed link names, in either shape the mirror and
+// kindred emit ("/works/11" and "/work/11").
+func linkWorkID(link string) (int64, bool) {
+	trimmed := strings.TrimRight(link, "/")
+	i := strings.LastIndex(trimmed, "/")
+	if i < 0 {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(trimmed[i+1:], 10, 64)
+	return id, err == nil
+}
+
 func workURL(id int) string {
 	if id == 15 {
 		return ""
@@ -288,8 +300,14 @@ func TestFeedSeedRanksFromTheSeed(t *testing.T) {
 		t.Fatalf("the seed feed is empty for a work with tag siblings\n%s", raw)
 	}
 	// The seed itself is never in its own recommendations.
+	//
+	// Compare the trailing ID, not a suffix: the corpus stores
+	// "…/works/{id}" (plural) while kindred mints "…/work/{id}", so a suffix
+	// check for one shape silently matches NEITHER and passes whatever the feed
+	// contains. Measured: the Exclude=false mutation survived this assertion
+	// until it read the id.
 	for _, it := range doc.Channel.Items {
-		if strings.HasSuffix(it.Link, "/work/11") {
+		if id, ok := linkWorkID(it.Link); ok && id == 11 {
 			t.Fatalf("the seed work appears in its own feed: %q", it.Link)
 		}
 	}

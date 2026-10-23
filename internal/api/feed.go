@@ -57,11 +57,16 @@ type rssChannel struct {
 }
 
 type rssItem struct {
-	Title       string  `xml:"title"`
-	Link        string  `xml:"link"`
-	GUID        rssGUID `xml:"guid"`
-	PubDate     string  `xml:"pubDate"`
-	Description string  `xml:"description"`
+	Title string  `xml:"title"`
+	Link  string  `xml:"link"`
+	GUID  rssGUID `xml:"guid"`
+	// pubDate is optional in RSS and omitted when the mirror has no date for the
+	// work. An empty element is not "no date": readers parse "" as a date and
+	// either drop the entry or sort it to the epoch, which is a claim the corpus
+	// never made. Measured live: a ranked seed with an empty update_date
+	// rendered `<pubDate></pubDate>`.
+	PubDate     string `xml:"pubDate,omitempty"`
+	Description string `xml:"description"`
 }
 
 // rssGUID carries isPermaLink as an ATTRIBUTE, which is what makes the guid a
@@ -242,6 +247,13 @@ func (s *Server) handleFeedSeed(w http.ResponseWriter, r *http.Request) {
 		Kind:  parts[0],
 		Seeds: []engine.Seed{{Kind: parts[0], ID: kind}},
 		N:     n,
+		// Exclude is what the /api/v1/recommend handler defaults to and this
+		// feed did not set: the seed itself came back as its own first
+		// recommendation on the live deployment. The zero value means "include
+		// the seeds", so a caller that forgets it gets the least useful entry
+		// first — and the fixture did not catch it, because there the seed's own
+		// score put it out of the top N anyway.
+		Exclude: true,
 	})
 	if errors.Is(err, corpus.ErrNotFound) || errors.Is(err, store.ErrNotFound) {
 		writeTextErr(w, http.StatusNotFound, fmt.Sprintf("no %s with id %d", parts[0], kind))
