@@ -48,7 +48,7 @@ Four statuses:
 | 43 | Anti-recommendations | OPEN | Nothing negates the taste vector. |
 | 44 | Seasonal/temporal context | OPEN | No tag→month mapping and no calendar term. |
 | 45 | Tag canonical form resolution | PARTIAL | `tagfamily` (embedded `families.json`) plus `fandom.base()` collapse variants; there is no alias table and the index is never merged. |
-| 46 | Per-fandom quality tracking | OPEN | `/eval` reports offline bookmarks, algo votes, interleave credits and coverage; no fandom slice. |
+| 46 | Per-fandom quality tracking | **BUILT** | `eval_slices` + `eval.ByGroup` from per-work `Placements`; `/eval` prints the newest run's weakest fandoms first (groups of ≥20 held-out works). |
 | 47 | Work cluster labels | OPEN | No work-level clustering; embeddings are `kind='tag'` only. |
 | 48 | Reader velocity signal | OPEN | No session model: scoping is an owner key (`arena_sessions`), and nothing counts marks per visit. |
 | 49 | Tag polarity detection | PARTIAL | A reader can block a tag (`arena_user_blocked_tags`, `POST /block`) and blocks are honoured in ranking; nothing infers polarity corpus-wide from block/bookmark ratios. |
@@ -73,7 +73,7 @@ Four statuses:
 | 68 | Tag "temperature" (contested tags) | OPEN | No per-tag variance over comparisons. |
 | 69 | Work controversy score | OPEN | `arena_entity_history` holds per-entity history; nothing computes a divisiveness score from it. |
 | 70 | Batch arena with keyboard shortcuts | **BUILT** | `/api/v1/arena/batch` + the speed round in the arena UI. |
-| 71 | Per-tag recommendation quality leaderboard | OPEN | `/eval` has no per-tag slice. |
+| 71 | Per-tag recommendation quality leaderboard | **BUILT** | Same table, `axis = 'tag'`: every tag a held-out work carries, weakest first, top 25 by size per run. |
 | 72 | Embedding dimension search | PARTIAL | `kindred embed --dim` exists (default 32, `embedcmd.go:47`); eval runs never vary it, so no width is compared. |
 | 73 | Multi-objective Pareto ranking | OPEN | One scalar score; no dominance relation. |
 | 74 | Random walks (personalised PageRank) | OPEN | No walk; ranking is overlap/affinity/collab signals. |
@@ -108,15 +108,15 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 6 | 56, 57, 63, 64, 67, 70 |
+| BUILT | 8 | 46, 56, 57, 63, 64, 67, 70, 71 |
 | PARTIAL | 12 | 32, 38, 41, 42, 45, 49, 50, 54, 66, 72, 79, 89 |
-| OPEN | 48 | 31, 33, 34, 35, 36, 37, 39, 40, 43, 44, 46, 47, 48, 52, 53, 55, 58, 59, 60, 61, 62, 65, 68, 69, 71, 73, 74, 75, 76, 77, 78, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 46 | 31, 33, 34, 35, 36, 37, 39, 40, 43, 44, 47, 48, 52, 53, 55, 58, 59, 60, 61, 62, 65, 68, 69, 73, 74, 75, 76, 77, 78, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
 open of 30), the whole list stood at 22 built, 13 partial, 61 open, 4 without a premise.
-Two of the open ones (64, 67) shipped on 2026-10-23, so the live total is
-**24 built, 13 partial, 59 open, 4 without a premise** — 100 accounted for.
+Four of the open ones (46, 64, 67, 71) shipped on 2026-10-23, so the live total
+is **26 built, 13 partial, 57 open, 4 without a premise** — 100 accounted for.
 
 ## What the audit changed about the group story
 
