@@ -51,12 +51,12 @@ func TestAnUnseededRecommendStartsFromTheMostKudosedWorks(t *testing.T) {
 		t.Errorf("the seed-origin note does not name popularity as its source:\n%s", headOf(body, 600))
 	}
 	// The seeds themselves must be on the page, echoed into the form, and
-	// they must be the corpus's actual top three by kudos. Asserting only
+	// they must be the corpus's actual top N by kudos. Asserting only
 	// "some ao3_work appears" would pass for an arbitrary three works, which
 	// is exactly the defect (a default that is not the answer to the
 	// question the note claims).
 	var want []string
-	rows, err := db.Query(`SELECT id FROM works ORDER BY COALESCE(kudos,0) DESC, id ASC LIMIT 3`)
+	rows, err := db.Query(`SELECT id FROM works ORDER BY COALESCE(kudos,0) DESC, id ASC LIMIT ?`, defaultSeedCount)
 	if err != nil {
 		t.Fatalf("reference query: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestAnUnseededRecommendStartsFromTheMostKudosedWorks(t *testing.T) {
 	// reader sees.
 	for _, seed := range want {
 		if !strings.Contains(body, `name="seed" value="`+seed+`"`) {
-			t.Errorf("default seeds are not the top three by kudos: no seed input for %s (want %v)", seed, want)
+			t.Errorf("default seeds are not the top %d by kudos: no seed input for %s (want %v)", len(want), seed, want)
 		}
 	}
 	if n := strings.Count(body, `name="seed" value="ao3_work:`); n != len(want) {
