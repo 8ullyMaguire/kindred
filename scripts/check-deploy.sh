@@ -301,14 +301,25 @@ echo "filters:"
 # reported broken because the gate timed out. 90 s is a cold-start allowance, not
 # a latency assertion; latency is measured in its own section against a warm
 # process.
-ctl=$(curl -fsS --max-time 90 "$TARGET/tag/$TAG" || true)
-for name in complete rating lang; do
-  if printf '%s' "$ctl" | grep -qE "name=\"$name\""; then
-    ok "$name control is present"
-  else
-    bad "$name control is MISSING from the tag page"
-  fi
-done
+# The STATUS is captured separately from the body, because "the page did not
+# answer" and "the page answered without this control" are different findings and
+# the gate reported them identically for two sessions: a cold start that answered
+# 503 read as "complete control is MISSING from the tag page", which is a claim
+# about the product made by a measurement of the network.
+CTL_BODY=$(mktemp)
+ctl_code=$(curl -sS --max-time 90 -o "$CTL_BODY" -w '%{http_code}' "$TARGET/tag/$TAG" 2>/dev/null || echo 000)
+if [ "$ctl_code" != "200" ]; then
+  bad "the tag page answered HTTP $ctl_code, so its filter controls cannot be checked at all"
+else
+  for name in complete rating lang; do
+    if grep -qE "name=\"$name\"" "$CTL_BODY"; then
+      ok "$name control is present"
+    else
+      bad "$name control is MISSING from the tag page (the page itself answered 200)"
+    fi
+  done
+fi
+rm -f "$CTL_BODY"
 
 base_count=$TAG_WORKS
 [ "${base_count:-0}" -eq 0 ] && base_count=$(count_works "$TARGET/tag/$TAG?n=100")
