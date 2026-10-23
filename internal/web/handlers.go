@@ -1778,6 +1778,9 @@ func (d Deps) renderNew(w http.ResponseWriter, r *http.Request) {
 	if page.FirstVisit {
 		since = cur.CurrentAt
 	}
+	if n, merr := d.Engine.Store.MarksSince(r.Context(), ownerKey, since); merr == nil {
+		page.MarkedSince = n
+	}
 	works, err := d.Engine.Store.NewSince(r.Context(), ownerKey, since, page.Requested)
 	if err != nil {
 		page.Err = "The new-works list could not be read: " + err.Error()

@@ -245,3 +245,39 @@ func TestEntityNumericIDAcceptsBothShapes(t *testing.T) {
 		}
 	}
 }
+
+// TestMarksSinceCountsWhatTheReaderDid (#48, the count half).
+func TestMarksSinceCountsWhatTheReaderDid(t *testing.T) {
+	ctx := context.Background()
+	s, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, id := range []int64{1, 2, 3} {
+		if err := s.MarkRead(ctx, "owner", WorkEntityID(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A boundary in the future counts nothing: a count that ignores its own
+	// boundary would report every mark ever made as "since your last visit".
+	n, err := s.MarksSince(ctx, "owner", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("marks since a future boundary = %d, want 0", n)
+	}
+	// A boundary in the past counts all three.
+	n, err = s.MarksSince(ctx, "owner", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("marks since an hour ago = %d, want 3", n)
+	}
+	// And another reader's marks never appear.
+	if n, err := s.MarksSince(ctx, "someone-else", time.Now().Add(-time.Hour)); err != nil || n != 0 {
+		t.Fatalf("another reader's marks = %d, %v; want 0", n, err)
+	}
+}

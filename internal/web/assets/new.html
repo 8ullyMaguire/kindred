@@ -25,6 +25,14 @@
     (visit {{.Visit.Visits}}) ·
     {{len .Works}} of up to {{.Requested}} works shown.
   </p>
+  {{if .MarkedSince}}
+  <p class="count" data-testid="velocity">
+    {{.MarkedSince}} work(s) marked read since then, across
+    {{.Visit.Visits}} visit(s) — this is the count a velocity signal would be
+    computed from, and it is stated as a count because a weight fitted to a
+    handful of visits would be a guess.
+  </p>
+  {{end}}
 
   {{if .Works}}
     <ol class="new-works">

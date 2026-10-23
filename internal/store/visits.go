@@ -263,3 +263,30 @@ func EntityNumericID(s string) (int64, bool) {
 	}
 	return n, true
 }
+
+// MarksSince counts the works this reader has marked read since an instant
+// (#48, the count half).
+//
+// The roadmap row asks for a velocity SIGNAL. A signal needs a weight, a weight
+// needs a measurement, and a measurement needs readers with more than one visit:
+// on 2026-10-23 the live state database held 33 marked works across 8 owners and
+// 8 reader-days, with no owner having five. Fitting a weight to that would be
+// fitting noise. This count is the part that needs no model — it is a fact about
+// the reader, and it is what a weight would eventually be computed from.
+func (s *Store) MarksSince(ctx context.Context, ownerKey string, since time.Time) (int, error) {
+	if s == nil || s.DB == nil || ownerKey == "" {
+		return 0, nil
+	}
+	var n int
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM seen_works
+		 WHERE owner_key = ? AND COALESCE(read_at, shown_at) >= ?`,
+		ownerKey, since.UTC().Format("2006-01-02 15:04:05")).Scan(&n)
+	if err != nil {
+		if isMissingTable(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return n, nil
+}

@@ -273,7 +273,12 @@ type NewPage struct {
 	// FirstVisit is lifted out of Visit so a template cannot dereference a nil
 	// cursor for a reader whose visit could not be recorded.
 	FirstVisit bool
-	Err        string
+	// MarkedSince is how many works this reader has marked read since the
+	// boundary this list is measured from (#48 as a COUNT, not a weight):
+	// "12 works across 3 visits" is a fact about the reader, while a velocity
+	// signal fitted to eight reader-days would be a guess.
+	MarkedSince int
+	Err         string
 }
 
 // PathPage is a reading path (#40): a walk through embedding space where each
