@@ -239,6 +239,26 @@ type RelatedItemView struct {
 	Score float64
 }
 
+// SkippedPage is the "works you keep skipping" list (#60).
+type SkippedPage struct {
+	Base
+	Works     []SkippedWorkView
+	Threshold int
+	Saved     string
+	Err       string
+	Empty     string
+}
+
+// SkippedWorkView is one skipped row as the template sees it.
+type SkippedWorkView struct {
+	ID        int64
+	Title     string
+	URL       string
+	Shows     int
+	LastShown string
+	Arms      string
+}
+
 // NewPage is "new since your last visit" (#65).
 //
 // The number that matters is not the size of the list but the BOUNDARY it was

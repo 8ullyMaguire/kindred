@@ -790,6 +790,15 @@ check  "a disabled algorithm is refused"   "$TARGET/api/v1/related?kind=ao3_tag&
 check_absent "and is not the algorithm that answered" "$TARGET/api/v1/related?kind=ao3_tag&id=$TAG&algo=lightgcn" '"algo": "lightgcn"'
 
 echo
+echo "works you keep skipping"
+check "the skipping page renders"        "$TARGET/skipped" 'Works you keep skipping'
+# The threshold is the page's honesty: it is a claim about the reader, and the
+# page has to say how much evidence it needed.
+check "and states its threshold"         "$TARGET/skipped" '3</strong> or more'
+check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped-(empty|items)"'
+check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
+
+echo
 echo "new since your last visit"
 check "the list answers one way or the other" "$TARGET/new" 'first visit|Since your previous visit'
 check "and refuses to invent a boundary"      "$TARGET/new" 'no .before. to compare against|began on'

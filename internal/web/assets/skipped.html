@@ -1,0 +1,43 @@
+{{define "content"}}
+<h1>Works you keep skipping</h1>
+
+<p class="note">
+  Works this site has put in front of you <strong>{{.Threshold}}</strong> or more
+  separate times with nothing happening — no read, no click. The threshold is
+  stated because one unclicked list is not avoidance: you may not have scrolled
+  to it, or you may have been looking for something else.
+</p>
+
+{{if .Err}}<p class="note error" data-testid="skipped-error">{{.Err}}</p>{{end}}
+{{if .Saved}}<p class="note" data-testid="skipped-saved">{{.Saved}}</p>{{end}}
+
+{{if .Works}}
+<ol class="skipped" data-testid="skipped-items">
+  {{range .Works}}
+  <li data-id="{{.ID}}">
+    {{if .URL}}<a href="{{.URL}}" rel="noopener">{{.Title}}</a>{{else if .Title}}<span>{{.Title}}</span>{{else}}<span>work {{.ID}}</span>{{end}}
+    <span class="count">— shown {{.Shows}} times, last on {{.LastShown}}{{if .Arms}} (arm {{.Arms}}){{end}}</span>
+    <form method="post" action="/skipped" class="inline-actions">
+      <input type="hidden" name="work_id" value="{{.ID}}">
+      <button type="submit" name="action" value="not_interested"
+              data-testid="not-interested-{{.ID}}">Not interested</button>
+      <button type="submit" name="action" value="read">I read it</button>
+    </form>
+  </li>
+  {{end}}
+</ol>
+<p class="count">
+  “Not interested” moves this reader's weight on every tag the work carries, which
+  is the only mechanism here that can make a work rank <em>lower</em> rather than
+  merely absent. How far that moves it is measured on <a href="/eval">the eval
+  page</a>, not promised here.
+</p>
+{{else}}
+  <p class="note" data-empty="true" data-testid="skipped-empty">{{.Empty}}</p>
+{{end}}
+
+<p class="count">
+  <a href="/choose">Choose how each kind is ranked</a> ·
+  <a href="/new">What arrived since your last visit</a>
+</p>
+{{end}}

@@ -230,6 +230,31 @@ var pageRenderCases = []pageRenderCase{
 		wantNotContains: []string{"<tbody"},
 	},
 	{
+		tpl:  "skipped.html",
+		name: "skipped.html with rows",
+		data: SkippedPage{
+			Base:      sweepBase,
+			Threshold: 3,
+			Works: []SkippedWorkView{
+				{ID: 5, Title: "Shown Four Times", Shows: 4, LastShown: "2026-10-22 10:00:00", Arms: "a"},
+			},
+		},
+		// The threshold is printed, and the action names the mechanism rather
+		// than promising a demotion the page cannot measure.
+		wantContains: []string{"Shown Four Times", "shown 4 times", "Not interested", "rank <em>lower</em>"},
+	},
+	{
+		tpl:  "skipped.html",
+		name: "skipped.html before anything qualifies",
+		data: SkippedPage{
+			Base:      sweepBase,
+			Threshold: 3,
+			Empty:     "Nothing yet. A work has to be shown 3 separate times",
+		},
+		hasEmptyList: true,
+		wantContains: []string{"Nothing yet", "3 separate times"},
+	},
+	{
 		tpl:  "choose.html",
 		name: "choose.html with the registry and a standing",
 		data: ChoosePage{

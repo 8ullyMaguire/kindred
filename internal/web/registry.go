@@ -192,6 +192,15 @@ func allPages() []pageSpec {
 				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, arg string) { d.renderTag(w, r, arg) },
 			},
 			{
+				Template: "skipped.html",
+				Paths:    []string{"/skipped"},
+				// Two write actions on each row, both meaningful: negative
+				// feedback (the only thing that can lower a score) and a read mark.
+				AcceptsPost: true,
+				List:        true,
+				Handler:     func(d Deps, w http.ResponseWriter, r *http.Request, _ string) { d.renderSkipped(w, r) },
+			},
+			{
 				Template: "choose.html",
 				Paths:    []string{"/choose"},
 				// A form page: the POST stores the reader's choice for one kind
