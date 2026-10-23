@@ -135,6 +135,13 @@ gives a reader a direct one. The total is now **35 built, 14 partial, 47 open,
 ("complete your collection"), so the live total is **37 built, 10 partial, 49
 open, 4 without a premise** -- see `docs/HANDOFF-2026-10-23i-byline-and-shelf.md`.
 
+2026-10-23j was a measurement pass rather than a row: the unowned latency item is
+closed. `/api/v1/recommend` answers a repeat request in 0.41 s (was 2.62 s) because
+the tag-pool query — 87% of the work, per a CPU profile — is now memoised, and
+`n=200` answers in 0.36 s (was 10.39 s) because the MMR pass was quadratic in the
+number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). The counts below are
+unchanged; see `docs/HANDOFF-2026-10-23j-latency.md`.
+
 2026-10-23i also shipped #54 (a tag's shelf in numbers), so the live total is
 **38 built, 9 partial, 49 open, 4 without a premise**. The one measurement that
 came out of it and is NOT a roadmap row: `/tag/{id}` costs 3.67 s warm because its

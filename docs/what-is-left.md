@@ -17,10 +17,15 @@ established it.
       the most-saved work, and a trend by update year. Live tag 29: median 30,603
       words vs mean 76,222. Two defects found by the tests (double-counted
       `work_tags` rows; a one-year fixture that made the trend mutants survive).
-- [ ] **Latency, measured and unowned**: `/tag/{id}` is 3.67 s warm, of which 3.1 s
-      is the default taste sort (`sort=kudos` is 0.54 s, the statistics 67 ms). The
-      hottest page on the site spends most of its time on a ranking the reader did
-      not ask for.
+- [x] **Latency, measured and fixed** (2026-10-23j): the tag page's default sort
+      was 3.67 s because the tag-pool query is 87% of the work and the same query
+      was recomputed for every reader. It is now memoised (2.6 s -> 0.41 s on a
+      repeat request) and the tag page is 0.92 s warm. Underneath that, `MMR` was
+      quadratic in the number of results: n=200 took 10.39 s and now takes 0.36 s
+      (98x on the pass), with the ordering pinned as unchanged.
+      Still slow: the FIRST tag request after a restart (2.5 s), which pays the
+      81 MiB tag-vector load and a cold pool query. See
+      `docs/HANDOFF-2026-10-23j-latency.md`.
 
 ## Skipping, drift, negation (2026-10-23h)
 
