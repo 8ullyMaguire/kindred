@@ -680,6 +680,103 @@ else
   esac
 fi
 
+# --- 9. the surfaces added 2026-10-23 ------------------------------------
+#
+# Feeds (#61), the search descriptor (#62), the pair report (#78), the reading
+# path (#40) and the new-since-visit list (#65). Each shipped with its own tests,
+# and this is the only place they are checked on the DEPLOYED binary: a feature
+# verified only by `go test` is verified against a working tree, not against what
+# readers are served.
+#
+# status NAME URL EXPECTED is the one helper this section needs and the older
+# sections did not: several of these checks are about a REFUSAL (404 for an
+# unknown tag, 400 for a work paired with itself), and a refusal cannot be
+# asserted by grepping a body for a string that should be there.
+status () {
+  local name="$1" url="$2" want="$3"
+  local code
+  code=$(curl -sS --max-time 25 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null) || true
+  if [ -z "$code" ] || [ "$code" = "000" ]; then
+    unreachable=$((unreachable+1))
+    echo "  UNREACHABLE  $name ($url)"
+    return 0
+  fi
+  if [ "$code" = "$want" ]; then ok "$name"; else bad "$name — got $code, want $want at $url"; fi
+}
+
+# check_absent NAME URL PATTERN is the other shape: a promise the server must NOT
+# make. The descriptor advertised a `format=rss` URL for a while, which /search
+# does not answer.
+check_absent () {
+  local name="$1" url="$2" pattern="$3"
+  local body code
+  body=$(curl -sS --max-time 20 -w $'\n__CODE__%{http_code}' "$url" 2>/dev/null) || true
+  code=${body##*__CODE__}
+  body=${body%$'\n__CODE__'*}
+  if [ -z "$code" ] || [ "$code" = "000" ]; then
+    unreachable=$((unreachable+1))
+    echo "  UNREACHABLE  $name ($url)"
+    return 0
+  fi
+  if grep -qE -- "$pattern" <<<"$body"; then
+    bad "$name — found /$pattern/ at $url, which this server cannot answer"
+  else
+    ok "$name"
+  fi
+}
+
+echo
+echo "feeds and the search descriptor"
+
+header "tag feed says it is a feed" "$TARGET/feed/tag/$TAG" 'content-type: *application/rss\+xml'
+check  "tag feed is RSS 2.0"       "$TARGET/feed/tag/$TAG" '<rss version="2.0"'
+check  "tag feed carries items"    "$TARGET/feed/tag/$TAG" '<item>'
+# An absolute guid is what makes a subscriber's client keep entry identity
+# across polls. A relative one is invalid RSS and clients mint their own.
+check  "tag feed guids are absolute" "$TARGET/feed/tag/$TAG" '<guid isPermaLink="true">https?://'
+status "an unknown tag is 404, not an empty feed" "$TARGET/feed/tag/999999" 404
+
+check  "opensearch names the site"  "$TARGET/opensearch.xml" '<ShortName>kindred</ShortName>'
+check  "opensearch points at /search" "$TARGET/opensearch.xml" '/search\?q=\{searchTerms\}'
+check_absent "opensearch advertises no url it cannot answer" "$TARGET/opensearch.xml" 'format=rss'
+
+# Two real works, for the pair report and the reading path. From the corpus when
+# it is readable, else from the tag page the gate already rendered; a fixture
+# instance has neither, and the section then says it was skipped rather than
+# failing over a fact about the environment.
+WORK_A="" WORK_B=""
+if [ -r "$CORPUS_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+  ids=$(sqlite3 -readonly "$CORPUS_DB" \
+    "SELECT w.id FROM work_tags wt JOIN works w ON w.id = wt.work_id
+     WHERE wt.tag_id = $TAG ORDER BY w.kudos DESC, w.id LIMIT 2;" 2>/dev/null || true)
+  WORK_A=$(sed -n '1p' <<<"$ids")
+  WORK_B=$(sed -n '2p' <<<"$ids")
+fi
+if [ -z "${WORK_A:-}" ] || [ -z "${WORK_B:-}" ]; then
+  ids=$(curl -fsS --max-time 20 "$TARGET/tag/$TAG?n=5" 2>/dev/null \
+        | grep -oE '/work/[0-9]+' | grep -oE '[0-9]+' | head -2 || true)
+  WORK_A=$(sed -n '1p' <<<"$ids")
+  WORK_B=$(sed -n '2p' <<<"$ids")
+fi
+
+if [ -n "${WORK_A:-}" ] && [ -n "${WORK_B:-}" ]; then
+  echo "  pair and path against /work/$WORK_A and /work/$WORK_B"
+  check  "pair report scores"        "$TARGET/api/v1/works/$WORK_A/similarity/$WORK_B" '"score"'
+  check  "pair report says why"      "$TARGET/api/v1/works/$WORK_A/similarity/$WORK_B" '"shared_tags"'
+  status "a work is not a pair with itself" "$TARGET/api/v1/works/$WORK_A/similarity/$WORK_A" 400
+  check  "reading path walks"        "$TARGET/path/$WORK_A" 'step 1'
+  # The distinction the feature exists for: each step is measured from the work
+  # BEFORE it, so the page must say so.
+  check  "path measures from the previous step" "$TARGET/path/$WORK_A" 'from the step before'
+else
+  note "skipped the pair and path checks (no two work ids could be found)"
+fi
+
+echo
+echo "new since your last visit"
+check "the list answers one way or the other" "$TARGET/new" 'first visit|Since your previous visit'
+check "and refuses to invent a boundary"      "$TARGET/new" 'no .before. to compare against|began on'
+
 # --- verdict ------------------------------------------------------------
 echo
 echo "-----------------------------------------------------------"
