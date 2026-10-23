@@ -13,6 +13,12 @@ established it.
 - [x] **#50 "Complete your collection"** — `/author?q=` says "you have read 2 of
       4 — 2 to go" and `?unread=1` shows the rest. Live with a session; anonymous
       readers get no claim at all.
+- [x] **#79 Diversity, measured** (2026-10-23k): every offline run stores
+      intra-list tag overlap and fandoms per list, and `kindred eval --lambda 1`
+      is the ablation. Live: lambda 0.75 → recall 0.1050, overlap 0.086, 2.4
+      fandoms; lambda 1.0 → recall 0.0953, overlap 0.141, 1.8 fandoms. Turning
+      diversification OFF made recall WORSE, so the MMR pass is not a trade on
+      this corpus.
 - [x] **#54 A tag's shelf in numbers** — medians (not means) of length and kudos,
       the most-saved work, and a trend by update year. Live tag 29: median 30,603
       words vs mean 76,222. Two defects found by the tests (double-counted

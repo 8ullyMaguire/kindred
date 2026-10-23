@@ -56,7 +56,7 @@ Four statuses:
 | 51 | Series-aware recommendations | NO PREMISE | No series column or table; AO3 series metadata is not crawled. |
 | 52 | Writing-style similarity via summary embeddings | OPEN | Embeddings are tag-level (`embeddings.kind='tag'`); there is no text model and no summary vector. |
 | 53 | Bradley-Terry vs Glicko | OPEN | Glicko-2 only (`internal/arena/glicko.go`); no BT fit and no rank-correlation comparison. |
-| 54 | Rich tag profile page | PARTIAL | `/tag/{id}` carries the count, the sorted works and a neighbours sidebar; no median kudos/words, no most-bookmarked work, no trend line. |
+| 54 | Rich tag profile page | BUILT | `/tag/{id}` gained "This tag in numbers": median and mean length and kudos, total words, the most-saved work, and a trend by update year (12 years, bars scaled to the busiest). Medians with the mean beside them, because AO3 is skewed — live tag 29 reads median 30,603 words against a mean of 76,222, and 105 kudos against 201. The trend is by UPDATE year and says so (no first-published column exists here) and undated works are counted out loud. Two defects the tests found: `work_tags` is keyed by (work_id, tag_id, tag_type) so a work carrying one tag under two types was counted TWICE (43 where there are 42 — every query now starts from `SELECT DISTINCT work_id`), and the fixture writes ONE update date for every work, so "oldest-first" and "share of total" both SURVIVED until the trend test stamped its own years. Computed in one pass: the SQL alone is 67 ms, the page 0.53 s for sort=kudos. 5/5 mutants killed. |
 | 55 | Explanation quality evaluation | OPEN | `/algo` compares two tunes' **result lists** and records a preference; two explanations are never shown side by side. |
 | 56 | Weighted tag matching with IDF | **BUILT** | `signal/idf_overlap.go`, plus document-frequency weighting in `engine/authors.go`. |
 | 57 | Cross-fandom bridge works | **BUILT** | `engine/bridges.go` + `/api/v1/works/{id}/bridges`, kudos-capped scan, other-fandom names as the reason. |
@@ -68,7 +68,7 @@ Four statuses:
 | 63 | Jaccard co-occurrence similarity | **BUILT** | `signal.go` computes and prints a Jaccard ratio; `TagNeighbours` ranks by PMI; `idf_overlap.go` is the weighted variant. |
 | 64 | "Tag DNA" distinctive tags | **BUILT** | `internal/web/distinctive.go` + the work page's "What makes this work distinctive" block: rarest by document frequency, a tag on every work dropped (zero evidence), a zero-frequency tag dropped (the table and the work disagree). |
 | 65 | "New since your last visit" | **BUILT** | `/new`, backed by `reader_visits` (previous_at = the boundary, current_at = the visit's start, last_at = when we last heard from them). Both halves of `seen_works` are excluded — read AND shown. A first visit says there is no "before" instead of using zero time, and the page prints the boundary it measured from. Live: boundary 1 May 2026 → 40 works, newest first; marking one seen removes it and the list refills. |
-| 66 | Author recs from a single work | PARTIAL | `/api/v1/authors/similar` exists (`engine/authors.go`); the work page does not link to it and no template renders it (`grep` for `authors/similar` in `work.html`/`handlers.go`: 0). |
+| 66 | Author recs from a single work | BUILT | `/work/{id}` names its author and links each byline to `/author?q=` (`data-testid="work-byline"`), and renders "Authors who write like this one" from the same engine call `/api/v1/authors/similar` serves. The row said the endpoint had no entry point; the page did not name its author anywhere at all, so the byline is the part that was missing. `corpus.Byline(ctx, id)` exists because `corpus.Entity` deliberately carries no author string: every ranking path holds tens of thousands of entities and nothing in the ranking reads one. Live on `/work/17249318`. |
 | 67 | Smart default seeds for new readers | **BUILT** | `/recommend` with no seed ranks from the most-kudosed work (`corpus.AO3.TopByKudos`; ONE, because three from three fandoms measured 4.2 s a page against 2.6 s for one) and names it as popularity in `data-testid="seed-origin"`; no corpus still renders the empty form. |
 | 68 | Tag "temperature" (contested tags) | OPEN | No per-tag variance over comparisons. |
 | 69 | Work controversy score | OPEN | `arena_entity_history` holds per-entity history; nothing computes a divisiveness score from it. |
@@ -81,7 +81,7 @@ Four statuses:
 | 76 | Embedding drift monitoring | BUILT | `embed_runs` + `store.RecordEmbedRun`, written by `kindred embed` after the table lands; `/mirror` prints the verdict; `GET /api/v1/embed/drift`. A fingerprint, NOT a hash: a hash says "something changed" and cannot say whether the space moved or merely reshuffled. Each run stores rows, width, mean L2 norm, the centroid, and a SAMPLE of 64 tag vectors — the sample is load-bearing, because two tags moving in opposite directions leave the centroid exactly where it was (`TestAnAverageCanHideOppositeMovements`; the centroid-only mutant dies on it). Floor 0.98, not 0.9: a deterministic solver over an unchanged corpus landing at 0.95 has moved positions rather than re-rolled a seed. Two refusals: the page will not print "0% drift" when fewer than two fingerprints exist (no comparison ≠ good result), and a failed fingerprint does not fail the build (the embeddings are correct; a monitoring gap must not become a broken deploy) — it is printed by name. Mutants killed: floor 0, centroid-instead-of-sample, width change not its own verdict, sample compared against itself. |
 | 77 | Tag suggestions for writers | OPEN | No writer surface. |
 | 78 | Work-pair similarity API | **BUILT** | `GET /api/v1/works/{id}/similarity/{other}` and `/work/{id}?compare={other}`. Two components, published separately: IDF-weighted Jaccard over the tag sets and the cosine between the works' tag centroids; the shared tags travel rarest-first, and every axis that could not run is named in `missing`. Popularity/recency are deliberately NOT components. Live: works 17249318 vs 65141041 share 18 tags, overlap 0.111, cosine 0.869, score 0.490. |
-| 79 | Recommendation diversity metric | PARTIAL | `diversify` enforces MMR and per-group caps and reports what it dropped; `eval_runs` stores recall/NDCG only, so intra-list diversity is not tracked over time. |
+| 79 | Recommendation diversity metric | BUILT | Every `eval_runs` row now carries `tag_overlap` (mean pairwise Jaccard inside each reader's returned list; 0 = no shared tags, 1 = one work repeated), `distinct_fandoms` (using the same shape-based grouper the per-group cap uses — a `tag_type='fandoms'` key matches nothing on this mirror) and `diversity_runs` (how many readers they cover, so "not measured" is distinguishable from "perfectly diverse"). Averaged per reader and bounded by the same k as recall. `kindred eval --lambda 1` is the ablation that makes them mean something. MEASURED on the live mirror, 40 readers, k=10: lambda 0.75 → recall 0.1050, NDCG 0.1959, overlap 0.086, 2.4 fandoms; lambda 1.0 → recall 0.0953, NDCG 0.1766, overlap 0.141, 1.8 fandoms. The surprise: turning diversification OFF made recall WORSE, so at 0.75 the MMR pass is not a trade on this corpus, it is a straight win on both axes. 8/8 mutants killed, including the duplicate work counted as a pair (which would score a repeated list as maximally diverse). |
 | 80 | Seasonal tag auto-detection | OPEN | No temporal frequency model over tags. |
 | 81 | Federated taste profiles | OPEN | `dump`/`fetch` move mirror snapshots (`cmd/kindred/dumpcmd.go`); no taste vector is exchanged. |
 | 82 | Bandit-based exploration | OPEN | No exploration policy and no reward stream. |
@@ -108,8 +108,8 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 20 | 33, 40, 43, 46, 50, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 76, 78 |
-| PARTIAL | 9 | 32, 38, 41, 42, 45, 49, 72, 79, 89 |
+| BUILT | 21 | 33, 40, 43, 46, 50, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 76, 78, 79 |
+| PARTIAL | 8 | 32, 38, 41, 42, 45, 49, 72, 89 |
 | OPEN | 37 | 31, 34, 35, 36, 37, 39, 44, 47, 48, 52, 53, 55, 58, 59, 68, 69, 73, 74, 75, 77, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
@@ -125,29 +125,43 @@ new-since-visit list, all verified on the deployed binary; 2026-10-23g added the
 per-kind algorithm registry and its live A/B, which is infrastructure for every
 row below rather than one of them -- see
 `docs/HANDOFF-2026-10-23g-per-kind-algorithms.md`).
-2026-10-23h shipped #60 ("works you keep skipping"), #76 (embedding drift
-fingerprints) and settled #43 by MEASUREMENT rather than by building: negatives
+2026-10-23h shipped #60 ("works you keep skipping") and #76 (embedding drift
+fingerprints), and settled #43 by MEASUREMENT rather than by building: negatives
 already flowed from arena pair judgements, and the new "Not interested" action
-gives a reader a direct one. The total is now **35 built, 14 partial, 47 open,
-4 without a premise**.
+gives a reader a direct one.
 
-2026-10-23i shipped #66 (the byline as links, authors who write alike) and #50
-("complete your collection"), so the live total is **37 built, 10 partial, 49
-open, 4 without a premise** -- see `docs/HANDOFF-2026-10-23i-byline-and-shelf.md`.
+2026-10-23i shipped #66 (the byline as links, authors who write alike), #50
+("complete your collection") and #54 (a tag's shelf in numbers). See
+`docs/HANDOFF-2026-10-23i-byline-and-shelf.md`.
 
 2026-10-23j was a measurement pass rather than a row: the unowned latency item is
 closed. `/api/v1/recommend` answers a repeat request in 0.41 s (was 2.62 s) because
 the tag-pool query — 87% of the work, per a CPU profile — is now memoised, and
 `n=200` answers in 0.36 s (was 10.39 s) because the MMR pass was quadratic in the
-number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). The counts below are
-unchanged; see `docs/HANDOFF-2026-10-23j-latency.md`.
+number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). See
+`docs/HANDOFF-2026-10-23j-latency.md`.
 
-2026-10-23i also shipped #54 (a tag's shelf in numbers), so the live total is
-**38 built, 9 partial, 49 open, 4 without a premise**. The one measurement that
-came out of it and is NOT a roadmap row: `/tag/{id}` costs 3.67 s warm because its
-default sort is the engine's taste blend (0.54 s for sort=kudos, 67 ms for the new
-statistics). The hottest page on the site is 3.1 s of ranking nobody asked for by
-default.
+2026-10-23k shipped #79 (intra-list diversity, stored with every offline run) and
+corrected this file's totals. **The counts below are the table's, not a memory of
+them: 21 built, 8 partial, 37 open, 4 without a premise.** For two sessions this
+block said "38 built, 49 open" — arithmetically consistent with 100 rows and wrong
+by about thirty, because this roadmap holds rows 31–100 (70 rows) and the phantom
+thirty made the backlog look half finished when it is a third done. The lesson is
+the same one the deploy gate keeps teaching: a total that is not derived from the
+thing it counts is a claim, not a measurement.
+
+What #79 measured, on the live mirror, 40 readers at k=10:
+
+| lambda | recall@10 | NDCG@10 | tag overlap | fandoms per list |
+|---|---|---|---|---|
+| 0.75 (default) | 0.1050 | 0.1959 | 0.086 | 2.4 |
+| 1.0 (diversification off) | 0.0953 | 0.1766 | 0.141 | 1.8 |
+
+Turning diversification OFF made recall and NDCG WORSE while making lists more
+repetitive — so at 0.75 the MMR pass is not the recall-for-diversity trade the
+design assumed. On this corpus it is a straight win on both axes, because the
+top of the relevance-only ranking fills with near-duplicates that crowd held-out
+works out of the ten.
 
 The measurement that matters more than the count: **pool recall@1000 was
 0.0284** (run #8) and is **0.2113** after the candidate work (run #13), i.e. even a perfect ranking of the 1000 candidates could

@@ -150,7 +150,11 @@ allowance now, and the comment says it is an allowance, not a latency assertion.
 ## State
 
 - 27/27 packages green; deployed; provenance IN SYNC; gate **87 checks**.
-- Roadmap: **38 built, 9 partial, 49 open, 4 without a premise**.
+- Roadmap: #54, #66 and #50 built. The totals this file first claimed (38 built,
+  9 partial, 49 open) were WRONG: this roadmap holds rows 31–100, so it has 70, and
+  the phantom thirty made the backlog look half finished. Corrected to **21 built,
+  8 partial, 37 open, 4 without a premise** in `docs/PLAN-recsurfaces-31-100.md`,
+  which now derives the line from the table.
 
 ## Next
 

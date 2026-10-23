@@ -824,6 +824,14 @@ check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped
 check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
 
 echo
+echo "diversity, recorded with each offline run (#79)"
+# The columns must exist AND the page must say "not measured" for a run that did
+# not measure them: rendering 0.000 there would claim a perfectly diverse list.
+check "the eval table records intra-list overlap"  "$TARGET/eval" 'data-testid="eval-overlap"'
+check "and the fandom count"                       "$TARGET/eval" 'data-testid="eval-fandoms"'
+check "and explains what the two columns cost"     "$TARGET/eval" 'the price diversification charges against recall'
+
+echo
 echo "the pool cache and the MMR cost (measured 2026-10-23)"
 # The cache is a BEHAVIOURAL claim, not a timing one: the same request twice must
 # report a hit. Asserting wall-clock here would fail on a busy host for reasons
