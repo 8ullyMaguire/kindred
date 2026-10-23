@@ -30,7 +30,7 @@ the "high score" half of the list.
 | 8 | "Why this author?" evidence | **built** | `author_tag_profile` evidence, `authors_test.go` |
 | 9 | Offline eval harness (held-out bookmarks) | **built** | `internal/eval`, `kindred eval`, recall@K + NDCG@K |
 | 10 | Popularity-dampened default sort | **partly built** | `quality` and `popularity` signals; no dampening exponent slider |
-| 11 | Tag embedding nearest neighbours | PARTIAL | **Enumeration BUILT 2026-10-23b** as a candidate source: `pool_mode=tags+embed` loads the 634,232 × 32 tag matrix into one resident slab (`engine/embedindex.go`) and admits works carrying the top-32 nearest tags. Missing: the SURFACE — no endpoint or page returns nearest tags to a reader. |
+| 11 | Tag embedding nearest neighbours | **BUILT** | Candidate source (`pool_mode=tags+embed`, the default since 2026-10-23c on a measured +11.5% pool recall) AND the surface: `GET /api/v1/tags/{id}/similar?space=embed` plus the tag page’s “Tags that sit near it”, with `center_sim` and a note when the tag is too central for “nearest” to mean anything. Verified live: jasmine → aurora / aladdin / phillip / belle at 0.88–0.94. |
 | 12 | Relationship recs via character co-occurrence | not built | needs character tags to be distinguished from relationship tags; the corpus has both as plain tags |
 | 13 | Author leaderboard in the arena | **built** | `ao3_author` is an arena kind (`arena_kinds_test.go`) |
 | 14 | "More like this" on every work card | **built** | `layout.html` workrow: "rank from this" → `/recommend?seed=` |

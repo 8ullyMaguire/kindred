@@ -28,6 +28,13 @@ did not move (3.3-3.8 s for every mode; the embedding source adds ~97 candidates
 per 1000-item pool). The rule was written down before the numbers existed, so
 the default moved.
 
+Re-run after the top-up (run #12, the new default with no flag at all) is
+**identical to the row above** — recall@10 0.1050, pool recall@1000 0.2113,
+coverage 0.6579. That is worth stating plainly: the top-up fills the pool from
+848 to 1000 candidates and does NOT move recall, because the 152 tag candidates
+it adds did not contain a held-out work for these readers. Its value is a pool
+that is as full as its sources can make it, not a better number.
+
 Note the baseline is much higher than the 0.0284 / 0.0056 in the 2026-10-23
 handoff. That difference is the embedding-signal repair from 2026-10-23b (the
 signal had been weighted at zero), not a different measurement.
@@ -85,6 +92,16 @@ from a gate that passed**, which is the failure `deploy.sh` was written to end.
   resolved in one query, similarity on every row, `min_sim` validated as 0..1,
   503 (not an empty 200) on a mirror with no embeddings, 400 that names the
   parameter for an unknown space. Default space stays `cooccur`.
+- **`center_sim`, and a note when the answer is uninformative.** Curling the
+  deployment found two defects no test here could: the response named the
+  neighbours and left `"tag"` empty, and tag 29 (55,810 works) answered with
+  eight character tags from four unrelated fandoms at cosine 0.60 — the shape
+  you get when a vector sits near the middle of the space. Measured over all
+  634,232 tags, the cosine to the corpus centroid has median 0.027, p90 0.22,
+  max 0.61, and tag 29 sits at 0.38; so the reporting floor is 0.30 (above p90)
+  rather than a guess. A character tag answers sharply — jasmine -> aurora,
+  aladdin, phillip, belle at 0.88-0.94 — which is why the fix is to qualify the
+  answer, not to distrust the space.
 - **The tag page grows "Tags that sit near it"** — rendered only when the index
   answers, with the similarity beside each link.
 - **`ParsePoolMode("")` is the default**, and the API now parses it even when

@@ -24,12 +24,32 @@ established it.
       seed and enters the pool only with the source on.
 - [x] **`kindred eval --pool-mode`** — widening the pool is a flag, not a
       rebuild.
-- [ ] **The measurement that decides the default.** Not run: no eval against
-      the live mirror since the change, and the deployment still runs the
-      pre-`b0383a3` binary. Compare pool recall@1000 for `tags+collab` against
-      `tags+collab+embed`; the default moves only if pool recall rises
-      materially and recall@10 does not fall. Exact commands are in
-      `docs/HANDOFF-2026-10-23b-embedding-enumeration.md`.
+- [x] **The measurement that decided the default.** Same 38 readers, same 495
+      held-out bookmarks, one flag apart: pool recall@1000 0.1895 -> 0.2113,
+      recall@10 0.1031 -> 0.1050, nDCG@10 0.1947 -> 0.1959, coverage unchanged
+      at 0.6579, latency unchanged. `engine.DefaultPoolMode` is now
+      `tags+collab+embed`, `ParsePoolMode("")` returns it, and the API parses it
+      even when the parameter is absent ("no opinion" and "tags only" had been
+      the same request at both layers). Re-run on the shipped default (run #12)
+      reproduces 0.1050 / 0.2113 / 0.6579 exactly.
+- [x] **The pool is topped up.** The reserves left it short (measured live: 848
+      candidates of 1000); the tag half is now called twice, the second time
+      with the admitted ids excluded in SQL. Seeds are excluded in SQL too, so a
+      20-item pool is no longer 19 whenever a seed ranks in its own results.
+      The top-up does not move recall — it fills the pool.
+- [x] **#11's surface: `GET /api/v1/tags/{id}/similar?space=embed`** plus a
+      "Tags that sit near it" section on the tag page, with `center_sim` and a
+      note when the tag is too central for "nearest" to mean anything.
+- [x] **The deploy gate runs again.** `scripts/check-deploy.sh` discovered its
+      test tag from `/search`, which on the live mirror returns 100 freeform
+      sentence tags with one work each: ~400 requests, then a 1-work fixture.
+      It now asks the corpus for a tag with ≥50 works, ≥2 ratings and both
+      completion states (tag 29), keeping a capped HTTP walk as fallback.
+- [x] **The cgroup matches the binary.** `MemoryHigh=400M` was sized for the
+      220 MB self-cap deleted on 2026-10-22; the new tag index (81 MiB) put anon
+      at 409 MB, and the kernel stalled every allocation — 19 s pages with
+      `/healthz` answering `ok` and `memory.events high=594411`. `deploy.sh` now
+      sets 768M/1G on every deploy.
 
 Verified: `go test ./... -count=1` 26 packages green; three mutations (old
 renormalise branch, empty `embedCandidates`, dropped `filterSQL`) each turned

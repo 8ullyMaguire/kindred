@@ -952,7 +952,10 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 	// Declared here, assigned below: the top-up after the extra sources needs
 	// the same query, and a closure declared inside the `if` cannot be reached
 	// from there.
-	var runTagPool func(budget int, excludeIDs []int64) ([]int64, error)
+	var (
+		runTagPool func(budget int) ([]int64, error)
+		tagTail    []int64
+	)
 
 	if len(tagIDs) > 0 {
 		where := `wt.tag_id IN (` + corpus.Placeholders(len(tagList)) + `)`
@@ -994,20 +997,24 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 			// corpus they are the half that can actually rank.
 			tagBudget = 1
 		}
-		// runTagPool is the tag half, callable twice: once for the reserved
-		// budget and once to TOP UP whatever the extra sources left unused.
+		// runTagPool fetches the tag half ONCE, for the whole budget, and the
+		// caller admits it in two parts: the reserved part before the extra
+		// sources and the tail after them.
 		//
-		// The top-up exists because a reserve that is not filled shortens the
-		// pool. Measured on the live mirror with the reserve alone: pool_mode=all
-		// returned 848 candidates against 1000 for tags-only — the tag half was
-		// capped at 750, collab found 1 and embedding 97, and 152 slots went
-		// unused. Ranking 848 candidates instead of 1000 is not a bug the
-		// recall figure would report (it went UP, because the added candidates
-		// were better), and it is still 152 chances to lose the one work a
-		// reader wanted. The pool is a union: it should be as full as its
-		// sources can make it.
-		runTagPool = func(budget int, excludeIDs []int64) ([]int64, error) {
-			args := make([]any, 0, len(tagList)+16+len(excludeIDs))
+		// The tail exists because a reserve that is not filled shortens the
+		// pool. Measured on the live mirror with the reserve alone (no tail):
+		// pool_mode=all returned 848 candidates against 1000 for tags-only —
+		// the tag half was capped at 750, collab found 1 and embedding 97, and
+		// 152 slots went unused. The recall figure went UP, so nothing
+		// measured would ever have reported those 152 slots, and they are 152
+		// chances to lose the one work a reader wanted.
+		//
+		// Fetching them in the SAME query matters: the first version ran a
+		// second query for the tail with the admitted ids excluded, which cost
+		// as much as the first (~2.2 s each on a 55k-work seed, 4.6 s total
+		// against 2.45 s for tags-only) and produced the identical pool.
+		runTagPool = func(budget int) ([]int64, error) {
+			args := make([]any, 0, len(tagList)+16)
 			for _, id := range tagList {
 				args = append(args, id)
 			}
@@ -1035,17 +1042,6 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 					args = append(args, id)
 				}
 			}
-			if len(excludeIDs) > 0 {
-				// Already-admitted ids are excluded in SQL rather than filtered
-				// after the LIMIT: a post-filter would hand back fewer rows than
-				// asked for on every top-up, which is the same off-by-repeats
-				// bug the dedupe above exists to prevent.
-				ph := corpus.Placeholders(len(excludeIDs))
-				q += ` AND wt.work_id NOT IN (` + ph + `)`
-				for _, id := range excludeIDs {
-					args = append(args, id)
-				}
-			}
 			// ORDER BY shared DESC, work_id ASC. The work_id tiebreak is what
 			// makes two identical requests rank identical candidates.
 			q += ` GROUP BY wt.work_id
@@ -1070,11 +1066,26 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 			return out, rows.Err()
 		}
 
-		tagRows, err := runTagPool(tagBudget, nil)
+		// ONE query for the whole budget, not one for the reserve plus one to
+		// top up. Measured on the live mirror: the top-up's second query cost
+		// the same as the first (each ~2.2 s on a 55k-work seed), so the
+		// two-query version answered in 4.6 s against 2.45 s for tags-only,
+		// for a pool that was identical. The ordering is the same either way,
+		// so the rows past the reserve are exactly what the top-up would have
+		// fetched.
+		tagRows, err := runTagPool(limit)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		admit(tagRows, &src.Tags)
+		reserved := tagBudget
+		if reserved > len(tagRows) {
+			reserved = len(tagRows)
+		}
+		admit(tagRows[:reserved], &src.Tags)
+		// The tail is admitted AFTER the extra sources, so their slots are
+		// never taken by tags: the reserve guarantees the works only they can
+		// reach, and the tail only fills what they leave.
+		tagTail = tagRows[reserved:]
 	}
 
 	// UNION, not replacement: replacing the tag pool with the extra sources
@@ -1102,33 +1113,12 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 			}
 		}
 	}
-	// Top up whatever the reserves left unused, with the source that is
-	// strongest on this corpus. This runs AFTER the extra sources, so their
-	// slots are never taken by tags: the reserve guarantees the works that
-	// only they can reach, and the top-up only fills what remains.
-	if len(out) < limit && len(tagIDs) > 0 && runTagPool != nil {
-		// Seeds as well as admitted ids: the top-up asks the same query again,
-		// and a query that could return a seed would let the one work a reader
-		// already has back into the pool through the second call.
-		already := make([]int64, 0, len(out)+len(seedIDs))
-		for _, id := range out {
-			already = append(already, id)
-		}
-		if exclude {
-			for _, id := range seedIDs {
-				already = append(already, id)
-			}
-		}
-		sort.Slice(already, func(a, b int) bool { return already[a] < already[b] })
-		more, err := runTagPool(limit-len(out), already)
-		if err != nil {
-			// The pool is usable: report the shortfall in the sources and
-			// carry on. Failing the request here would trade a smaller pool
-			// for no ranking at all.
-			slog.Warn("tag top-up failed; the pool is short", "err", err)
-		} else {
-			admit(more, &src.Tags)
-		}
+	// Whatever the extra sources left unused, from the tag rows already
+	// fetched. No second query and no exclusion list: these are the rows the
+	// single query returned past the reserve, in the same order it returned
+	// them.
+	if len(out) < limit && len(tagTail) > 0 {
+		admit(tagTail, &src.Tags)
 	}
 	return out, collabVotes, src, nil
 }
