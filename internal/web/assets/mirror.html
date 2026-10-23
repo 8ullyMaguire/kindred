@@ -64,6 +64,35 @@
      They were inside it, so every one of them vanished on a corpus-less
      deployment -- and the backlog is exactly what a read-only or misconfigured
      instance most needs to be able to state. */}}
+<h2>Embedding drift</h2>
+{{if not .HasDrift}}
+  <p class="count" data-testid="drift-none">
+    {{if eq .EmbedRuns 1}}One build has been fingerprinted, so there is nothing to
+    compare it with yet. The next <code>kindred embed</code> will say whether the
+    space moved.{{else}}No embedding build has been fingerprinted on this
+    deployment, so drift cannot be measured. That is not "0% drift": it is no
+    comparison at all.{{end}}
+  </p>
+{{else}}
+  <p class="count" data-testid="drift-verdict">{{.Drift.Verdict}}</p>
+  <table>
+    <tbody>
+      <tr><td>sampled tags compared</td><td>{{.Drift.SampleN}}</td></tr>
+      <tr><td>per-tag cosine (mean)</td><td>{{printf "%.4f" .Drift.SampleCosine}}</td></tr>
+      <tr><td>centroid cosine</td><td>{{printf "%.4f" .Drift.CentroidCosine}}</td></tr>
+      <tr><td>scale (mean norm ratio)</td><td>{{printf "%.3f" .Drift.MeanNormRatio}}</td></tr>
+      <tr><td>rows</td><td>{{.Drift.RowsBefore}} → {{.Drift.RowsAfter}}</td></tr>
+      <tr><td>width</td><td>{{.Drift.DimBefore}} → {{.Drift.DimAfter}}</td></tr>
+      <tr><td>built</td><td>{{.Drift.FromAt}} → {{.Drift.ToAt}}</td></tr>
+    </tbody>
+  </table>
+  <p class="count">
+    Reader tag weights are trained against the positions that existed when they
+    were learned. A rebuild that moves the space does not corrupt them — it makes
+    them describe a different graph.
+  </p>
+{{end}}
+
 <h2>Still to fetch</h2>
 {{if .NoQueue}}
 <p class="empty" data-empty="true">

@@ -75,6 +75,9 @@ var routeTable = map[string]routeAudit{
 	"GET /api/v1/algo/kinds":   {Page: "/choose"},
 	"POST /api/v1/algo/choice": {Page: "/choose"},
 	"GET /api/v1/related":      {Page: "/related"},
+	// Embedding drift is on /mirror: the operator page that already answers
+	// "what does this deployment hold and does it agree with itself".
+	"GET /api/v1/embed/drift": {Page: "/mirror"},
 	// The merged-list experiment. Both routes are the /algo page seen
 	// through its other mode: the page renders the merged list and records
 	// the impressions, and the standings are the same table the page prints.

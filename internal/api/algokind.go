@@ -31,6 +31,7 @@ import (
 
 	"git.polarisocial.xyz/kindred/kindred/internal/algo"
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
+	"git.polarisocial.xyz/kindred/kindred/internal/store"
 )
 
 // handleAlgoKinds serves the registry plus what has actually happened to it.
@@ -190,4 +191,36 @@ func writeJSONBody(w http.ResponseWriter, v any) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(v)
+}
+
+// handleEmbedDrift serves the last two embedding fingerprints and the sentence
+// that compares them (#76).
+//
+// It lives in this file rather than a new one because it is the same shape of
+// answer as the algorithm registry: a fact about the deployment that the site
+// must be able to state about itself.
+func (s *Server) handleEmbedDrift(w http.ResponseWriter, r *http.Request) {
+	out := struct {
+		Runs  int               `json:"runs"`
+		Drift *store.EmbedDrift `json:"drift,omitempty"`
+		Note  string            `json:"note,omitempty"`
+	}{}
+	if s.Store == nil {
+		out.Note = "no state database"
+		writeJSONBody(w, out)
+		return
+	}
+	runs, err := s.Store.EmbedRuns(r.Context(), 2)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out.Runs = len(runs)
+	if len(runs) == 2 {
+		d := store.DriftBetween(runs[1], runs[0])
+		out.Drift = &d
+	} else {
+		out.Note = "fewer than two embedding builds have been fingerprinted; there is no comparison to make"
+	}
+	writeJSONBody(w, out)
 }

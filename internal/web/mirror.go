@@ -50,11 +50,30 @@ type MirrorPage struct {
 	Parked   int
 	Cap      int
 	Sources  []QueueSource
+
+	// Embedding drift (#76): the last two build fingerprints, and the sentence
+	// that says whether the space moved. Absent when fewer than two builds have
+	// been fingerprinted — a deployment that has never rebuilt cannot have
+	// drifted, and saying "0% drift" there would be a claim about a comparison
+	// that never happened.
+	HasDrift  bool
+	Drift     store.EmbedDrift
+	EmbedRuns int
 }
 
 func (d Deps) renderMirror(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	page := MirrorPage{Base: d.baseOf(r, "This mirror", "What this mirror holds")}
+
+	if d.hasStore() {
+		if runs, err := d.Engine.Store.EmbedRuns(ctx, 2); err == nil {
+			page.EmbedRuns = len(runs)
+			if len(runs) == 2 {
+				page.HasDrift = true
+				page.Drift = store.DriftBetween(runs[1], runs[0])
+			}
+		}
+	}
 
 	if d.Engine == nil || d.Engine.Corpus == nil {
 		page.NoCorpus = true

@@ -784,6 +784,28 @@ CREATE INDEX IF NOT EXISTS seen_works_owner_shown
    because "a new visit" is a product decision (how long away counts as away)
    and a trigger would freeze it into the schema.
 */
+/* embed_runs fingerprints the embedding table at each build (#76).
+
+   kindred embed rewrites all 634k rows, and nothing compared the old space with
+   the new one: a rebuild that moved every vector was indistinguishable from one
+   that reproduced it. Every stored reader weight was trained against the OLD
+   positions, so that difference silently invalidates what the site learned.
+
+   A fingerprint rather than a hash of the table: a hash answers "did anything
+   change", cannot say whether the space moved or merely reshuffled, and changes
+   when one tag is added. rows/dim/mean_norm/centroid/sample answer the question
+   the operator actually has.
+*/
+CREATE TABLE IF NOT EXISTS embed_runs (
+	id        INTEGER PRIMARY KEY AUTOINCREMENT,
+	rows      INTEGER NOT NULL,
+	dim       INTEGER NOT NULL,
+	mean_norm REAL NOT NULL,
+	centroid  TEXT NOT NULL,
+	sample    TEXT NOT NULL,
+	built_at  TEXT NOT NULL
+);
+
 /* algo_choices is one reader's algorithm per KIND (#per-kind algorithms).
 
    The primary key is (owner_key, kind) and there is no global preference row:

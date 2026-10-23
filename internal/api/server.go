@@ -154,6 +154,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/algo/kinds", s.handleAlgoKinds)
 	mux.HandleFunc("POST /api/v1/algo/choice", s.handleAlgoChoice)
 	mux.HandleFunc("GET /api/v1/related", s.handleRelated)
+	mux.HandleFunc("GET /api/v1/embed/drift", s.handleEmbedDrift)
 
 	// Interleaved ranking: one list, both algorithms contributing, and a read
 	// mark as the vote. /standings is the online counterpart of the arena's

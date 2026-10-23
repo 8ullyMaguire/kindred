@@ -790,6 +790,15 @@ check  "a disabled algorithm is refused"   "$TARGET/api/v1/related?kind=ao3_tag&
 check_absent "and is not the algorithm that answered" "$TARGET/api/v1/related?kind=ao3_tag&id=$TAG&algo=lightgcn" '"algo": "lightgcn"'
 
 echo
+echo "embedding drift"
+# A page that cannot say "no comparison yet" would print 0% and look healthy.
+check "the mirror page reports drift"     "$TARGET/mirror" 'Embedding drift'
+check "and refuses to call absence zero"  "$TARGET/mirror" 'data-testid="drift-(none|verdict)"|no comparison at all'
+check "the drift endpoint answers"        "$TARGET/api/v1/embed/drift" '"runs"'
+check_absent "and does not claim a drift it never measured" "$TARGET/api/v1/embed/drift" '"centroid_cosine":0'
+status "drift endpoint: $(curl -sS --max-time 20 "$TARGET/api/v1/embed/drift" | head -c 160)"
+
+echo
 echo "works you keep skipping"
 check "the skipping page renders"        "$TARGET/skipped" 'Works you keep skipping'
 # The threshold is the page's honesty: it is a claim about the reader, and the
