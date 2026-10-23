@@ -173,13 +173,8 @@ func TestAServedListIsLoggedWithItsArm(t *testing.T) {
 	ts, st := newTestServerFull(t)
 	db := st.DB
 	client := jarClient(t, ts)
-	// Mint a session first: an anonymous GET must NOT create one (a crawler
-	// would mint one per page), and without a session there is no impression.
-	res, err := client.PostForm(ts.URL+"/api/v1/algo/choice", url.Values{"kind": {"ao3_tag"}, "algo": {"embed"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
+	// The GET itself mints: this route exists to run the experiment, and a list
+	// served to an unassigned reader is not in one.
 	if _, err := client.Get(ts.URL + "/api/v1/related?kind=ao3_tag&id=1&n=3"); err != nil {
 		t.Fatal(err)
 	}
@@ -212,11 +207,6 @@ func TestARequestedAlgorithmIsLoggedAsARequest(t *testing.T) {
 	ts, st := newTestServerFull(t)
 	db := st.DB
 	client := jarClient(t, ts)
-	res, err := client.PostForm(ts.URL+"/api/v1/algo/choice", url.Values{"kind": {"ao3_tag"}, "algo": {"embed"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
 	if _, err := client.Get(ts.URL + "/api/v1/related?kind=ao3_tag&id=1&algo=popular&n=3"); err != nil {
 		t.Fatal(err)
 	}

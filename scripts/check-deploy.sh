@@ -773,6 +773,23 @@ else
 fi
 
 echo
+echo "per-kind algorithms, and the A/B they run in"
+check  "the registry lists every kind"     "$TARGET/api/v1/algo/kinds" '"kind": "ao3_work"'
+check  "and names a default per kind"      "$TARGET/api/v1/algo/kinds" '"default": "embed"'
+# The disabled set is a claim the page makes; a registry that stopped publishing
+# it would still look like a working picker.
+check  "and publishes what cannot run"     "$TARGET/api/v1/algo/kinds" '"status": "disabled"'
+check  "and says why it cannot run"        "$TARGET/api/v1/algo/kinds" 'training pipeline'
+check  "the tag kind ranks with the default" "$TARGET/api/v1/related?kind=ao3_tag&id=$TAG&n=5" '"algo": "embed"'
+check  "the choice page renders"           "$TARGET/choose" 'Choose your algorithm'
+check  "and lists a disabled algorithm with its reason" "$TARGET/choose" 'Why not:'
+check  "the related page renders a list"   "$TARGET/related?kind=ao3_tag&id=$TAG" 'data-testid="related-items"'
+# A disabled algorithm asked for by name must be REFUSED BY NAME, not silently
+# honoured: the id must not appear as the algorithm that answered.
+check  "a disabled algorithm is refused"   "$TARGET/api/v1/related?kind=ao3_tag&id=$TAG&algo=lightgcn" 'not available on this deployment'
+check_absent "and is not the algorithm that answered" "$TARGET/api/v1/related?kind=ao3_tag&id=$TAG&algo=lightgcn" '"algo": "lightgcn"'
+
+echo
 echo "new since your last visit"
 check "the list answers one way or the other" "$TARGET/new" 'first visit|Since your previous visit'
 check "and refuses to invent a boundary"      "$TARGET/new" 'no .before. to compare against|began on'

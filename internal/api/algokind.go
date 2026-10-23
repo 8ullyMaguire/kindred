@@ -120,7 +120,15 @@ func (s *Server) handleRelated(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ownerKey := s.sessionKeyFor(r)
+	// A GET here MINTS a session, unlike every other GET in this package.
+	//
+	// The reason is the surface's whole purpose: a list served to an
+	// unassigned reader is not in the experiment, and an A/B whose arms only
+	// fill when a browser happens to have visited a page first would measure
+	// browsers rather than readers. The cost is a cookie and one row per
+	// anonymous caller, which is the price of the log this route exists to
+	// produce.
+	_, ownerKey, _ := s.arena().SessionKey(w, r)
 	var stored string
 	if s.Store != nil && ownerKey != "" {
 		if choices, cerr := s.Store.AlgoChoices(r.Context(), ownerKey); cerr == nil {
