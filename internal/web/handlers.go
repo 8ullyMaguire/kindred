@@ -1676,6 +1676,7 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 
 	if pairs, err := d.Engine.Corpus.TagPairs(ctx, []int64{id}); err == nil {
 		page.Tags = pairs[id]
+		page.DNA = distinctiveTags(page.Tags, d.Engine.DocFreq, distinctiveTagCount)
 	} else {
 		// The page is still worth rendering without the tag list; say so
 		// rather than dropping the whole work because one of three
@@ -2193,6 +2194,25 @@ func taggedCount(page *TagPage) int {
 	return n
 }
 
+// defaultSeedCount is how many works seed an unseeded /recommend.
+//
+// Three, not five: the page already caps seeds at five because "a twentieth
+// seed averages the signal away", and three popular works chosen by kudos are
+// already a narrow slice of the corpus. The number is a constant so the note
+// the reader sees and the list it ranks cannot disagree.
+const defaultSeedCount = 3
+
+// defaultSeedIDs is the unseeded default, resolved from the corpus.
+//
+// The engine owns the corpus handle, and the web package must not open a
+// second one: the mirror is opened read-only once and shared.
+func (d Deps) defaultSeedIDs(ctx context.Context, n int) ([]int64, error) {
+	if d.Engine == nil || d.Engine.Corpus == nil {
+		return nil, errors.New("no corpus is loaded")
+	}
+	return d.Engine.Corpus.TopByKudos(ctx, n)
+}
+
 // renderRecommend handles the multi-seed form:
 // /recommend?seed=ao3_work:1&seed=ao3_work:2
 func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
@@ -2236,14 +2256,41 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 		seeds = append(seeds, engine.Seed{Kind: kind, ID: n})
 		echo = append(echo, SeedRef{Kind: kind, ID: n, Raw: s})
 	}
+	seedOrigin := ""
 	if len(seeds) == 0 {
 		// Every slot was empty, which is what the form looks like before
 		// anyone types. A 404 here would be right for a bad URL and wrong for
-		// an untouched form, so the form is rendered empty instead.
-		d.page(w, "recommend.html",
-			RecommendPage{Base: d.baseOf(r, "Recommendations", "Recommendations"), MaxSeeds: maxSeeds},
-			http.StatusOK)
-		return
+		// an untouched form.
+		//
+		// The form alone was the answer until now, and it asks a new reader to
+		// invent a query before the recommender will speak. The default is the
+		// mirror's most-kudosed works, NAMED on the page as exactly that: it is
+		// popularity, not a taste match, and a page that hid the difference
+		// would be claiming knowledge of a reader it has never met.
+		//
+		// A corpus that cannot answer (nil engine, an empty mirror) falls back
+		// to the empty form rather than to a 500: there is nothing to rank
+		// from, and the form is still a true page.
+		def, derr := d.defaultSeedIDs(ctx, defaultSeedCount)
+		if derr == nil && len(def) > 0 {
+			for _, id := range def {
+				k := corpus.AO3Kind
+				seeds = append(seeds, engine.Seed{Kind: k, ID: id})
+				echo = append(echo, SeedRef{Kind: k, ID: id, Raw: fmt.Sprintf("%s:%d", k, id)})
+			}
+			seedOrigin = fmt.Sprintf(
+				"No seed was given, so this starts from the %d most-kudosed works in the mirror. "+
+					"They are popularity, not your taste: give it a work you liked and the ranking "+
+					"becomes about you.", len(def))
+		} else {
+			if derr != nil {
+				d.log().Warn("no default seeds", "err", derr)
+			}
+			d.page(w, "recommend.html",
+				RecommendPage{Base: d.baseOf(r, "Recommendations", "Recommendations"), MaxSeeds: maxSeeds},
+				http.StatusOK)
+			return
+		}
 	}
 
 	// Five is enough to describe a taste and few enough that the ranking
@@ -2432,6 +2479,7 @@ func (d Deps) renderRecommend(w http.ResponseWriter, r *http.Request) {
 		GroupBy:         groupBy,
 		SeedLimitHit:    seedLimitHit,
 		MaxSeeds:        maxSeeds,
+		SeedOrigin:      seedOrigin,
 		ShortfallReason: shortfallReason(n, len(res.Items), capN, groupBy),
 		Filter:          filter,
 		PoolMode:        poolMode.String(),

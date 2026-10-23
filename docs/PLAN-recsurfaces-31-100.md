@@ -66,10 +66,10 @@ Four statuses:
 | 61 | RSS feed of recommendations | OPEN | No `/feed`; the tree serves no XML document (the only `rss` match is `PeakRSSKiB`). |
 | 62 | OpenSearch descriptor | OPEN | No `/opensearch.xml` route. |
 | 63 | Jaccard co-occurrence similarity | **BUILT** | `signal.go` computes and prints a Jaccard ratio; `TagNeighbours` ranks by PMI; `idf_overlap.go` is the weighted variant. |
-| 64 | "Tag DNA" distinctive tags | OPEN | `WorkHit` carries tags but nothing selects the low-IDF ones as a work's fingerprint. |
+| 64 | "Tag DNA" distinctive tags | **BUILT** | `internal/web/distinctive.go` + the work page's "What makes this work distinctive" block: rarest by document frequency, a tag on every work dropped (zero evidence), a zero-frequency tag dropped (the table and the work disagree). |
 | 65 | "New since your last visit" | OPEN | `seen_works` is a set, not a cursor; no `first_seen` comparison per reader. |
 | 66 | Author recs from a single work | PARTIAL | `/api/v1/authors/similar` exists (`engine/authors.go`); the work page does not link to it and no template renders it (`grep` for `authors/similar` in `work.html`/`handlers.go`: 0). |
-| 67 | Smart default seeds for new readers | OPEN | `/recommend` with no seeds renders the empty form on purpose (`handlers.go:2239`). |
+| 67 | Smart default seeds for new readers | **BUILT** | `/recommend` with no seed ranks from the three most-kudosed works (`corpus.AO3.TopByKudos`, `defaultSeedCount`) and names them as popularity in `data-testid="seed-origin"`; no corpus still renders the empty form. |
 | 68 | Tag "temperature" (contested tags) | OPEN | No per-tag variance over comparisons. |
 | 69 | Work controversy score | OPEN | `arena_entity_history` holds per-entity history; nothing computes a divisiveness score from it. |
 | 70 | Batch arena with keyboard shortcuts | **BUILT** | `/api/v1/arena/batch` + the speed round in the arena UI. |
@@ -108,14 +108,15 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 4 | 56, 57, 63, 70 |
+| BUILT | 6 | 56, 57, 63, 64, 67, 70 |
 | PARTIAL | 12 | 32, 38, 41, 42, 45, 49, 50, 54, 66, 72, 79, 89 |
-| OPEN | 50 | 31, 33, 34, 35, 36, 37, 39, 40, 43, 44, 46, 47, 48, 52, 53, 55, 58, 59, 60, 61, 62, 64, 65, 67, 68, 69, 71, 73, 74, 75, 76, 77, 78, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 48 | 31, 33, 34, 35, 36, 37, 39, 40, 43, 44, 46, 47, 48, 52, 53, 55, 58, 59, 60, 61, 62, 65, 68, 69, 71, 73, 74, 75, 76, 77, 78, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
-open of 30), the whole list stands at **22 built, 13 partial, 61 open, 4 without
-a premise** — 100 accounted for.
+open of 30), the whole list stood at 22 built, 13 partial, 61 open, 4 without a premise.
+Two of the open ones (64, 67) shipped on 2026-10-23, so the live total is
+**24 built, 13 partial, 59 open, 4 without a premise** — 100 accounted for.
 
 ## What the audit changed about the group story
 

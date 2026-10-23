@@ -185,8 +185,15 @@ type TagHit struct {
 // recommender makes of it.
 type WorkPage struct {
 	Base
-	Work    corpus.Entity
-	Tags    []corpus.TagPair
+	Work corpus.Entity
+	Tags []corpus.TagPair
+	// DNA is the work's most distinctive tags — the rarest by document
+	// frequency. It is the same table every ranking surface reads, read the
+	// other way round: the recommender rewards what a work shares with
+	// others, and this says what it does not share. Empty when no document
+	// frequency table is loaded, because an unranked "distinctive" list
+	// would be a claim the server cannot support.
+	DNA     []corpus.TagPair
 	Similar []rank.Candidate
 	// CoBookmarked are works that share readers with this one. It is
 	// separate from Similar because it answers a different question: Similar
@@ -420,6 +427,12 @@ type RecommendPage struct {
 	SeedLimitHit bool
 	// MaxSeeds is that maximum, for the message.
 	MaxSeeds int
+
+	// SeedOrigin is set when the page chose its own seeds because the reader
+	// gave none. It names them as the mirror's most-kudosed works, which is
+	// what they are: an empty form asks a reader to invent a query, and a
+	// default presented as a taste match would be a claim nothing measured.
+	SeedOrigin string
 
 	// Shortfall is the honest account when fewer came back than were asked
 	// for. Rendered rather than hidden: a list of 12 that says nothing about

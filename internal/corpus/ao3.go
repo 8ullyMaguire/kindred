@@ -82,6 +82,40 @@ func (a *AO3) CountWorks(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// TopByKudos returns the ids of the most-kudosed works in the mirror.
+//
+// It exists for the reader who opens /recommend with nothing typed: an empty
+// form asks them to invent a query, and the honest default is the works the
+// mirror's own readers have already chosen most often. Kudos is the only
+// corpus-wide popularity the mirror carries — bookmarks live in
+// user_work_interactions, which is in the state database, not here — so the
+// page names this as "most kudosed" rather than presenting it as a taste
+// match.
+//
+// The tie-break is the id, so two requests get the same seeds and a reader
+// who reloads does not see the set change for no reason.
+func (a *AO3) TopByKudos(ctx context.Context, limit int) ([]int64, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := a.DB.QueryContext(ctx,
+		`SELECT id FROM works ORDER BY COALESCE(kudos,0) DESC, id ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("top by kudos: %w", err)
+	}
+	defer rows.Close()
+
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("top by kudos: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 func (a *AO3) CountTags(ctx context.Context) (int, error) {
 	var n int
 	err := a.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM tags`).Scan(&n)

@@ -232,6 +232,12 @@ var pageRenderCases = []pageRenderCase{
 		data: WorkPage{
 			Base: sweepBase,
 			Work: corpus.Entity{ID: 42, Title: "A Work", Kind: corpus.AO3Kind},
+			// The distinctive block renders only when it has tags, so the
+			// sweep has to carry them: a template referencing a field that
+			// is never populated is exactly the 500-shaped hole this file
+			// exists to catch.
+			DNA:  []corpus.TagPair{{ID: 2, Name: "selkie au"}, {ID: 3, Name: "time travel"}},
+			Tags: []corpus.TagPair{{ID: 1, Name: "fluff"}},
 		},
 		// This branch is reachable only when the recommender SUCCEEDED and
 		// returned nothing (the case above has RecommendErr set), and the
@@ -459,6 +465,7 @@ var pageRenderCases = []pageRenderCase{
 			MaxPerFandom:    3,
 			GroupBy:         "fandom",
 			MaxSeeds:        5,
+			SeedOrigin:      "No seed was given, so this starts from the 3 most-kudosed works in the mirror.",
 			ShortfallReason: "The cap of 3 per fandom removed the rest.",
 			Tune: []WeightRow{
 				{Name: "co_occurrence", Weight: 0.8},

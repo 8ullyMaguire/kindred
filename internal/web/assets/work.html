@@ -19,6 +19,14 @@
   </dl>
 </fieldset>
 
+{{if .DNA}}
+<h2>What makes this work distinctive</h2>
+<p class="hint" data-testid="dna-hint">These are its rarest tags in the mirror. The
+  recommender rewards what a work shares with others; this is the part it does
+  not share.</p>
+{{template "taglist" .DNA}}
+{{end}}
+
 {{if .Tags}}
 <h2>Tags</h2>
 {{template "taglist" .Tags}}

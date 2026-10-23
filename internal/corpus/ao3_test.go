@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"reflect"
 	"testing"
+
+	"git.polarisocial.xyz/kindred/kindred/internal/testcorpus"
 
 	_ "modernc.org/sqlite"
 )
@@ -311,5 +314,61 @@ func TestIntersectIdenticalSets(t *testing.T) {
 	}
 	if w != 6 {
 		t.Fatalf("weight = %v, want 6", w)
+	}
+}
+
+// TestTopByKudosReturnsTheMostKudosedFirst pins the default-seed query.
+//
+// The expectation is read from the fixture with its own SQL rather than
+// hardcoded: the fixture's kudos pattern is a property of testcorpus, and a
+// test that repeats it would pass while the query ordered by words instead.
+func TestTopByKudosReturnsTheMostKudosedFirst(t *testing.T) {
+	dir := t.TempDir()
+	path, err := testcorpus.New(30).Write(filepath.Join(dir, "corpus.db"))
+	if err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	a := NewAO3(db)
+
+	got, err := a.TopByKudos(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("TopByKudos: %v", err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("got %d ids, want 5: %v", len(got), got)
+	}
+
+	rows, err := db.Query(`SELECT id FROM works ORDER BY COALESCE(kudos,0) DESC, id ASC LIMIT 5`)
+	if err != nil {
+		t.Fatalf("reference query: %v", err)
+	}
+	defer rows.Close()
+	var want []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan reference: %v", err)
+		}
+		want = append(want, id)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("TopByKudos = %v, want %v", got, want)
+	}
+
+	// The ordering has to be by kudos, not by id: the fixture's kudos vary
+	// with the index, so an id-ordered answer would be a different list. If
+	// this ever becomes true, the query lost its ORDER BY.
+	if len(got) > 1 && got[0] == 1 && got[1] == 2 {
+		t.Errorf("ids came back in insertion order (%v): the kudos ORDER BY is gone", got)
+	}
+
+	// A zero or negative limit is "no default seeds", not "all of them".
+	if ids, err := a.TopByKudos(context.Background(), 0); err != nil || ids != nil {
+		t.Errorf("TopByKudos(0) = %v, %v; want nil, nil", ids, err)
 	}
 }

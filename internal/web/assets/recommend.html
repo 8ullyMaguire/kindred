@@ -124,6 +124,10 @@
   </p>
 {{end}}
 
+{{if .SeedOrigin}}
+  <p class="hint" data-testid="seed-origin">{{.SeedOrigin}}</p>
+{{end}}
+
 {{if .Similar}}
   <div class="recommend" data-testid="results">
     {{range .Similar}}
