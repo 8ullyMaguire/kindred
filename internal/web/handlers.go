@@ -25,6 +25,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 	"git.polarisocial.xyz/kindred/kindred/internal/tagfamily"
+	"os"
 )
 
 // Deps is what the pages need from the rest of kindred.
@@ -2152,8 +2153,12 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	// this tag -- boosted -- with works readers of this tag appreciated
 	// even when they carry no such tag. Any explicit sort skips it and
 	// lists the exact matches alone, which is what those choices mean.
+	probeT0 := time.Now()
 	if page.Sort == tasteSort && d.Engine != nil {
 		d.blendTagTaste(ctx, id, n, extra, extraArgs, wordsClause, blockedAll, &page)
+	}
+	if os.Getenv("KINDRED_PHASE_TIMING") != "" {
+		slog.Info("phase", "tag", id, "blend", time.Since(probeT0).Round(time.Millisecond).String())
 	}
 
 	if d.Engine.Graph != nil {
@@ -2163,6 +2168,7 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	// PMI list above: not "what co-occurs" but "what sits near it". Reported
 	// only when the index answered, so a deployment with no embeddings shows
 	// no section rather than an empty one that reads as "nothing is near".
+	probeN := time.Now()
 	if nb, ok, err := d.Engine.TagsNear(ctx, int32(id), 12, 0); err != nil {
 		// A partial index still lists what it read; the log carries the rest.
 		d.log().Warn("tag-page embedding neighbourhood is incomplete", "tag", id, "err", err)
@@ -2186,6 +2192,9 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 		// The section says so instead of presenting eight character tags from
 		// four fandoms as a neighbourhood.
 		page.VectorCentral = nb.CenterSim >= engine.CenterSimFloor
+	}
+	if os.Getenv("KINDRED_PHASE_TIMING") != "" {
+		slog.Info("phase", "tag", id, "after-neighbours", time.Since(probeN).Round(time.Millisecond).String())
 	}
 	d.page(w, "tag.html", page, http.StatusOK)
 }
