@@ -74,7 +74,14 @@ those numbers were consistent with 100 rows and wrong by about thirty — the ba
 read as half finished when it is a third done. Corrected to **21 built, 8 partial,
 37 open, 4 without a premise**, and the line now says it is derived from the table.
 Four of the shipped rows (#54, #66, #79 and the status of #50) had also been left
-stale in the table.
+stale in the table, and three rows carried three spellings of one status
+(`BUILT`, `**BUILT**`, `OPEN (count built)`), so no mechanical count could agree
+with the hand-written one.
+
+`scripts/check-roadmap.py` now derives both and fails on any disagreement: the
+id lists against the table's statuses, each summary NUMBER against its own list,
+and any status outside the fixed vocabulary. Verified by mutation — bumping
+"21" to "22" and bolding one status each produced a failure naming the row.
 
 ## State
 
