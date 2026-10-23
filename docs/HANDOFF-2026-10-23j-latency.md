@@ -102,6 +102,13 @@ asks for three now, arranged so each wrong rule picks a different work.
   loads the 81 MiB tag-vector matrix and builds the graph, so the body was empty and
   the gate reported "complete control is MISSING" on a working page. 90 s allowance
   now, commented as an allowance and not a latency assertion.
+- **One deploy in this session exited 2 with five empty-body failures** ("?sort=kudos
+  and ?sort=recent return the same list (d41d8cd9)", "0 of 0 works", "no byline
+  link"). That was MY fault, not the product's: a `systemctl restart` landed while
+  the gate was running, so every curl got a connection error and the gate honestly
+  reported an empty body as a missing feature. Re-running the same gate against the
+  same binary right now: 94/94. The tell is that the failures span unrelated routes
+  at once.
 - **Profiling harness recipe** (now in `kindred-recommender-dev`): copy the state DB
   (and `.graph`) to `/tmp` with `sudo cp`, `chown` it, run the harness with
   `-corpus` + `-db`, and read the profile locally with `go tool pprof -peek` /
