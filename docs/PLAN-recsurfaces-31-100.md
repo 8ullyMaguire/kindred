@@ -86,7 +86,7 @@ Four statuses:
 | 81 | Federated taste profiles | OPEN | `dump`/`fetch` move mirror snapshots (`cmd/kindred/dumpcmd.go`); no taste vector is exchanged. |
 | 82 | Bandit-based exploration | OPEN | No exploration policy and no reward stream. |
 | 83 | Transfer from AO3's wrangling graph | OPEN | `families.json` is hand-written; no synonym supervision and no contrastive training. |
-| 84 | Counterfactual evaluation | OPEN | `interleave_impressions` stores the alternative only as the other algorithm's pick; no IPS estimator reads it. |
+| 84 | Counterfactual evaluation | BUILT | Two-sided Fisher exact on each interleaved pair (`internal/stats`), plus a 50-slot power floor that refuses a winner before any p is quoted; `/eval` says "no result yet" until a pair clears it. IPS is deliberately NOT built: this recommender is deterministic, so propensity is 1 for served items and 0 for the rest — no overlap, and the estimator would be the identity. Interleaving is the design that answers the question without propensities; what it lacked was the test, not the weighting. |
 | 85 | Causal inference for impact | OPEN | No instrument, no estimator. |
 | 86 | Bandit weight optimisation | OPEN | Weights are hand-set per tune (`store/tunes.go`) and compared by `/algo` votes. |
 | 87 | Graph neural network | OPEN | Embeddings are truncated SVD by power iteration (`embedcmd --iters`), which is the thing a GCN would replace. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 23 | 33, 40, 41, 42, 43, 46, 50, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 76, 78, 79 |
+| BUILT | 24 | 33, 40, 41, 42, 43, 46, 50, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 76, 78, 79, 84 |
 | PARTIAL | 6 | 32, 38, 45, 49, 72, 89 |
-| OPEN | 37 | 31, 34, 35, 36, 37, 39, 44, 47, 48, 52, 53, 55, 58, 59, 68, 69, 73, 74, 75, 77, 80, 81, 82, 83, 84, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 36 | 31, 34, 35, 36, 37, 39, 44, 47, 48, 52, 53, 55, 58, 59, 68, 69, 73, 74, 75, 77, 80, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
@@ -142,8 +142,9 @@ number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). See
 `docs/HANDOFF-2026-10-23j-latency.md`.
 
 2026-10-23k shipped #79 (intra-list diversity, stored with every offline run) and
-corrected this file's totals. **The counts below are the table's, not a memory of
-them: 21 built, 8 partial, 37 open, 4 without a premise.** For two sessions this
+corrected this file's totals. 2026-10-24b/c shipped #41 (length_fit) and #84 (the
+significance test the interleave log was missing). **The counts below are the table's,
+not a memory of them: 24 built, 6 partial, 36 open, 4 without a premise.** For two sessions this
 block said "38 built, 49 open" — arithmetically consistent with 100 rows and wrong
 by about thirty, because this roadmap holds rows 31–100 (70 rows) and the phantom
 thirty made the backlog look half finished when it is a third done. The lesson is
