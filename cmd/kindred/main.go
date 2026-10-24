@@ -86,6 +86,8 @@ func main() {
 		err = runCorpusQuery(ctx, config.Load().CorpusDB, args)
 	case "browse":
 		err = runBrowse(ctx, config.Load().CorpusDB, args)
+	case "velocity":
+		err = runVelocity(ctx, args)
 	case "author-eval":
 		err = runAuthorEval(ctx, args)
 	case "eval":
