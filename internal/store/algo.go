@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"fmt"
+
+	"git.polarisocial.xyz/kindred/kindred/internal/stats"
 )
 
 // AlgoComparison is one A/B judgement: two named tunes, one seed, one
@@ -34,6 +36,17 @@ type AlgoStanding struct {
 	// algorithm appeared in. It is stored rather than recomputed by the
 	// caller so a standings table cannot disagree with itself.
 	Judged int `json:"judged"`
+	// P is the two-sided sign-test p-value over DECISIVE comparisons (wins and
+	// losses; ties are excluded because a reader who could not choose said
+	// nothing). Evidence is a separate question from the record, and a table of
+	// wins and losses prints the record only.
+	P float64 `json:"p"`
+	// Evidence is what the record is allowed to say, in a word: "leads"
+	// (p < 0.05 with enough decisive comparisons), "behind" (the same
+	// significance, the other way), or "none".
+	Evidence string `json:"evidence"`
+	// EvidenceWhy explains "none" in the reader's words.
+	EvidenceWhy string `json:"evidence_why,omitempty"`
 }
 
 // RecordAlgoComparison stores one A/B judgement.
@@ -142,6 +155,18 @@ func (s *Store) AlgoStandings(ctx context.Context, ownerKey string) ([]AlgoStand
 
 	out := make([]AlgoStanding, 0, len(byAlgo))
 	for _, st := range byAlgo {
+		v := stats.CompareVotes(st.Algo, st.Wins, st.Losses, st.Ties)
+		st.P = v.P
+		switch {
+		case v.Leading:
+			st.Evidence = "leads"
+		case v.Behind:
+			st.Evidence = "behind"
+			st.EvidenceWhy = v.Reason
+		default:
+			st.Evidence = "none"
+			st.EvidenceWhy = v.Reason
+		}
 		out = append(out, *st)
 	}
 	// Most wins first, then the most-judged, then by name — a stable order

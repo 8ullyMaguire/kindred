@@ -843,6 +843,10 @@ echo "an interleaved difference is not a result (#84)"
 check "the head-to-head table carries a verdict column" "$TARGET/eval" 'data-testid="interleaved-verdict"'
 check "the dashboard says whether any pair has cleared the test" "$TARGET/eval" 'data-testid="eval-no-lead"'
 check "and the endpoint carries the p-value"                          "$TARGET/api/v1/interleave/standings" '"p"'
+# The vote table had the same hole: 17 wins against 11 looks like a lead until the
+# test is applied, and the page said nothing either way.
+check "the vote table says whether a record is evidence"              "$TARGET/eval" 'data-testid="eval-vote-evidence"'
+check "and the votes endpoint carries the p-value"                    "$TARGET/api/v1/algo/standings" '"p"'
 
 echo
 echo "length, measured rather than assumed (#41)"

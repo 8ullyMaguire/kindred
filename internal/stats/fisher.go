@@ -149,6 +149,94 @@ func Compare(aArm string, aRead, aSlots int, bArm string, bRead, bSlots int) Ver
 	return Verdict{P: p, Leading: leading}
 }
 
+// SignTest returns the two-sided exact p-value for wins against losses under the
+// null that each decisive comparison is a coin: P(X <= min(w,l)) * 2, capped at 1.
+//
+// Ties are EXCLUDED, and that is the whole definition rather than a convenience: a
+// reader who could not choose has said nothing about which algorithm is better, and
+// counting a tie as half a win would let a pair of identical lists drift toward
+// significance by being compared many times.
+func SignTest(wins, losses int) float64 {
+	n := wins + losses
+	if n == 0 {
+		return 1
+	}
+	k := wins
+	if losses < wins {
+		k = losses
+	}
+	// Sum C(n,i)/2^n for i <= k, doubled. In log space for the same reason as
+	// the hypergeometric: 2^n overflows long before n reaches a thousand.
+	tail := 0.0
+	for i := 0; i <= k; i++ {
+		tail += math.Exp(logChoose(n, i) - float64(n)*math.Ln2)
+	}
+	p := 2 * tail
+	if p > 1 {
+		p = 1
+	}
+	return p
+}
+
+// MinDecisive is how many WIN-OR-LOSE comparisons are needed before the vote table
+// may name a leader. Ties do not count toward it for the reason above.
+//
+// Ten, stated rather than derived: at ten decisive comparisons a clean sweep is
+// p = 0.002 and 9-1 is p = 0.021, so the test can fire; at six a sweep is only
+// p = 0.031 and at five nothing can reach 0.05 at all. The floor makes the standard
+// explicit instead of leaving a reader to notice that 4-0 "looks" decisive.
+const MinDecisive = 10
+
+// VoteVerdict is what the vote table is allowed to say about one algorithm.
+type VoteVerdict struct {
+	// P is the two-sided sign-test p-value over decisive comparisons.
+	P float64 `json:"p"`
+	// Leading is true when the evidence says this algorithm is the better one.
+	Leading bool `json:"leading"`
+	// Behind is true when the evidence is significant and goes the other way:
+	// a record that is evidence this algorithm LOSES. Distinct from "no
+	// evidence", which is what an empty or noisy record gives.
+	Behind bool `json:"behind"`
+	// Reason explains a refusal in the reader's words.
+	Reason string `json:"reason,omitempty"`
+	// Underpowered is true when the decisive-comparison floor is what stopped it.
+	Underpowered bool `json:"underpowered,omitempty"`
+}
+
+// CompareVotes decides whether an algorithm's win/loss record is evidence.
+func CompareVotes(name string, wins, losses, ties int) VoteVerdict {
+	decisive := wins + losses
+	if decisive < MinDecisive {
+		return VoteVerdict{
+			P:            1,
+			Underpowered: true,
+			Reason: "only " + itoa(decisive) + " comparison(s) went one way or the other " +
+				"(" + itoa(ties) + " tied); " + itoa(MinDecisive) + " are needed before a " +
+				"record can be more than a coin landing. Ties do not count: a reader who " +
+				"could not choose has said nothing about which is better.",
+		}
+	}
+	p := SignTest(wins, losses)
+	if p > Alpha {
+		return VoteVerdict{
+			P: p,
+			Reason: "no evidence that " + name + " is better or worse: " + itoa(wins) +
+				" wins against " + itoa(losses) + " losses gives p = " + f3(p) + ".",
+		}
+	}
+	if wins > losses {
+		return VoteVerdict{P: p, Leading: true}
+	}
+	// Significant and BEHIND: the record is evidence, and the evidence is that
+	// this algorithm loses. Saying nothing here would be the same silence in the
+	// other direction.
+	return VoteVerdict{
+		P:      p,
+		Behind: true,
+		Reason: "clear evidence AGAINST " + name + ": " + itoa(losses) + " losses against " + itoa(wins) + " wins, p = " + f3(p) + ".",
+	}
+}
+
 func plural(n int) string {
 	if n == 1 {
 		return "1 slot"

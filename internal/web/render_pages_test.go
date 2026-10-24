@@ -1237,7 +1237,15 @@ var pageRenderCases = []pageRenderCase{
 			TagSlices: []store.EvalSlice{
 				{Axis: "tag", Name: "selkie au", N: 25, Hits: 1, HitRate: 0.04},
 			},
-			Algos: []store.AlgoStanding{{Algo: "default", Judged: 30, Wins: 17, Losses: 11, Ties: 2}},
+			Algos: []store.AlgoStanding{{
+				Algo: "default", Judged: 30, Wins: 17, Losses: 11, Ties: 2,
+				P: 0.344928, Evidence: "none",
+				// The real message for 17-11: past the floor, and the p-value
+				// itself is what refuses. A fixture quoting the FLOOR message
+				// here would have been a record the code cannot produce, and
+				// would hide a wrong branch behind plausible text.
+				EvidenceWhy: "no evidence that default is better or worse: 17 wins against 11 losses gives p = 0.345.",
+			}},
 			Arms: []store.InterleaveArmStat{{
 				Arm: "default", Impressions: 200, Credits: 14, CreditRate: 0.07,
 			}},
@@ -1256,6 +1264,8 @@ var pageRenderCases = []pageRenderCase{
 			// The dashboard must say the rates are RAW when no pair has cleared
 			// the test: a table of rates beside a heading is read as a result.
 			"No result yet.", "no pair has enough",
+			// The vote table's own verdict: 17-11 is a record, not a result.
+			"not enough — no evidence that default is better or worse",
 			// The pair's own row, with the floor's reason attached.
 			"too few slots to compare", "interleaved-verdict",
 		},

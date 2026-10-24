@@ -136,7 +136,7 @@
 {{if .Algos}}
   <table class="standings" data-testid="eval-algos">
     <thead>
-      <tr><th>Algorithm</th><th class="num">Judged</th><th class="num">Wins</th><th class="num">Losses</th><th class="num">Ties</th></tr>
+      <tr><th>Algorithm</th><th class="num">Judged</th><th class="num">Wins</th><th class="num">Losses</th><th class="num">Ties</th><th>Evidence</th></tr>
     </thead>
     <tbody>
       {{range .Algos}}
@@ -146,6 +146,7 @@
           <td class="num">{{.Wins}}</td>
           <td class="num">{{.Losses}}</td>
           <td class="num">{{.Ties}}</td>
+          <td data-testid="eval-vote-evidence">{{if eq .Evidence "leads"}}<strong>leads</strong> (p = {{printf "%.4f" .P}}){{else if eq .Evidence "behind"}}<span class="muted">behind — {{.EvidenceWhy}}</span>{{else}}<span class="muted">not enough — {{.EvidenceWhy}}</span>{{end}}</td>
         </tr>
       {{end}}
     </tbody>

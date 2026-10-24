@@ -190,3 +190,52 @@ func TestAlgoVotesNeverReachTheTagLearner(t *testing.T) {
 		t.Fatalf("algo_comparisons holds %d rows, want 5: the vote was not recorded at all", n)
 	}
 }
+
+// The vote record must carry a verdict, and the verdict must distinguish three
+// states: leads, behind, and not enough. A field that is always "none" would render
+// the same page as a correct implementation on this deployment's data, so each state
+// is pinned.
+func TestTheVoteStandingCarriesAnEvidenceVerdict(t *testing.T) {
+	s := interleaveStore(t)
+	ctx := context.Background()
+	// default leads tags 12-2 (p = 0.013), and hybrid draws with tags 3-3.
+	for i := 0; i < 12; i++ {
+		if err := s.RecordAlgoComparison(ctx, "owner1", AlgoComparison{
+			SeedKind: "ao3_work", SeedID: int64(100 + i), AlgoA: "default", AlgoB: "tags", Winner: "a",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := s.RecordAlgoComparison(ctx, "owner1", AlgoComparison{
+			SeedKind: "ao3_work", SeedID: int64(200 + i), AlgoA: "default", AlgoB: "tags", Winner: "b",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if err := s.RecordAlgoComparison(ctx, "owner1", AlgoComparison{
+			SeedKind: "ao3_work", SeedID: int64(300 + i), AlgoA: "hybrid", AlgoB: "tags", Winner: "neither",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.AlgoStandings(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]AlgoStanding{}
+	for _, r := range rows {
+		by[r.Algo] = r
+	}
+	if got := by["default"]; got.Evidence != "leads" || got.P >= 0.05 {
+		t.Fatalf("default 12-2: evidence %q p = %v, want leads", got.Evidence, got.P)
+	}
+	if got := by["tags"]; got.Evidence != "behind" {
+		t.Fatalf("tags 2-12: evidence %q, want behind", got.Evidence)
+	}
+	// hybrid's three judgements all tied: no decisive comparison, so nothing.
+	if got := by["hybrid"]; got.Evidence != "none" || got.EvidenceWhy == "" {
+		t.Fatalf("hybrid (3 ties): evidence %q why %q, want none with a reason", got.Evidence, got.EvidenceWhy)
+	}
+}

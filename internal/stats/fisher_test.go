@@ -112,3 +112,84 @@ func TestAnExactTieIsNotALead(t *testing.T) {
 		t.Fatalf("reason = %q", v.Reason)
 	}
 }
+
+// The sign test against values computed independently as 2*sum(C(n,i), i<=min)/2^n
+// (what binom.test(x, n, 0.5, two.sided) returns). Written out rather than eyeballed:
+// a p-value test whose reference numbers were guessed pins the guess, not the code.
+func TestSignTestMatchesKnownValues(t *testing.T) {
+	cases := []struct {
+		wins, losses int
+		want         float64
+	}{
+		{10, 0, 0.001953}, // 2 * 2^-10
+		{9, 1, 0.021484},
+		{7, 3, 0.343750},
+		{5, 0, 0.0625},
+		{17, 11, 0.344928},
+	}
+	for _, c := range cases {
+		if got := SignTest(c.wins, c.losses); math.Abs(got-c.want) > 0.0002 {
+			t.Fatalf("%d-%d: p = %.6f, want %.6f", c.wins, c.losses, got, c.want)
+		}
+	}
+	// Symmetry: the test cannot depend on which side we called the win.
+	if SignTest(9, 1) != SignTest(1, 9) {
+		t.Fatal("sign test is not symmetric")
+	}
+}
+
+func TestTiesAreNotEvidence(t *testing.T) {
+	// Twenty ties and nothing else: no decisive comparison, no p-value quoted.
+	v := CompareVotes("default", 0, 0, 20)
+	if v.Leading {
+		t.Fatal("named a leader from twenty ties")
+	}
+	if !v.Underpowered {
+		t.Fatal("twenty ties was not treated as an empty record")
+	}
+	if !strings.Contains(v.Reason, "20 tied") {
+		t.Fatalf("reason does not say the ties were seen: %q", v.Reason)
+	}
+}
+
+func TestTheVoteFloorPrecedesTheTest(t *testing.T) {
+	// 5-0 is p = 0.0625 -- already not significant -- but 6-0 is 0.031 and 8-0 is
+	// 0.008: below the floor neither is allowed to make a leader.
+	for _, w := range []int{3, 5, 8} {
+		v := CompareVotes("a", w, 0, 0)
+		if v.Leading {
+			t.Fatalf("%d-0 named a leader below the floor", w)
+		}
+		if !v.Underpowered {
+			t.Fatalf("%d-0 was refused for the wrong reason", w)
+		}
+	}
+}
+
+func TestAVoteRecordCanBeEvidenceForOrAgainst(t *testing.T) {
+	v := CompareVotes("tags", 18, 4, 3)
+	if !v.Leading || v.P >= Alpha {
+		t.Fatalf("18-4 was not called: leading=%v p=%v", v.Leading, v.P)
+	}
+	// The same record backwards is evidence the other way, and says so rather
+	// than falling silent.
+	back := CompareVotes("tags", 4, 18, 3)
+	if back.Leading {
+		t.Fatal("a losing record was reported as a lead")
+	}
+	if !strings.Contains(back.Reason, "AGAINST") {
+		t.Fatalf("a significant loss read as mere absence of evidence: %q", back.Reason)
+	}
+	if !back.Behind {
+		t.Fatal("a significant loss was not marked Behind, so the standings cannot tell " +
+			"'loses' from 'no evidence'")
+	}
+	if back.Underpowered {
+		t.Fatal("a significant result was marked underpowered")
+	}
+	// And the winning side must NOT carry Behind, or the page would render a
+	// lead and a loss with the same word.
+	if v.Behind {
+		t.Fatal("a leading record was also marked Behind")
+	}
+}
