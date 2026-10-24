@@ -78,6 +78,34 @@ check () {
   if grep -qE -- "$pattern" <<<"$body"; then ok "$name"; else bad "$name — expected /$pattern/ at $url"; fi
 }
 
+# checkall NAME URL PATTERN... 
+#   asserts EVERY pattern appears in ONE fetch of URL.
+#
+# This exists because a route that takes fourteen seconds (tag-gap, measured) cannot
+# afford five fetches: at five calls the gate spends 70 s on one route, and the checks
+# start timing out against an archive that is answering correctly. One fetch, several
+# assertions, and the patterns stay separate so a failure names which one broke.
+checkall () {
+  local name="$1" url="$2"; shift 2
+  local body code
+  body=$(curl -sS --max-time 30 -w $'\n__CODE__%{http_code}' "$url" 2>/dev/null) || true
+  code=${body##*__CODE__}
+  body=${body%$'\n__CODE__'*}
+  if [ -z "$code" ] || [ "$code" = "000" ]; then
+    unreachable=$((unreachable+1))
+    echo "  UNREACHABLE  $name ($url)"
+    return 0
+  fi
+  local pat
+  for pat in "$@"; do
+    if grep -qE -- "$pat" <<<"$body"; then
+      ok "$name — /$pat/"
+    else
+      bad "$name — expected /$pat/ at $url"
+    fi
+  done
+}
+
 # check_not NAME URL PATTERN
 #   asserts PATTERN does NOT appear in the body of URL. Same reachability rule.
 #
@@ -883,10 +911,9 @@ echo "a tag's gaps are what its genre carries and its own works do not (#34)"
 # The checks name a REAL tag on this mirror (hurt/comfort, 12,018 works). A fixture-shaped
 # check would pass on an empty corpus; the point of the gate is that the query runs against
 # the archive the deployment serves.
-check "tag-gap answers for a real tag"           "$TARGET/api/v1/corpus-query/tag-gap?tag=hurt%2Fcomfort&limit=3" '"mode":"tag-gap"'
-check "and returns at least one gap"             "$TARGET/api/v1/corpus-query/tag-gap?tag=hurt%2Fcomfort&limit=3" '"rows":\[{"key"'
-check "and names the neighbourhood it used"      "$TARGET/api/v1/corpus-query/tag-gap?tag=hurt%2Fcomfort&limit=3" 'neighbourhood of'
-check "and states the formula it ranked by"      "$TARGET/api/v1/corpus-query/tag-gap?tag=hurt%2Fcomfort&limit=3" 'enrichment'
+checkall "tag-gap answers, rows, formula and neighbourhood" \
+  "$TARGET/api/v1/corpus-query/tag-gap?tag=hurt%2Fcomfort&limit=3" \
+  '"mode":"tag-gap"' '"rows":\[{"key"' 'neighbourhood of' 'enrichment'
 check "an unknown tag is named, not empty"       "$TARGET/api/v1/corpus-query/tag-gap?tag=zzz-no-such-tag&limit=3" 'no tag named'
 
 echo
