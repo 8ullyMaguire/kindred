@@ -91,7 +91,7 @@ Four statuses:
 | 86 | Bandit weight optimisation | DECLINED | **Declined 2026-10-24:** no vote stream: `algo_comparisons` is empty, so there is no reward to optimise. What follows is the premise that was true before the decline. Weights are hand-set per tune (`store/tunes.go`) and compared by `/algo` votes. |
 | 87 | Graph neural network | DECLINED | **Declined 2026-10-24:** needs a training pipeline and a tensor runtime; the repo is pure Go with no GPU. What follows is the premise that was true before the decline. Embeddings are truncated SVD by power iteration (`embedcmd --iters`), which is the thing a GCN would replace. |
 | 88 | Attention-based multi-seed fusion | DECLINED | **Declined 2026-10-24:** needs learned per-signal weights and a data volume the 37-list eval cannot judge. What follows is the premise that was true before the decline. Multi-seed handling is per-signal best-seed, not learned weights. |
-| 89 | Implicit-feedback matrix factorisation (ALS) | PARTIAL | Collab is item-item cosine over co-bookmarks (`internal/collab`) — counting, not factorisation. |
+| 89 | Implicit-feedback matrix factorisation (ALS) | BUILT | `internal/als` (closed-form implicit ALS, c = 1 + 40·p, 32 factors, Cholesky per row, `YᵀY + α·Σy yᵀ` shared per sweep), `work_factors` in the state DB, `signal.Latent` (max-over-seeds cosine, loaded lazily), `kindred als`, and `kindred eval --als-honest`. **Measured 2026-10-24, and the first number was a leak**: with factors trained on the whole mirror the signal scored recall 0.1063 → 0.1373 / nDCG 0.1889 → 0.2702, which is the model recognising the held-out bookmarks it was trained on. Honest (`--als-honest`, 112,703 factors on 180,182 pairs, 495 held-out pairs excluded, 20.6 s): 0.1130 / 0.1861 at weight 0.08 and 0.1071 / 0.1832 at 0.16 — +2.5 hits over 380 slots and a small nDCG loss, inside the noise. **Weight stays 0** (reachable via `--tune als08`). Why: ALS is a lossy re-encoding of the evidence `collab` already holds exactly, and collab is weighted 0.16. |
 | 90 | Reinforcement learning for sequences | DECLINED | **Declined 2026-10-24:** no session MDP: 108 `reader_visits` rows is not a trajectory dataset. What follows is the premise that was true before the decline. No session MDP. |
 | 91 | Cross-lingual recommendations | DECLINED | **Declined 2026-10-24:** one language dominates the corpus and there are no multilingual vectors. What follows is the premise that was true before the decline. One language in the corpus; no multilingual vectors. |
 | 92 | LLM-generated explanations | DECLINED | **Declined 2026-10-24:** no runtime LLM by design; generated prose would be unmeasurable and unverifiable here. What follows is the premise that was true before the decline. Explanations are structured evidence strings (`Evidence.Reason`), never generated prose. |
@@ -108,8 +108,8 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 28 | 31, 33, 39, 40, 41, 42, 43, 46, 50, 53, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84 |
-| PARTIAL | 6 | 32, 38, 45, 49, 72, 89 |
+| BUILT | 29 | 31, 33, 39, 40, 41, 42, 43, 46, 50, 53, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84, 89 |
+| PARTIAL | 5 | 32, 38, 45, 49, 72 |
 | OPEN | 13 | 34, 35, 36, 37, 44, 47, 48, 52, 55, 75, 77, 80, 93 |
 | DECLINED | 19 | 58, 59, 68, 69, 73, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
@@ -146,7 +146,7 @@ number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). See
 corrected this file's totals. 2026-10-24b/c/d shipped #41 (length_fit), #84 (the significance test the interleave log
 was missing), #74 (personalised PageRank), #39 (the tag shelf's shrunk kudos) and #53
 (the Bradley-Terry cross-check) and #31 (tag trend). **The counts below are the table's,
-not a memory of them: 28 built, 6 partial, 13 open, 19 declined, 4 without a premise.**
+not a memory of them: 29 built, 5 partial, 13 open, 19 declined, 4 without a premise.**
 
 **Every remaining row was triaged on 2026-10-24 against the data actually in the mirror
 (`docs/HANDOFF-2026-10-24h-triage.md`), and the verdict is now a STATUS: `DECLINED` means
