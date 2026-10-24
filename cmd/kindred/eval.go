@@ -9,7 +9,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"git.polarisocial.xyz/kindred/kindred/internal/als"
 	"git.polarisocial.xyz/kindred/kindred/internal/collab"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
@@ -141,7 +143,10 @@ func runEval(ctx context.Context, args []string) error {
 	fs := newFlagSet("eval")
 	c := bindConfig(fs)
 	var (
-		ratio    = fs.Float64("ratio", eval.DefaultRatio, "fraction of each reader's bookmarks to hold out (0<ratio<1)")
+		ratio     = fs.Float64("ratio", eval.DefaultRatio, "fraction of each reader's bookmarks to hold out (0<ratio<1)")
+		alsHonest = fs.Bool("als-honest", false,
+			"retrain the ALS factors on the TRAINING split only before scoring, so the "+
+				"latent signal cannot recognise the held-out bookmarks it was trained on")
 		n        = fs.Int("n", eval.DefaultK, "recommendation depth (K) to measure at")
 		users    = fs.Int("users", 0, "evaluate at most this many readers (0 = every reader; a full run is minutes, not seconds)")
 		asJSON   = fs.Bool("json", false, "print the report as JSON")
@@ -265,6 +270,34 @@ func runEval(ctx context.Context, args []string) error {
 	if *lambda > 0 {
 		fmt.Printf("diversification lambda %.2f\n", *lambda)
 	}
+	// A leak-free latent signal needs the factors rebuilt without the held-out pairs.
+	//
+	// The factors in the state database are trained on EVERY bookmark in the mirror, the
+	// held-out ones included. Scoring against them measures what the model remembers, not
+	// what it infers: a work the reader bookmarked is in the model's data, and the first
+	// measurement of this signal (recall 0.1063 -> 0.1373) was exactly that, a number about
+	// memory. This retrains on split.Train, which by construction omits the test items.
+	if *alsHonest {
+		var pairs []als.Interaction
+		for user, works := range split.Train {
+			for _, w := range works {
+				pairs = append(pairs, als.Interaction{User: user, Work: w})
+			}
+		}
+		params := als.DefaultParams()
+		start := time.Now()
+		model := als.Train(pairs, params)
+		factors := make(map[int64][]float32, len(model.WorkIDs))
+		for i, id := range model.WorkIDs {
+			factors[id] = model.Works[i]
+		}
+		eng.SetLatentModel(factors)
+		fmt.Printf("als-honest: retrained %d factors on %d training pairs in %s "+
+			"(rmse %.2f -> %.2f); the held-out bookmarks are not in it\n",
+			len(factors), len(pairs), time.Since(start).Round(time.Millisecond),
+			model.Fit[0], model.Fit[len(model.Fit)-1])
+	}
+
 	rec := engineRecommender{eng: eng, tune: *tune, poolMode: pmode, lambda: *lambda}
 	var runOpts []eval.Option
 	if *probe > 0 {

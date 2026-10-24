@@ -55,7 +55,8 @@ type Engine struct {
 	// latent signal at 0. Loading it when the signal list is built would pay that on
 	// every request that never uses it; the signal's Score calls this instead, and
 	// rank.Score only runs a signal whose weight is non-zero.
-	latentOnce    sync.Once
+	latentMu      sync.Mutex
+	latentLoaded  bool
 	latentFactors map[int64][]float32
 	latentErr     error
 
@@ -2189,18 +2190,39 @@ func (e *Engine) toCandidates(ctx context.Context, ents []corpus.Entity) ([]rank
 // fresh deployment. Both surface as "no factors", and the distinction is left in the
 // field for a caller that wants to check (a health endpoint, a test).
 func (e *Engine) latentModel() map[int64][]float32 {
-	e.latentOnce.Do(func() {
-		if e.Store == nil {
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_, factors, err := e.Store.LoadWorkFactors(ctx)
-		if err != nil {
-			e.latentErr = err
-			return
-		}
-		e.latentFactors = factors
-	})
+	e.latentMu.Lock()
+	defer e.latentMu.Unlock()
+	if e.latentLoaded {
+		return e.latentFactors
+	}
+	e.latentLoaded = true
+	if e.Store == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, factors, err := e.Store.LoadWorkFactors(ctx)
+	if err != nil {
+		e.latentErr = err
+		return nil
+	}
+	e.latentFactors = factors
 	return e.latentFactors
+}
+
+// SetLatentModel installs a factor model for this process, replacing whatever the state
+// database holds.
+//
+// It exists for the LEAK-FREE evaluation (#89): the factors in the database were trained
+// on every bookmark in the mirror, including the ones the eval holds out, so a score
+// against those factors measures the model's memory rather than its judgement. The eval
+// retrains on the training split only and installs the result here for the run.
+//
+// Guarded like the lazy load, so a request in flight cannot see a half-installed model.
+func (e *Engine) SetLatentModel(m map[int64][]float32) {
+	e.latentMu.Lock()
+	defer e.latentMu.Unlock()
+	e.latentFactors = m
+	e.latentLoaded = true
+	e.latentErr = nil
 }
