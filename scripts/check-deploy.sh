@@ -835,6 +835,13 @@ check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped
 check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
 
 echo
+echo "length, measured rather than assumed (#41)"
+# A length signal is judged by no other number: recall cannot see the shape of a
+# list, so "the signal works" and "the signal does nothing" score the same on every
+# other metric. The column must exist, and an unmeasured run must say so.
+check "the eval table records how close lists came in LENGTH" "$TARGET/eval" 'data-testid="eval-length"'
+
+echo
 echo "what the order is worth (#42)"
 # The block must be present even with no calibration recorded: a page that hides
 # the block until data exists teaches a reader nothing about why it is missing.

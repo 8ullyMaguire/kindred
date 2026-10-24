@@ -101,6 +101,33 @@ func Apply(in []rank.Candidate, opts Options) Result {
 		tagSets[i] = set
 	}
 
+	// topScore normalises the relevance half of the blend.
+	//
+	// The blend is lambda*score - (1-lambda)*similarity, and similarity is a
+	// Jaccard in [0,1] — so the SCALE of the scores decides how much diversity
+	// matters. That is not a theoretical worry: the engine's built-in tune sums to
+	// 1.66 while `kindred tune` refuses any vector that does not sum to 1.0, so a
+	// stored tune with identical weight RATIOS ranked differently (measured: recall
+	// 0.1050 at sum 1.66, 0.1152 at sum 1.0 over the same 40 readers). Normalising
+	// by the list's own top score makes lambda mean one thing at every scale, and
+	// keeps the tune tool's rule ("the sum IS the scale") from silently re-tuning
+	// diversification.
+	//
+	// The top score is taken by scan rather than read off working[0]: the input is
+	// documented as sorted, and a caller that breaks that contract should still get
+	// a bounded blend rather than a lambda that means something else.
+	topScore := 0.0
+	for _, c := range working {
+		if c.Score > topScore {
+			topScore = c.Score
+		}
+	}
+	if topScore <= 0 {
+		// Nothing scored above zero: there is no relevance to weight, so the
+		// blend is the diversity half alone and the scale is irrelevant.
+		topScore = 1
+	}
+
 	// maxSim[i] is the maximum similarity between candidate i and anything
 	// chosen so far — the "redundancy" half of marginal relevance.
 	//
@@ -126,7 +153,7 @@ func Apply(in []rank.Candidate, opts Options) Result {
 			}
 			// Marginal relevance: the score, discounted by how similar
 			// this is to everything already chosen.
-			val := lambda*working[i].Score - (1-lambda)*maxSim[i]
+			val := lambda*(working[i].Score/topScore) - (1-lambda)*maxSim[i]
 			if bestIdx == -1 || val > bestVal {
 				bestIdx, bestVal = i, val
 			}

@@ -133,3 +133,41 @@ func BenchmarkApply200(b *testing.B) {
 		Apply(in, opts)
 	}
 }
+
+// The lambda blend must not depend on the ABSOLUTE scale of the relevance scores.
+//
+// val = lambda*score - (1-lambda)*similarity, and similarity is a Jaccard in
+// [0,1]. So a tune whose weights sum to 1.66 and one whose weights sum to 1.0 —
+// same ratios, same lambda — put the diversity term at different relative strength,
+// and rank differently. The tune tool refuses a vector that does not sum to 1.0
+// precisely because "the sum IS the scale"; the engine's built-in default sums to
+// 1.66, so every stored tune silently re-tunes diversification.
+//
+// This is the test that says the two must agree: the same items, the same lambda,
+// scores doubled or halved.
+func TestTheOrderDoesNotDependOnTheScoreScale(t *testing.T) {
+	mk := func(scale float64) []rank.Candidate {
+		return []rank.Candidate{
+			// A is taken first. B is a near-duplicate; C is fresh and weaker.
+			{ID: 1, Score: 1.00 * scale, TagIDs: []int32{1, 2, 3}},
+			{ID: 2, Score: 0.95 * scale, TagIDs: []int32{1, 2, 3}},
+			{ID: 3, Score: 0.60 * scale, TagIDs: []int32{7, 8, 9}},
+		}
+	}
+	ids := func(r Result) []int64 {
+		out := make([]int64, 0, len(r.Items))
+		for _, c := range r.Items {
+			out = append(out, c.ID)
+		}
+		return out
+	}
+	base := ids(Apply(mk(1.0), Options{Requested: 2, Lambda: 0.75, MMRK: 10}))
+	for _, scale := range []float64{0.5, 2.0, 10.0} {
+		got := ids(Apply(mk(scale), Options{Requested: 2, Lambda: 0.75, MMRK: 10}))
+		if len(got) != len(base) || got[0] != base[0] || got[1] != base[1] {
+			t.Fatalf("scale %.1f reordered the list: %v vs %v at scale 1.0. "+
+				"lambda mixes a score with a [0,1] similarity, so the score's scale is "+
+				"part of the algorithm unless it is normalised", scale, got, base)
+		}
+	}
+}
