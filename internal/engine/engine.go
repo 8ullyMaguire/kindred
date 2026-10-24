@@ -612,6 +612,14 @@ func DefaultTune() rank.Tune {
 			// --name no_length --set length_fit=0` removes it and `kindred eval
 			// --tune no_length` measures what the two lists differ by.
 			"length_fit": 0.08,
+			// walk: the multi-hop reach over the tag graph (#74). It is the
+			// only dimension that can score a work sharing NO tag with any
+			// seed, so it earns a weight on a different argument from the
+			// others -- coverage of a case they cannot see. 0.06 is small
+			// enough that a two-hop guess cannot outrank a direct match, and
+			// the ablation (`kindred tune --name no_walk --set walk=0`) is
+			// what decides the number.
+			"walk": 0.06,
 		},
 	}
 }
@@ -624,6 +632,36 @@ func DefaultTune() rank.Tune {
 // through to 500, and a caller who typo'd `book:1` was told the server had a
 // fault when the fault was theirs.
 var ErrUnsupportedKind = errors.New("unsupported kind")
+
+// graphOf exposes the engine's co-occurrence index as the walk's read-only
+// interface, or nil when this deployment has none.
+//
+// A nil *graph.CSR must become a nil INTERFACE: returning the typed nil would make
+// `g == nil` false inside WalkMass and turn "no graph" into a nil-pointer panic on
+// the first Neighbours call. That is the classic Go nil-interface trap, and it is
+// written down here because a test with a real graph cannot catch it.
+func graphOf(e *Engine) signal.Graph {
+	if e == nil || e.Graph == nil {
+		return nil
+	}
+	return e.Graph
+}
+
+// seedTagIDs collects the seeds' tag ids, deduplicated. A tag on twelve seeds is
+// one restart target, not twelve.
+func seedTagIDs(seeds []rank.Candidate) []int32 {
+	seen := make(map[int32]bool, 64)
+	out := make([]int32, 0, 64)
+	for _, s := range seeds {
+		for _, id := range s.TagIDs {
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
 
 // Recommend produces a ranked list.
 func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
@@ -765,12 +803,20 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The walk's mass, computed once per request over the whole tag graph.
+	//
+	// A nil graph (lite mode, or a mirror whose `kindred graph build` never ran)
+	// leaves the mass empty, and the signal then skips for every candidate and
+	// names itself in meta.degraded[] -- never a silent zero.
+	walkMass, walkTotal := signal.WalkMass(graphOf(e), seedTagIDs(seeds), signal.WalkOptions{})
 	sigs, tune := e.signals(ctx, seeds, collabVotes, collabScale, tuneWeights, tuneName, !req.NoOwnerTaste,
 		signalOptions{
 			sessionTaste:         req.SessionTaste,
 			sessionTasteEvidence: req.SessionTasteEvidence,
 			docFreq:              docFreq,
 			corpusTotal:          corpusTotal,
+			walkMass:             walkMass,
+			walkTotal:            walkTotal,
 		})
 	ranked, meta, err := rank.Score(ctx, cands, seeds, sigs, tune, e)
 	if err != nil {
@@ -1606,6 +1652,11 @@ type signalOptions struct {
 	sessionTasteEvidence map[int32]float64
 	docFreq              map[int32]float64
 	corpusTotal          float64
+	// walkMass is the personalised-PageRank mass the seeds' tags spread across
+	// the tag graph, and walkTotal its sum. Computed once per request because
+	// it depends on the seeds, never on the candidate.
+	walkMass  map[int32]float64
+	walkTotal float64
 }
 
 func (e *Engine) signals(ctx context.Context, seeds []rank.Candidate, collabVotes map[int64]float64, collabScale float64, overrides map[string]float64, tuneName string, personal bool, opts ...signalOptions) ([]rank.Signal, rank.Tune) {
@@ -1714,6 +1765,22 @@ func (e *Engine) signals(ctx context.Context, seeds []rank.Candidate, collabVote
 	// bookmark evidence" is distinguishable from "collaborative filtering is
 	// broken".
 	sigs = append(sigs, signal.Collab{Votes: collabVotes, Scale: collabScale})
+
+	opts0 := signalOptions{}
+	if len(opts) > 0 {
+		opts0 = opts[0]
+	}
+
+	// walk is the one dimension that can reach a work sharing NO tag with any
+	// seed: mass travels seed tag -> co-occurring tag -> tag co-occurring with
+	// THAT, so the reach is over paths rather than edges (#74). Every other tag
+	// dimension here stops at one hop.
+	//
+	// Registered UNCONDITIONALLY, for the seventh time and the same reason: with
+	// no graph it skips for every candidate and names itself in meta.degraded[],
+	// so "this mirror has no co-occurrence index" is distinguishable from "the
+	// walk is broken".
+	sigs = append(sigs, signal.Walk{Mass: opts0.walkMass, Total: opts0.walkTotal, MinMass: 1e-4})
 
 	// session_taste is the reader's OWN learned preferences, read from the
 	// arena's `arena_user_tag_weights` and passed in on the request.
