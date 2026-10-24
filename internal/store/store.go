@@ -332,6 +332,16 @@ CREATE TABLE IF NOT EXISTS embeddings (
 	vec       BLOB NOT NULL
 );
 
+-- ALS factors (#89). A separate table from embeddings on purpose: embeddings holds TAG
+-- vectors (kind is implied by the writer), these are WORK vectors written by a different
+-- command with different hyperparameters. One table would make the row's meaning depend
+-- on which id it holds -- the arena's id-aliasing mistake, in vectors.
+CREATE TABLE IF NOT EXISTS work_factors (
+	work_id INTEGER PRIMARY KEY,
+	dim     INTEGER NOT NULL,
+	vec     BLOB NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tunes (
 	name    TEXT PRIMARY KEY,
 	weights TEXT NOT NULL,

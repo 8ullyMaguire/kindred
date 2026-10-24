@@ -29,7 +29,8 @@ commands:
   crawl     fetch AO3 work pages into the mirror (the only networked subcommand)
   profile   build, list, show and rate taste profiles
   rate      fold one like/dislike into a profile (alias for 'profile rate')
-  corpus-query  ask a question about the corpus (fandom-ranking, underrated, tag-neighbours)
+  corpus-query  ask a question about the corpus (fandom-ranking, underrated, tag-neighbours,
+            surprise, tag-trend)
   browse      recent works matching a fandom family and a concept family
   eval      score the recommender against held-out bookmarks (recall@K, NDCG@K)
   stats     print corpus and index statistics
@@ -38,6 +39,7 @@ commands:
   fetch     pull a snapshot from a peer's .onion service
   tune      inspect or set signal weights
   embed-check  fingerprint the embedding table and compare it with the previous build
+  als       train implicit-feedback factors over the mirror's reader interactions
 
 run "kindred <command> -h" for command flags.
 `
@@ -64,6 +66,8 @@ func main() {
 		err = runIngest(ctx, args)
 	case "embed":
 		err = runEmbed(ctx, args)
+	case "als":
+		err = runALS(ctx, args)
 	case "embed-check":
 		err = runEmbedCheck(ctx, args)
 	case "recommend":

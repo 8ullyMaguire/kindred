@@ -50,6 +50,15 @@ type Engine struct {
 	// needs a second index. The Pi runs in this mode.
 	Lite bool
 
+	// latentOnce guards the ALS factor model, and it is loaded lazily for a measured
+	// reason: 112,935 works x 32 float32 is 14 MB, and the default tune weights the
+	// latent signal at 0. Loading it when the signal list is built would pay that on
+	// every request that never uses it; the signal's Score calls this instead, and
+	// rank.Score only runs a signal whose weight is non-zero.
+	latentOnce    sync.Once
+	latentFactors map[int64][]float32
+	latentErr     error
+
 	// EmbedDim is the embedding width, for the reason string.
 	EmbedDim int
 
@@ -599,6 +608,11 @@ func DefaultTune() rank.Tune {
 			// opinion. A tune can raise it on a large mirror.
 			"idf_overlap": 0.12,
 			// seed_agreement asks a different question from idf_overlap:
+			// latent is the ALS factor space. It ships at 0 -- see the registration
+			// comment: the ablation that decides its weight runs through `--tune als`,
+			// and a default that moves before its measurement is the bug this project
+			// keeps finding (a weight nobody chose, steering every reader).
+			"latent": 0.0,
 			// not "match one seed well" but "speak to most of them".
 			// With one seed it is a restatement of idf_overlap and skips,
 			// so a one-seed request pays nothing for it.
@@ -1890,6 +1904,18 @@ func (e *Engine) signals(ctx context.Context, seeds []rank.Candidate, collabVote
 	// docs/HANDOFF-2026-10-24b-length.md records the ablation that produced it.
 	sigs = append(sigs, signal.LengthFit{MaxSeeds: 40})
 
+	// latent is the ALS factor space (#89): the only dimension here learned from what
+	// readers CHOSE, as opposed to collab's pair counts. It relates works that share no
+	// reader through the factors, which no tag signal can do.
+	//
+	// Registered UNCONDITIONALLY and weighted at ZERO in DefaultTune, which is the
+	// opposite of the length_fit block above and deliberately so: length_fit shipped with
+	// a weight because an ablation had produced one, and this signal has not been
+	// measured yet. The zero means `--tune als` is the only caller today; the ablation
+	// decides whether it earns a weight, and `docs/HANDOFF-2026-10-24i-als.md` records
+	// what it found. A tune that raises it is the measurement, not the assumption.
+	sigs = append(sigs, signal.Latent{Load: e.latentModel, MaxSeeds: 8})
+
 	// embedding places a work in the tag-embedding space and scores its
 	// cosine to the seeds' position there.
 	//
@@ -2153,4 +2179,28 @@ func (e *Engine) toCandidates(ctx context.Context, ents []corpus.Entity) ([]rank
 		})
 	}
 	return out, nil
+}
+
+// latentModel loads the ALS work factors once per process, and reports a load failure as
+// an absence rather than as a zero score.
+//
+// The error is kept rather than swallowed: a table that exists but cannot be decoded is a
+// different condition from a table that was never trained, and the second is normal on a
+// fresh deployment. Both surface as "no factors", and the distinction is left in the
+// field for a caller that wants to check (a health endpoint, a test).
+func (e *Engine) latentModel() map[int64][]float32 {
+	e.latentOnce.Do(func() {
+		if e.Store == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, factors, err := e.Store.LoadWorkFactors(ctx)
+		if err != nil {
+			e.latentErr = err
+			return
+		}
+		e.latentFactors = factors
+	})
+	return e.latentFactors
 }
