@@ -151,6 +151,12 @@
       {{end}}
     </tbody>
   </table>
+
+{{else}}
+  <p class="count" data-testid="eval-algos-empty" data-empty="true">
+    No algorithm votes yet. <a href="/algo">/algo</a> puts one seed through two
+    weight vectors and records which list a reader preferred.
+  </p>
   <p class="hint" data-testid="eval-vote-standard">
     From <a href="/algo">/algo</a>: a reader saw two lists and chose one. A
     draw is stored rather than dropped, or every win rate inflates as readers
@@ -158,11 +164,6 @@
     a reader who could not choose has said nothing about which list is better. A
     record becomes evidence only when a two-sided sign test over the decisive
     comparisons gives p &lt; 0.05 with at least ten of them.
-  </p>
-{{else}}
-  <p class="count" data-testid="eval-algos-empty" data-empty="true">
-    No algorithm votes yet. <a href="/algo">/algo</a> puts one seed through two
-    weight vectors and records which list a reader preferred.
   </p>
 {{end}}
 
