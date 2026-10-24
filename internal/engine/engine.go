@@ -39,6 +39,11 @@ type Engine struct {
 	DocFreq *corpus.DocFreq
 	Graph   *graph.CSR
 
+	// SummaryDocFreq is the term table over `works.summary` (#52), or nil when this mirror
+	// has not been ingested. The summary_style signal SKIPS without it and says so, which is
+	// the same contract DocFreq has for the idf signals.
+	SummaryDocFreq *corpus.SummaryDocFreq
+
 	// CoReaders is the author-to-author co-readership index (#35), or nil when this mirror
 	// has no interaction table. Nil is a supported state: the author surface then answers
 	// from tags alone, exactly as before the arm existed.
@@ -649,6 +654,11 @@ func DefaultTune() rank.Tune {
 			// the ablation (`kindred tune --name no_walk --set walk=0`) is
 			// what decides the number.
 			"walk": 0.06,
+			// summary_style is the only signal that reads PROSE (#52). It ships at 0 for the
+			// same reason latent does: a weight nobody measured is the bug this project keeps
+			// finding. `kindred tune --name with_summary --set summary_style=0.1` is the
+			// ablation, and docs/HANDOFF-2026-10-24l-summary.md records what it found.
+			"summary_style": 0.0,
 		},
 	}
 }
@@ -1930,6 +1940,16 @@ func (e *Engine) signals(ctx context.Context, seeds []rank.Candidate, collabVote
 	// decides whether it earns a weight, and `docs/HANDOFF-2026-10-24i-als.md` records
 	// what it found. A tune that raises it is the measurement, not the assumption.
 	sigs = append(sigs, signal.Latent{Load: e.latentModel, MaxSeeds: 8})
+
+	// summary_style reads the summaries, the only prose in the mirror (#52). Registered
+	// UNCONDITIONALLY and weighted at ZERO in DefaultTune: the ablation through `--tune` is
+	// what decides the number, and the signal names itself in meta.degraded[] when the term
+	// table is absent rather than scoring a silent zero.
+	sigs = append(sigs, signal.SummaryStyle{
+		DocFreq:  e.SummaryDocFreq,
+		MaxSeeds: 3,
+		MinScore: 0.02,
+	})
 
 	// embedding places a work in the tag-embedding space and scores its
 	// cosine to the seeds' position there.

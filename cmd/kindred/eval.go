@@ -219,10 +219,24 @@ func runEval(ctx context.Context, args []string) error {
 		docFreq = df
 	}
 
+	// The summary term table (#52).
+	var summaryDocFreq *corpus.SummaryDocFreq
+	if sdf, sdfErr := corpus.LoadSummaryDocFreq(c.CorpusDB); sdfErr != nil {
+		if !errors.Is(sdfErr, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "eval: summary docfreq: %v\n", sdfErr)
+		}
+		fmt.Fprintln(os.Stderr, "eval: no summary term table; summary_style will skip -- run \"kindred ingest\"")
+	} else {
+		summaryDocFreq = sdf
+	}
+
 	eng := &engine.Engine{
 		Store: s, Corpus: ao3, Graph: g, Collab: collabIdx,
 		PoolSize: *pool, TopN: c.TopN, Lite: *lite, EmbedDim: c.EmbedDim,
 		DocFreq: docFreq,
+		// The summary term table, loaded for the same reason docFreq is: an evaluation that
+		// silently skips a signal measures a different recommender from the one serving.
+		SummaryDocFreq: summaryDocFreq,
 	}
 	if ratings, median, rerr := s.EffectiveRatings(ctx); rerr == nil {
 		eng.SetArenaRatings(ratings, median)

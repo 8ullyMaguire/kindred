@@ -314,7 +314,7 @@ func (a *AO3) CandidateRowsSlim(ctx context.Context, ids []int64) ([]Entity, err
 	}
 	rows, err := a.DB.QueryContext(ctx, `
 		SELECT id, url, title, word_count, hits, kudos, bookmarks, language,
-		       complete, update_date, first_seen
+		       complete, update_date, first_seen, COALESCE(summary, '')
 		FROM works WHERE id IN (`+makePlaceholders(len(args))+`)`, args...)
 	if err != nil {
 		return nil, err
@@ -335,13 +335,19 @@ func (a *AO3) CandidateRowsSlim(ctx context.Context, ids []int64) ([]Entity, err
 			hits       sql.NullInt64
 			kudos      sql.NullInt64
 		)
+		var summary string
 		if err := rows.Scan(&e.ID, &url, &title, &wordCount, &hits, &kudos,
-			&bookmarks, &language, &complete, &updateDate, &firstSeen); err != nil {
+			&bookmarks, &language, &complete, &updateDate, &firstSeen, &summary); err != nil {
 			return nil, err
 		}
 		e.Kind = AO3Kind
 		e.Title = title.String
 		e.URL = url.String
+		// The summary travels with the candidate because a signal reads it (#52). It did not
+		// until 2026-10-24: `summary_style` was registered, weighted, and INERT for every
+		// candidate, because this query never selected the column -- the ranking was identical
+		// under two tunes that differ by a tenth of the weight, which is what gave it away.
+		e.Summary = summary
 		e.Stats = map[string]float64{
 			"hits": float64(hits.Int64), "kudos": float64(kudos.Int64),
 			"word_count":    float64(wordCount.Int64),

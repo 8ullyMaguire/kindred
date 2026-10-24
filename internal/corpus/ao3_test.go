@@ -152,6 +152,17 @@ func TestEntityUsesTheSamePathAsThePool(t *testing.T) {
 	if single.Stats["has_bookmarks"] != pool[0].Stats["has_bookmarks"] {
 		t.Fatal("has_bookmarks differs between the single and pool paths")
 	}
+	// The SUMMARY was the field that differed, and nothing compared it: the pool query never
+	// selected the column, so every candidate carried an empty summary and `summary_style`
+	// skipped for every candidate on every request while reporting itself as registered
+	// (#52). A field-by-field comparison here is what makes adding a signal input safe.
+	if single.Summary != pool[0].Summary {
+		t.Fatalf("summary differs between the single path (%q) and the pool path (%q)",
+			single.Summary, pool[0].Summary)
+	}
+	if pool[0].Summary == "" {
+		t.Fatal("the pool path returned an empty summary for a work whose summary is 'a summary'")
+	}
 }
 
 func TestEntityMissingIsNotFound(t *testing.T) {

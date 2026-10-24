@@ -189,17 +189,30 @@ func runServe(ctx context.Context, args []string) error {
 	} else {
 		docFreq = df
 	}
+
+	// The summary term table (#52), the only signal input that reads prose. Missing is the
+	// same contract as docfreq above: the signal skips and names itself in meta.degraded[].
+	var summaryDocFreq *corpus.SummaryDocFreq
+	if sdf, sdfErr := corpus.LoadSummaryDocFreq(c.CorpusDB); sdfErr != nil {
+		if !errors.Is(sdfErr, os.ErrNotExist) {
+			logger.Warn("summary docfreq", "err", sdfErr)
+		}
+	} else {
+		summaryDocFreq = sdf
+		logger.Info("summary term table loaded", "terms", len(sdf.ByHash), "docs", sdf.Total)
+	}
 	eng := &engine.Engine{
-		Store:     s,
-		Corpus:    ao3,
-		Graph:     g,
-		Collab:    collabIdx,
-		CoReaders: coReaders,
-		PoolSize:  poolSize,
-		TopN:      c.TopN,
-		Lite:      lite,
-		EmbedDim:  embedDim,
-		DocFreq:   docFreq,
+		Store:          s,
+		Corpus:         ao3,
+		Graph:          g,
+		Collab:         collabIdx,
+		CoReaders:      coReaders,
+		SummaryDocFreq: summaryDocFreq,
+		PoolSize:       poolSize,
+		TopN:           c.TopN,
+		Lite:           lite,
+		EmbedDim:       embedDim,
+		DocFreq:        docFreq,
 		// The tag-pool query is 87% of a recommendation's CPU (profiled
 		// 2026-10-23) and is a pure function of the request, so identical
 		// requests are answered from a small bounded cache. Measured: 2.6 s

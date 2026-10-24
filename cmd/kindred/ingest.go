@@ -16,7 +16,11 @@ func runIngest(ctx context.Context, args []string) error {
 	fs := newFlagSet("ingest")
 	c := bindConfig(fs)
 	var (
-		doEmbed = fs.Bool("embed", false, "after building the index, print the command that builds the embeddings")
+		doEmbed     = fs.Bool("embed", false, "after building the index, print the command that builds the embeddings")
+		summaryOnly = fs.Bool("summary-only", false,
+			"build ONLY the summary term table (#52) and stop: it is a property of the corpus, "+
+				"rebuildable in seconds, and rebuilding the graph to get it would be minutes of "+
+				"the reader's downtime for a table nothing else reads")
 	)
 	c, err := finishConfig(c, fs, args)
 	if err != nil {
@@ -31,6 +35,16 @@ func runIngest(ctx context.Context, args []string) error {
 
 	start := time.Now()
 	log := s.Log
+
+	if *summaryOnly {
+		terms, docs, err := corpus.BuildSummaryDocFreq(ctx, s.Corpus, c.CorpusDB)
+		if err != nil {
+			return fmt.Errorf("build summary doc frequency: %w", err)
+		}
+		fmt.Printf("summarydf terms=%d docs=%d %s (%.1fs)\n", terms, docs,
+			corpus.SummaryDocFreqPath(c.CorpusDB), time.Since(start).Seconds())
+		return log(ctx, "summarydf", fmt.Sprintf("terms=%d docs=%d", terms, docs))
+	}
 
 	b := &graph.Builder{
 		Corpus: s.Corpus, Store: execAdapter{s.DB}, TopN: c.TopN, DBPath: c.DB,
@@ -93,6 +107,18 @@ func runIngest(ctx context.Context, args []string) error {
 	fmt.Printf("docfreq tags=%d works=%.0f bytes=%d %s\n",
 		tags, works, docFreqBytes(tags), corpus.DocFreqPath(c.CorpusDB))
 	if err := log(ctx, "docfreq", fmt.Sprintf("tags=%d works=%.0f", tags, works)); err != nil {
+		return err
+	}
+
+	// The summary term table (#52): document frequency over the words of every summary, the
+	// only prose in the mirror. Same reasoning as the tag table above -- it is a property of
+	// the corpus, it takes a full scan to build, and a request must not pay for it.
+	sterms, sdocs, err := corpus.BuildSummaryDocFreq(ctx, s.Corpus, c.CorpusDB)
+	if err != nil {
+		return fmt.Errorf("build summary doc frequency: %w", err)
+	}
+	fmt.Printf("summarydf terms=%d docs=%d %s\n", sterms, sdocs, corpus.SummaryDocFreqPath(c.CorpusDB))
+	if err := log(ctx, "summarydf", fmt.Sprintf("terms=%d docs=%d", sterms, sdocs)); err != nil {
 		return err
 	}
 
