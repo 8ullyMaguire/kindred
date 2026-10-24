@@ -115,6 +115,10 @@ func (s *Server) Routes() http.Handler {
 	// because the mirror has no author table: an author is a byline string
 	// and /author already addresses one that way.
 	mux.HandleFunc("GET /api/v1/authors/similar", s.handleSimilarAuthors)
+	// The reader's own learned taste (#36): read it out, import it back. Both are scoped to
+	// the session cookie, and neither can address another reader.
+	mux.HandleFunc("GET /api/v1/taste", s.handleGetTaste)
+	mux.HandleFunc("PUT /api/v1/taste", s.handlePutTaste)
 
 	// The unofficial AO3 read API. Same shape as the endpoints a client
 	// would use against ao3.org, so a caller can point at kindred instead.

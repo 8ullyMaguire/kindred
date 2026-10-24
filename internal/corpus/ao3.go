@@ -776,3 +776,45 @@ func betterAuthorName(candidate, current string) bool {
 	}
 	return candidate < current
 }
+
+// TagIDsByName resolves tag NAMES to ids, for the taste import (#36).
+//
+// The mirror can hold the same name under more than one tag TYPE -- the fixture reproduces
+// this on purpose, because the real one does the same (`tag 1` as both a fandom and a
+// freeform). A name is therefore resolved to the SMALLEST id carrying it, deterministically,
+// and the caller is told nothing about the ambiguity because the alternative is a 409 for a
+// word the reader typed correctly. A name the mirror has never seen is simply absent from the
+// map, which is the caller's cue to refuse it BY NAME.
+func (a *AO3) TagIDsByName(ctx context.Context, names []string) (map[string]int64, error) {
+	out := make(map[string]int64, len(names))
+	if len(names) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(names))
+	for _, n := range names {
+		args = append(args, strings.ToLower(strings.TrimSpace(n)))
+	}
+	rows, err := a.DB.QueryContext(ctx,
+		`SELECT id, name FROM tags WHERE lower(name) IN (`+makePlaceholders(len(names))+`)
+		 ORDER BY id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("corpus: tag ids by name: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("corpus: scan tag id: %w", err)
+		}
+		key := strings.ToLower(strings.TrimSpace(name))
+		// ORDER BY id means the FIRST row for a name is the smallest id, and the first wins.
+		if _, seen := out[key]; !seen {
+			out[key] = id
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("corpus: tag ids by name: %w", err)
+	}
+	return out, nil
+}

@@ -700,6 +700,35 @@ check "search by a URL for a missing work says so" \
 # key is a secret), so inferring "no owner here" from the gate's env would
 # report drift on a correctly configured deployment -- the exact mistake this
 # gate exists to catch, inverted.
+# The reader's own taste vector (#36).
+#
+# Both halves are session-scoped, and the thing that must never happen is an import landing on
+# an anonymous owner key. The gate runs with no cookie, so it can prove the REFUSAL; the round
+# trip (import, export, merge, replace) is proven by the api suite, where a cookie exists.
+echo
+echo "the taste vector refuses an anonymous caller"
+taste_get=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$TARGET/api/v1/taste" 2>/dev/null) || true
+if [ "$taste_get" = "401" ]; then
+  ok "GET /api/v1/taste is 401 without a session"
+elif [ -z "$taste_get" ] || [ "$taste_get" = "000" ]; then
+  unreachable=$((unreachable+1)); echo "  UNREACHABLE  GET /api/v1/taste"
+else
+  bad "GET /api/v1/taste answered $taste_get without a session; a learned vector is the reader's own"
+fi
+taste_put=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' -X PUT \
+  -H 'content-type: application/json' -d '{"tags":[{"id":1,"weight":0.5}]}' \
+  "$TARGET/api/v1/taste" 2>/dev/null) || true
+if [ "$taste_put" = "401" ]; then
+  ok "PUT /api/v1/taste is 401 without a session"
+elif [ -z "$taste_put" ] || [ "$taste_put" = "000" ]; then
+  unreachable=$((unreachable+1)); echo "  UNREACHABLE  PUT /api/v1/taste"
+else
+  bad "PUT /api/v1/taste answered $taste_put without a session; an anonymous import must never write"
+fi
+# The empty-identifier bug, at the surface where it would have shown: an anonymous request must
+# not be served a vector rather than be handed the shared 'nobody' owner's one.
+check_not "an anonymous export names no tags" "$TARGET/api/v1/taste" '"weight":'
+
 echo
 echo "standings name the owner-cohort weighting"
 owner_env_file="${KINDRED_DEPLOY_ENV:-/etc/default/kindred-restrictions}"

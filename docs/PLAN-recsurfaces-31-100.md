@@ -38,7 +38,7 @@ Four statuses:
 | 33 | Multi-seed intersection scoring | BUILT | `signal.SeedAgreement`: IDF-weighted coverage of each seed, averaged over seeds INCLUDING zeros, so a perfect match on 1 of 4 seeds scores 0.25 and partial matches on all 4 score 0.625. Skips (and names itself in `meta.degraded`) with fewer than two usable seeds, because one seed is `idf_overlap` under a second name. Weight 0.10, and the ablation is a flag (`kindred eval --tune ablate_no_agreement`). |
 | 34 | "Works this tag needs" gap analysis | BUILT | `corpusquery.TagGap` + `GET /api/v1/corpus-query/tag-gap`: two hops (seed → its 30 highest-ASSOCIATION tags → the tags those works carry and the seed's do not), ranked by `(enrichment−1) × (1−lift)` with support as the evidence gate. Rows print own/corpus/lift/both rates so any row is checkable by hand. Three popularity traps were fixed in sequence (support as the score, a neighbourhood of archive-wide tags, candidates chosen by support); the live archive's top rows are still rating/meta attributes, and the documented fix is a fandom-anchored neighbourhood. 125 gate checks; the query is 14 s (NOT EXISTS as a materialised CTE, 600→150 candidates). See `docs/HANDOFF-2026-10-24j-taggap.md`. |
 | 35 | Author-author co-readership | BUILT | `internal/authorcf` + `kindred author-eval`; `/api/v1/authors/similar` now merges two arms ordered by the share of the seed author's READERS who read the candidate, with `?by=tags` reproducing the old ordering and `ranked_by` naming the arm that answered. Measured on a reader holdout (40 seeds, 5,686 pairs, k=10): recall 0.0146 tag profile vs 0.0346 co-readership, better on 34 seeds, worse on 0 (z=5.83); the candidate set is co-reader-defined, which advantages that arm and is stated in the handoff. The evaluation found a live defect first: the tag profile kept the 24 RAREST tags, so an author whose rarest tags were all singletons (Masterweaver: 26 works, 61 readers) got an EMPTY list — 2 of 25 sampled authors; a `df>=3` floor (applied only when a document-frequency table exists) fixed it, 25/25. `orphan_account`/`Anonymous` excluded as candidates. Gate 130 checks. See `docs/HANDOFF-2026-10-24k-authorcf.md`. |
-| 36 | Session taste vector export/import | OPEN | No `/api/v1/taste`; session taste is derived per request (`signal/session_taste.go`) and never serialised. |
+| 36 | Session taste vector export/import | BUILT | `GET`/`PUT /api/v1/taste`, scoped to the arena cookie. Export carries tag NAMES and the evidence count `n` (the signal divides by √n, so a weight without its count is a different claim); import is **merge** by default and replaces only on `?replace=1`, refuses an unknown tag NAME rather than silently dropping it, validates the whole vector before writing any of it, and reports `before`/`after`/`replaced`. The import path exposed a latent defect: `OwnerKey(ctx, "")` hashed the empty string into a real owner key, so every anonymous caller shared one "nobody" vector — it now returns `ErrNoIdentifier`. Import by name resolves through `corpus.TagIDsByName` (lowest id on a duplicate name, the mirror really does hold one name under two types). 6 mutants killed. |
 | 37 | Tag hierarchy from embedding clusters | OPEN | `internal/tagfamily` holds a hand-written `families.json`; nothing clusters the embeddings into a tree. |
 | 38 | Quality-adjusted co-occurrence | PARTIAL | Co-occurrence edges are shrunk by `DefaultShrinkK` (`collab.go`) — evidence weighting, not per-work kudos weighting. |
 | 39 | Bayesian average for tag quality | BUILT | The tag page printed `mean kudos` over as few as three works — a number that reads as a quality claim and is really one hit. Now a fourth number, shrunk toward the corpus mean: `(sum + 10*prior)/(n + 10)`, with the prior and the pseudo-work weight printed beside it (`data-prior`, `data-weight`). The prior excludes zero-kudos works (112,937 works, most unkudosed — the all-in mean would shrink every tag toward "nobody liked this") and is cached per process on a detached context. Symmetric by construction and tested both ways: a tag worse than the corpus is pulled up. No ranking consumes it — `quality` already measures a work's own kudos, and a second tag-level quality dimension arrives with a measurement or not at all. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 32 | 31, 33, 34, 35, 52, 39, 40, 41, 42, 43, 46, 50, 53, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84, 89 |
+| BUILT | 33 | 31, 33, 34, 35, 36, 52, 39, 40, 41, 42, 43, 46, 50, 53, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84, 89 |
 | PARTIAL | 5 | 32, 38, 45, 49, 72 |
-| OPEN | 10 | 36, 37, 44, 47, 48, 55, 75, 77, 80, 93 |
+| OPEN | 9 | 37, 44, 47, 48, 55, 75, 77, 80, 93 |
 | DECLINED | 19 | 58, 59, 68, 69, 73, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
@@ -119,7 +119,7 @@ open of 30), the whole list stood at 22 built, 13 partial, 61 open, 4 without a 
 Five of the open ones (33, 46, 64, 67, 71) shipped on 2026-10-23, and #11's
 enumeration half shipped on 2026-10-23b (it moves from OPEN to PARTIAL: the
 candidate source exists, the nearest-tags surface does not), so the live total
-is **32 built, 14 partial, 50 open, 4 without a premise** — 100 accounted
+is **33 built, 14 partial, 50 open, 4 without a premise** — 100 accounted
 (#61, #62, #78, #40 and #65 shipped on 2026-10-23d: a tag feed, a seed feed,
 the search descriptor, the work-pair report, the reading path and the
 new-since-visit list, all verified on the deployed binary; 2026-10-23g added the
@@ -146,7 +146,7 @@ number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). See
 corrected this file's totals. 2026-10-24b/c/d shipped #41 (length_fit), #84 (the significance test the interleave log
 was missing), #74 (personalised PageRank), #39 (the tag shelf's shrunk kudos) and #53
 (the Bradley-Terry cross-check) and #31 (tag trend). **The counts below are the table's,
-not a memory of them: 32 built, 5 partial, 10 open, 19 declined, 4 without a premise.**
+not a memory of them: 33 built, 5 partial, 9 open, 19 declined, 4 without a premise.**
 
 **Every remaining row was triaged on 2026-10-24 against the data actually in the mirror
 (`docs/HANDOFF-2026-10-24h-triage.md`), and the verdict is now a STATUS: `DECLINED` means

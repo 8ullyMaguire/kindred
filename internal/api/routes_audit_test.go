@@ -48,9 +48,17 @@ var routeTable = map[string]routeAudit{
 		"not by a reader"},
 
 	// --- reached by a page ---
-	"GET /api/v1/recommend":                {Page: "/recommend"},
-	"GET /api/v1/tags/{id}/similar":        {Page: "/neighbours"},
-	"GET /api/v1/authors/similar":          {Page: "/author"},
+	"GET /api/v1/recommend":         {Page: "/recommend"},
+	"GET /api/v1/tags/{id}/similar": {Page: "/neighbours"},
+	"GET /api/v1/authors/similar":   {Page: "/author"},
+	// The taste vector (#36) has no page of its own yet: it is the READER's own model, exported
+	// so they can see and move it, and the page that will render it is the arena's own
+	// "what I have learned" panel. Recorded here rather than given a route that would be a page
+	// with nothing on it.
+	"GET /api/v1/taste": {Why: "the reader's own vector for export and for the arena panel; " +
+		"no standalone page, and inventing one would be a page about a table"},
+	"PUT /api/v1/taste": {Why: "an import surface: a caller posts a vector, and no page posts " +
+		"one on the reader's behalf today"},
 	"GET /api/v1/ao3/works":                {Page: "/search"},
 	"GET /api/v1/ao3/works/{id}":           {Page: "/work/{id}"},
 	"GET /api/v1/ao3/works/{id}/recommend": {Page: "/work/{id}"},

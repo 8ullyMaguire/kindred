@@ -137,6 +137,14 @@ func (t *timeValue) Scan(v any) error {
 // is deliberate: a cross-deployment linkable identifier is a privacy
 // leak, and the arena has no use for one.
 func (s *Store) OwnerKey(ctx context.Context, identifier string) (string, error) {
+	// An EMPTY identifier must not hash. HMAC(salt, "") is a perfectly good hex string, so the
+	// function used to return a real owner key for every anonymous caller -- one shared owner
+	// key for "nobody", which is the shape that would let one reader's learned taste apply to
+	// every visitor. Callers that treat "err != nil" as "no owner" (the pattern every one of
+	// them already uses) are correct only if this refuses.
+	if identifier == "" {
+		return "", ErrNoIdentifier
+	}
 	salt, err := s.StableSalt(ctx)
 	if err != nil {
 		return "", fmt.Errorf("arena owner key: %w", err)
@@ -890,6 +898,9 @@ type TagWeight struct {
 	Weight float64
 	N      int
 }
+
+// ErrNoIdentifier is returned by OwnerKey when there is no identifier to hash.
+var ErrNoIdentifier = errors.New("arena owner key: no identifier")
 
 // TagWeights returns a comparator's learned tag preferences, strongest
 // first.
