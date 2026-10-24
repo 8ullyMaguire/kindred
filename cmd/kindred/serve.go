@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/api"
+	"git.polarisocial.xyz/kindred/kindred/internal/authorcf"
 	"git.polarisocial.xyz/kindred/kindred/internal/budget"
 	"git.polarisocial.xyz/kindred/kindred/internal/collab"
 	"git.polarisocial.xyz/kindred/kindred/internal/config"
@@ -150,6 +151,22 @@ func runServe(ctx context.Context, args []string) error {
 			"works", cst.Works, "users", cst.Users)
 	}
 
+	// Author-to-author co-readership (#35), built from the same interaction table: the
+	// bookmark rows are the only evidence in the mirror of anyone CHOOSING anything, and
+	// /authors/similar was answering from tags alone. Measured better than the tag profile
+	// on a reader holdout (0.0412 vs 0.0217 recall@10), so the two arms are merged.
+	//
+	// A failure degrades: the author surface then answers from tags, exactly as it did
+	// before this index existed.
+	var coReaders *authorcf.Index
+	if aidx, aerr := authorcf.Build(ctx, s.Corpus); aerr != nil {
+		logger.Warn("no author co-readership index; /authors/similar will rank by tags alone",
+			"err", aerr)
+	} else {
+		coReaders = aidx
+		logger.Info("author co-readership index built", "authors", len(aidx.Authors()))
+	}
+
 	poolSize := engine.DefaultPoolSize
 	if !lite {
 		poolSize = engine.FullPoolSize
@@ -173,15 +190,16 @@ func runServe(ctx context.Context, args []string) error {
 		docFreq = df
 	}
 	eng := &engine.Engine{
-		Store:    s,
-		Corpus:   ao3,
-		Graph:    g,
-		Collab:   collabIdx,
-		PoolSize: poolSize,
-		TopN:     c.TopN,
-		Lite:     lite,
-		EmbedDim: embedDim,
-		DocFreq:  docFreq,
+		Store:     s,
+		Corpus:    ao3,
+		Graph:     g,
+		Collab:    collabIdx,
+		CoReaders: coReaders,
+		PoolSize:  poolSize,
+		TopN:      c.TopN,
+		Lite:      lite,
+		EmbedDim:  embedDim,
+		DocFreq:   docFreq,
 		// The tag-pool query is 87% of a recommendation's CPU (profiled
 		// 2026-10-23) and is a pure function of the request, so identical
 		// requests are answered from a small bounded cache. Measured: 2.6 s

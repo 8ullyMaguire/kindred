@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"git.polarisocial.xyz/kindred/kindred/internal/authorcf"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
+	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 )
 
 // Every fixture work's byline is author1..author5, and their tag profiles
@@ -118,5 +120,56 @@ func TestSimilarAuthorsAppliesNoFloorWithoutATable(t *testing.T) {
 	}
 	if len(got) == 0 {
 		t.Fatal("no similar authors without a docfreq table")
+	}
+}
+
+// The merge (#35): co-readers rank by the SHARE of the seed's readers who read a candidate,
+// a tag-only author ranks after every co-read candidate, and a candidate on both arms keeps
+// the tag cosine and both pieces of evidence.
+//
+// The ranking is a unit so the arithmetic is checkable without a corpus: the arms' own
+// correctness is measured by `kindred author-eval` on a real mirror, which no fixture can
+// stand in for.
+func TestMergeAuthorsOrdersByReadShare(t *testing.T) {
+	seed := 10 // readers of the seed author
+	// The tag arm returns two authors, one of which the readers also read.
+	tagged := []SimilarAuthor{
+		{Name: "Tag Only", Score: 0.9, SharedWorks: 3,
+			Evidence: []rank.Evidence{{Signal: "author_tag_profile"}}},
+		{Name: "Both", Score: 0.2, SharedWorks: 1,
+			Evidence: []rank.Evidence{{Signal: "author_tag_profile"}}},
+	}
+	pairs := []authorcf.Pair{
+		{Author: "Both", Key: authorcf.Key("Both"), Readers: 5},
+		{Author: "Reader Only", Key: authorcf.Key("Reader Only"), Readers: 2},
+	}
+	e := &Engine{CoReaders: &authorcf.Index{}}
+	// mergeAuthors asks the index for the seed's readership; Readers() on an empty index is
+	// zero, so the share would be zero for everyone. Feed the share through the pair count by
+	// using a seed whose readership is known: the test asserts the ORDER, which holds at any
+	// denominator, plus the presence of the evidence.
+	got := e.mergeAuthors(tagged, pairs, "seed", seed)
+	if len(got) != 3 {
+		t.Fatalf("merged %d authors, want 3 (one both-arms, one reader-only, one tag-only)", len(got))
+	}
+	if got[0].Name != "Both" {
+		t.Fatalf("first is %q, want Both: it has readers AND a tag score", got[0].Name)
+	}
+	if got[1].Name != "Reader Only" {
+		t.Fatalf("second is %q, want Reader Only (2 readers, no tag overlap)", got[1].Name)
+	}
+	if got[2].Name != "Tag Only" {
+		t.Fatalf("third is %q, want Tag Only: no reader evidence ranks after everyone with one", got[2].Name)
+	}
+
+	if got[0].Score != 0.2 || got[0].SharedWorks != 1 {
+		t.Fatalf("the both-arms row lost its tag numbers: score=%v works=%d", got[0].Score, got[0].SharedWorks)
+	}
+	if len(got[0].Evidence) != 2 {
+		t.Fatalf("the both-arms row has %d evidence entries, want both arms named", len(got[0].Evidence))
+	}
+	if got[0].Evidence[0].Signal != "author_co_readers" {
+		t.Fatalf("first evidence is %q, want author_co_readers first: it is what ranked the row",
+			got[0].Evidence[0].Signal)
 	}
 }

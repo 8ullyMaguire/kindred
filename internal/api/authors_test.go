@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -84,4 +85,55 @@ func TestSimilarAuthors(t *testing.T) {
 			t.Fatalf("status = %d, want 404", res.StatusCode)
 		}
 	})
+}
+
+// `by` names the arm. The default merges co-readership with the tag profile when this
+// mirror has an index; without one the response must SAY it answered from tags rather than
+// claim an ordering nothing computed. `by=tags` reproduces the pre-#35 order, and an unknown
+// arm is a 400 that names the two it accepts.
+func TestSimilarAuthorsArms(t *testing.T) {
+	ts := newTestServer(t)
+
+	read := func(t *testing.T, q string) (int, map[string]any) {
+		t.Helper()
+		res, err := http.Get(ts.URL + "/api/v1/authors/similar?name=author1" + q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return res.StatusCode, body
+	}
+
+	// The fixture server has no interaction table, so there is no co-readership index: the
+	// default arm must report itself as the tag profile.
+	code, body := read(t, "")
+	if code != http.StatusOK {
+		t.Fatalf("default status = %d, want 200", code)
+	}
+	if got := body["ranked_by"]; got != "tag_profile" {
+		t.Fatalf("default ranked_by = %v, want tag_profile on a mirror with no co-readership index", got)
+	}
+
+	code, body = read(t, "&by=tags")
+	if code != http.StatusOK {
+		t.Fatalf("by=tags status = %d, want 200", code)
+	}
+	if got := body["ranked_by"]; got != "tag_profile" {
+		t.Fatalf("by=tags ranked_by = %v", got)
+	}
+	if n, _ := body["returned"].(float64); n == 0 {
+		t.Fatal("by=tags returned no authors on a fixture where every author shares tags")
+	}
+
+	code, body = read(t, "&by=popularity")
+	if code != http.StatusBadRequest {
+		t.Fatalf("by=popularity status = %d, want 400", code)
+	}
+	if msg, _ := body["error"].(string); !strings.Contains(msg, "readers") || !strings.Contains(msg, "tags") {
+		t.Fatalf("the 400 does not name the accepted arms: %v", body["error"])
+	}
 }

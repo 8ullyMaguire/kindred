@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"git.polarisocial.xyz/kindred/kindred/internal/authorcf"
 	"log/slog"
 	"math"
 	"sort"
@@ -37,6 +38,11 @@ type Engine struct {
 	// docFrequencies.
 	DocFreq *corpus.DocFreq
 	Graph   *graph.CSR
+
+	// CoReaders is the author-to-author co-readership index (#35), or nil when this mirror
+	// has no interaction table. Nil is a supported state: the author surface then answers
+	// from tags alone, exactly as before the arm existed.
+	CoReaders *authorcf.Index
 
 	// AuthorMinDF is the document-frequency floor a tag must clear before it can join an
 	// author's similarity profile (0 = the default, similarAuthorMinDF). A tag on one or two

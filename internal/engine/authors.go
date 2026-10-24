@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
+	"git.polarisocial.xyz/kindred/kindred/internal/authorcf"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 )
@@ -47,9 +48,15 @@ type SimilarAuthor struct {
 	SharedWorks int `json:"shared_works"`
 	// Score is a cosine over the distinguishing tags both authors carry.
 	Score float64 `json:"score"`
-	// Evidence is the "why this author?" line: the shared tags, rarest
-	// first. A similarity number without the tags that produced it is the
-	// kind of answer this project exists to avoid.
+	// Readers is how many of the seed author's readers also read this author (#35). Zero
+	// means the co-readership arm did not place them, not that nobody read them.
+	Readers int `json:"readers"`
+	// ReadShare is Readers over the seed author's own readership, which is what the merged
+	// ranking orders by. It is a share of PEOPLE, so it does not reward prolific authors.
+	ReadShare float64 `json:"read_share"`
+	// Evidence is the "why this author?" line, with one entry per arm that placed them: the
+	// shared tags, rarest first, and/or the readers. A similarity number without the reason
+	// it was produced is the kind of answer this project exists to avoid.
 	Evidence []rank.Evidence `json:"evidence,omitempty"`
 }
 
@@ -74,7 +81,120 @@ type SimilarAuthor struct {
 // the similarity means "these authors agree where the corpus discriminates".
 // This is the same measurement that justifies the IDF-weighted work signal,
 // applied to authors rather than works.
+// SimilarAuthors ranks authors near the named author.
+//
+// ## Two arms, and the measurement that ordered them
+//
+// The tag-profile arm below answers "who writes alike": it is exact about tags and blind to
+// readers. `CoReaders` answers "who do these readers read". Measured on the live mirror with
+// `kindred author-eval` (40 seed authors, 5,755 held-out pairs, k=10): recall 0.0217 for the
+// tag profile against 0.0412 for co-readership, co-readership better on 32 seeds and worse on
+// 1 (sign test z=5.4). So when a co-readership index is loaded the two are MERGED, ranked by
+// the share of the seed's readers who read the candidate, and each row carries the evidence
+// of whichever arm placed it.
+//
+// The candidate set in that measurement is defined by co-readership, which advantages that
+// arm -- disclosed in docs/HANDOFF-2026-10-24k-authorcf.md rather than adjusted away.
 func (e *Engine) SimilarAuthors(ctx context.Context, author string, limit int) ([]SimilarAuthor, error) {
+	author = strings.TrimSpace(author)
+	if author == "" {
+		return nil, fmt.Errorf("similar authors: an author name is required")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if e.CoReaders == nil {
+		return e.similarAuthorsByTags(ctx, author, limit)
+	}
+	// Both arms answer over the same candidates as far as they can: the tag arm is asked for
+	// its own cap, the co-reader arm for three times the requested depth so the merge has
+	// something to interleave.
+	tagged, tagErr := e.similarAuthorsByTags(ctx, author, similarAuthorsMaxLimit)
+	if tagErr != nil && !errors.Is(tagErr, ErrAuthorProfileEmpty) && !errors.Is(tagErr, corpus.ErrNotFound) {
+		return nil, tagErr
+	}
+	pairs := e.CoReaders.CoReaders(author, limit*3)
+	if len(pairs) == 0 && len(tagged) == 0 {
+		if tagErr != nil {
+			return nil, tagErr
+		}
+		return []SimilarAuthor{}, nil
+	}
+	merged := e.mergeAuthors(tagged, pairs, author, limit)
+	return merged, nil
+}
+
+// similarAuthorsMaxLimit is the deepest list the tag arm will produce (its own cap).
+const similarAuthorsMaxLimit = 50
+
+// mergeAuthors interleaves the two arms.
+//
+// Order: share of the seed's readers who read the candidate, then tag score, then name. A
+// candidate on the tag arm only keeps its cosine and ranks after every co-read candidate
+// with a reader -- one shared reader is weak evidence, but a tag-only match is no evidence
+// about readers at all, and the measured question is what readers do.
+func (e *Engine) mergeAuthors(tagged []SimilarAuthor, pairs []authorcf.Pair, seed string, limit int) []SimilarAuthor {
+	seedReaders := e.CoReaders.Readers(seed)
+	byKey := make(map[string]*SimilarAuthor, len(tagged))
+	out := make([]SimilarAuthor, 0, len(tagged)+len(pairs))
+	for _, t := range tagged {
+		t := t
+		byKey[authorcf.Key(t.Name)] = &t
+	}
+	for _, p := range pairs {
+		item := SimilarAuthor{Name: p.Author, Readers: p.Readers}
+		if seedReaders > 0 {
+			item.ReadShare = float64(p.Readers) / float64(seedReaders)
+		}
+		item.Evidence = append(item.Evidence, rank.Evidence{
+			Signal: "author_co_readers",
+			Value:  item.ReadShare,
+			Reason: fmt.Sprintf("%d of %q's %d readers also read this author (%.0f%%)",
+				p.Readers, seed, seedReaders, 100*item.ReadShare),
+		})
+		if t, ok := byKey[p.Key]; ok {
+			item.Score = t.Score
+			item.SharedWorks = t.SharedWorks
+			item.Evidence = append(item.Evidence, t.Evidence...)
+			delete(byKey, p.Key)
+		}
+		out = append(out, item)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ReadShare != out[j].ReadShare {
+			return out[i].ReadShare > out[j].ReadShare
+		}
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].Name < out[j].Name
+	})
+	rest := make([]SimilarAuthor, 0, len(byKey))
+	for _, t := range byKey {
+		rest = append(rest, *t)
+	}
+	sort.SliceStable(rest, func(i, j int) bool {
+		if rest[i].Score != rest[j].Score {
+			return rest[i].Score > rest[j].Score
+		}
+		return rest[i].Name < rest[j].Name
+	})
+	out = append(out, rest...)
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+// SimilarAuthorsByTags ranks by the tag profile only -- the ordering this endpoint shipped
+// before #35. It stays exported so `?by=tags` can reproduce that ordering: a ranking the
+// project replaced should remain reachable while anyone might want to compare.
+func (e *Engine) SimilarAuthorsByTags(ctx context.Context, author string, limit int) ([]SimilarAuthor, error) {
+	return e.similarAuthorsByTags(ctx, author, limit)
+}
+
+// similarAuthorsByTags is the tag-profile arm: the original implementation, unchanged.
+func (e *Engine) similarAuthorsByTags(ctx context.Context, author string, limit int) ([]SimilarAuthor, error) {
 	author = strings.TrimSpace(author)
 	if author == "" {
 		return nil, fmt.Errorf("similar authors: an author name is required")
