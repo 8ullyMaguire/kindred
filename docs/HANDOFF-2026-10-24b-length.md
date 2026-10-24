@@ -81,6 +81,20 @@ accident while making lambda mean one thing everywhere. What the fix buys is
 interpretability and honest ablations, not recall. Recorded here because a number that
 flatters a change is the easiest kind to leave in.
 
+## The diversity result, re-measured after the fix
+
+The lambda comparison this project has quoted since 2026-10-23 was taken at the
+scale-blind blend, so it was re-run on the same 37 lists:
+
+| lambda | recall@10 | NDCG@10 | overlap | fandoms | length fit |
+|---|---|---|---|---|---|
+| 0.75 (default) | 0.1063 | 0.1888 | 0.099 | 2.2 | 0.713 |
+| 1.0 (diversification off) | 0.0921 | 0.1697 | 0.130 | 2.0 | 0.690 |
+
+The conclusion survives and is slightly stronger: turning diversification off still
+costs recall (−13% relative), NDCG (−10%) and makes lists more repetitive (+31%
+overlap). The pre-fix run said the same thing at a different scale.
+
 ## Tests and mutants
 
 - `internal/signal/lengthfit_test.go` — the ratio at 1×, 2×, 4×; log symmetry (one
