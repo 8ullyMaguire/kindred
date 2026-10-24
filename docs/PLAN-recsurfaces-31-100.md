@@ -145,7 +145,14 @@ number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). See
 corrected this file's totals. 2026-10-24b/c/d shipped #41 (length_fit), #84 (the significance test the interleave log
 was missing), #74 (personalised PageRank), #39 (the tag shelf's shrunk kudos) and #53
 (the Bradley-Terry cross-check) and #31 (tag trend). **The counts below are the table's,
-not a memory of them: 28 built, 6 partial, 32 open, 4 without a premise.** For two sessions this
+not a memory of them: 28 built, 6 partial, 32 open, 4 without a premise.**
+
+**Every remaining row was triaged on 2026-10-24 against the data actually in the mirror
+(`docs/HANDOFF-2026-10-24h-triage.md`): 18 are worth building, 20 are not, and most of
+the 20 are blocked by data the project does not have rather than by effort — no judgement
+stream (149 arena comparisons, 0 algo comparisons), no wrangling data, no second
+instance, no model pipeline. Read that triage before starting from this table; the table
+records status, and status is not a reason. For two sessions this
 block said "38 built, 49 open" — arithmetically consistent with 100 rows and wrong
 by about thirty, because this roadmap holds rows 31–100 (70 rows) and the phantom
 thirty made the backlog look half finished when it is a third done. The lesson is
