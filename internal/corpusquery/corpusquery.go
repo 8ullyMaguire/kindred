@@ -171,6 +171,9 @@ const (
 	// a seed yet and cannot know what is in the mirror to choose one.
 	// Implemented: (*Runner).Surprise.
 	ModeSurprise Mode = "surprise"
+	// ModeTagGap answers the writer's question: what do the works around this tag carry
+	// that its own works rarely do (#34). Implemented: (*Runner).TagGap.
+	ModeTagGap Mode = "tag-gap"
 )
 
 // Modes lists every mode that WORKS, for the CLI's help and error text.
@@ -187,13 +190,14 @@ const (
 // "not implemented yet" (a plan) rather than "unknown mode" (a typo), and
 // because IsImplemented is what a test asserts against.
 func Modes() []Mode {
-	return []Mode{ModeFandomRanking, ModeTagNeighbours, ModeUnderrated, ModeSurprise, ModeTagTrend}
+	return []Mode{ModeFandomRanking, ModeTagNeighbours, ModeUnderrated, ModeSurprise,
+		ModeTagTrend, ModeTagGap}
 }
 
 // DeclaredModes lists every mode name, implemented or not.
 func DeclaredModes() []Mode {
 	return []Mode{ModeFandomRanking, ModeFandomLandscape, ModeTagNeighbours,
-		ModeUnderrated, ModeSurprise, ModeTagTrend, ModeSimilar}
+		ModeUnderrated, ModeSurprise, ModeTagTrend, ModeTagGap, ModeSimilar}
 }
 
 // IsImplemented reports whether a mode has a Runner method behind it.

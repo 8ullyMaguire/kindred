@@ -129,6 +129,7 @@ func TestEveryWorkingCorpusQueryModeIsReachableOverHTTP(t *testing.T) {
 		string(corpusquery.ModeTagNeighbours): "/api/v1/corpus-query/tag-neighbours?tag=shared&limit=10",
 		string(corpusquery.ModeSurprise):      "/api/v1/corpus-query/surprise?limit=10",
 		string(corpusquery.ModeTagTrend):      "/api/v1/corpus-query/tag-trend?tag=shared&limit=10",
+		string(corpusquery.ModeTagGap):        "/api/v1/corpus-query/tag-gap?tag=shared&limit=10",
 	}
 	// Every IMPLEMENTED mode must have a path, so adding a mode without one
 	// fails here rather than being discovered by a caller.
@@ -269,9 +270,13 @@ func TestTheModeIsDispatchedNotGuessed(t *testing.T) {
 
 	for _, m := range corpusquery.Modes() {
 		path := "/api/v1/corpus-query/" + string(m)
-		// The two tag-scoped modes need a tag to answer at all; a mode that takes a
-		// parameter is not a mode that is undispatched.
-		if m == corpusquery.ModeTagNeighbours || m == corpusquery.ModeTagTrend {
+		// The tag-scoped modes need a tag to answer at all; a mode that takes a parameter
+		// is not a mode that is undispatched. Listing them by hand instead of deriving
+		// "needs a tag" from the mode made this test fail the day tag-gap arrived -- a
+		// mode added to Modes() is exactly where this list rots, so the switch is
+		// exhaustive on purpose and the compile does not check it.
+		if m == corpusquery.ModeTagNeighbours || m == corpusquery.ModeTagTrend ||
+			m == corpusquery.ModeTagGap {
 			path += "?tag=shared"
 		}
 		code, body, raw := cqGet(t, ts, path)

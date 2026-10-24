@@ -1746,6 +1746,7 @@ func truthy(s string) bool {
 //	GET /api/v1/corpus-query/tag-neighbours?tag=angst&limit=50
 //	GET /api/v1/corpus-query/surprise?limit=10
 //	GET /api/v1/corpus-query/tag-trend?tag=angst&limit=25
+//	GET /api/v1/corpus-query/tag-gap?tag=angst&limit=25
 //
 // A mode that is DECLARED but not implemented answers 501 and says which
 // modes work. That distinction is the point of the endpoint: `similar` and
@@ -1834,6 +1835,14 @@ func (s *Server) handleCorpusQuery(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		res, err = runner.TagTrend(ctx, tag, opts)
+	case corpusquery.ModeTagGap:
+		tag := strings.TrimSpace(q.Get("tag"))
+		if tag == "" {
+			writeErr(w, http.StatusBadRequest,
+				errors.New("tag-gap needs a tag: ?tag=angst"))
+			return
+		}
+		res, err = runner.TagGap(ctx, tag, opts)
 	case corpusquery.ModeSurprise:
 		res, err = runner.Surprise(ctx, opts)
 	}
