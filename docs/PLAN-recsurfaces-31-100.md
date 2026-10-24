@@ -33,7 +33,7 @@ Four statuses:
 
 | # | Idea | Status | Evidence / what is missing |
 |---|---|---|---|
-| 31 | Tag trend detection (90-day vs corpus average) | OPEN | `corpusquery` has four runners — `FandomRanking`, `Underrated`, `TagNeighbours`, `Surprise` — and none compares time windows; `/eval` has no time slice. |
+| 31 | Tag trend detection (90-day vs corpus average) | BUILT | `ModeTagTrend` / `*Runner.TagTrend` — the fifth runner, and the first that compares time windows. Rows are the tags travelling WITH the seed, ranked by `lift = (pair's growth in the window) / (corpus's own growth)`, so a trope doubling because the corpus doubled lifts to 1.0. The window is anchored on the MIRROR'S NEWEST WORK (2025-10-31 in this mirror), not on today: a wall-clock window holds nothing here and every tag would report a collapse that is really a stale snapshot. Both counts ride on each row (`works` in the window, `co_works` lifetime) and the notes name the window and the corpus growth. Reachable as `--mode tag-trend --tag angst` and `GET /api/v1/corpus-query/tag-trend?tag=angst`. `/eval` still has no time slice. |
 | 32 | Completion-aware ranking | PARTIAL | Completion is a tri-state **filter** (`engine.Request.Complete`: `CompleteAny`/`CompleteOnly`/`CompleteWIP`) and a tag-page sort; no tune carries a completion weight. |
 | 33 | Multi-seed intersection scoring | BUILT | `signal.SeedAgreement`: IDF-weighted coverage of each seed, averaged over seeds INCLUDING zeros, so a perfect match on 1 of 4 seeds scores 0.25 and partial matches on all 4 score 0.625. Skips (and names itself in `meta.degraded`) with fewer than two usable seeds, because one seed is `idf_overlap` under a second name. Weight 0.10, and the ablation is a flag (`kindred eval --tune ablate_no_agreement`). |
 | 34 | "Works this tag needs" gap analysis | OPEN | No writer-facing surface, and no query diffs a tag's neighbours against its own co-occurrence. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 27 | 33, 39, 40, 41, 42, 43, 46, 50, 53, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84 |
+| BUILT | 28 | 31, 33, 39, 40, 41, 42, 43, 46, 50, 53, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84 |
 | PARTIAL | 6 | 32, 38, 45, 49, 72, 89 |
-| OPEN | 33 | 31, 34, 35, 36, 37, 44, 47, 48, 52, 55, 58, 59, 68, 69, 73, 75, 77, 80, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 32 | 34, 35, 36, 37, 44, 47, 48, 52, 55, 58, 59, 68, 69, 73, 75, 77, 80, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
@@ -144,8 +144,8 @@ number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). See
 2026-10-23k shipped #79 (intra-list diversity, stored with every offline run) and
 corrected this file's totals. 2026-10-24b/c/d shipped #41 (length_fit), #84 (the significance test the interleave log
 was missing), #74 (personalised PageRank), #39 (the tag shelf's shrunk kudos) and #53
-(the Bradley-Terry cross-check). **The counts below are the table's, not a memory of
-them: 27 built, 6 partial, 33 open, 4 without a premise.** For two sessions this
+(the Bradley-Terry cross-check) and #31 (tag trend). **The counts below are the table's,
+not a memory of them: 28 built, 6 partial, 32 open, 4 without a premise.** For two sessions this
 block said "38 built, 49 open" — arithmetically consistent with 100 rows and wrong
 by about thirty, because this roadmap holds rows 31–100 (70 rows) and the phantom
 thirty made the backlog look half finished when it is a third done. The lesson is

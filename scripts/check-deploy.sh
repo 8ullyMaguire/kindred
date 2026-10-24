@@ -860,6 +860,15 @@ check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped
 check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
 
 echo
+echo "a tag's trend is measured against the corpus's own growth (#31)"
+# The window must be anchored on the mirror's newest work. A live check that merely
+# found rows would pass on a table of zero lifts; the note naming the anchor and the
+# corpus growth is what makes the number checkable.
+check "tag-trend answers for a real tag"        "$TARGET/api/v1/corpus-query/tag-trend?tag=angst&limit=3" '"mode":"tag-trend"'
+check "and names the window it measured"        "$TARGET/api/v1/corpus-query/tag-trend?tag=angst&limit=3" 'the mirror'"'"'s newest work, not today'
+check "and the corpus growth it cancels"        "$TARGET/api/v1/corpus-query/tag-trend?tag=angst&limit=3" 'growth'
+
+echo
 echo "the ordering survives a second model (#53)"
 # BT is fitted from the judged history on every load, and the page must report the
 # agreement WITH its counts: a correlation over a thin fit is a number about the prior,

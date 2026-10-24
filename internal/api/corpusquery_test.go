@@ -128,6 +128,7 @@ func TestEveryWorkingCorpusQueryModeIsReachableOverHTTP(t *testing.T) {
 		string(corpusquery.ModeUnderrated):    "/api/v1/corpus-query/underrated?limit=10",
 		string(corpusquery.ModeTagNeighbours): "/api/v1/corpus-query/tag-neighbours?tag=shared&limit=10",
 		string(corpusquery.ModeSurprise):      "/api/v1/corpus-query/surprise?limit=10",
+		string(corpusquery.ModeTagTrend):      "/api/v1/corpus-query/tag-trend?tag=shared&limit=10",
 	}
 	// Every IMPLEMENTED mode must have a path, so adding a mode without one
 	// fails here rather than being discovered by a caller.
@@ -268,7 +269,9 @@ func TestTheModeIsDispatchedNotGuessed(t *testing.T) {
 
 	for _, m := range corpusquery.Modes() {
 		path := "/api/v1/corpus-query/" + string(m)
-		if m == corpusquery.ModeTagNeighbours {
+		// The two tag-scoped modes need a tag to answer at all; a mode that takes a
+		// parameter is not a mode that is undispatched.
+		if m == corpusquery.ModeTagNeighbours || m == corpusquery.ModeTagTrend {
 			path += "?tag=shared"
 		}
 		code, body, raw := cqGet(t, ts, path)

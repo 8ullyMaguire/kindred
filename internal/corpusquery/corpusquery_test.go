@@ -254,6 +254,7 @@ var modeMethods = map[Mode]string{
 	ModeUnderrated:      "Underrated",
 	ModeSimilar:         "Similar",
 	ModeSurprise:        "Surprise",
+	ModeTagTrend:        "TagTrend",
 }
 
 func TestEveryWorkingModeHasARunnerMethod(t *testing.T) {

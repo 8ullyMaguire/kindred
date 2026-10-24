@@ -161,6 +161,12 @@ const (
 	// ao3-recommender's surface and the goal-check clause expects the name to
 	// exist, but no Runner method implements it.
 	ModeSimilar Mode = "similar"
+	// ModeTagTrend answers "is this tag rising", as its co-occurrences' growth
+	// against the corpus's own growth over a 90-day window anchored on the
+	// mirror's newest work (#31).
+	//
+	// Implemented: (*Runner).TagTrend.
+	ModeTagTrend Mode = "tag-trend"
 	// ModeSurprise answers "show me something", for a reader who has not chosen
 	// a seed yet and cannot know what is in the mirror to choose one.
 	// Implemented: (*Runner).Surprise.
@@ -181,13 +187,13 @@ const (
 // "not implemented yet" (a plan) rather than "unknown mode" (a typo), and
 // because IsImplemented is what a test asserts against.
 func Modes() []Mode {
-	return []Mode{ModeFandomRanking, ModeTagNeighbours, ModeUnderrated, ModeSurprise}
+	return []Mode{ModeFandomRanking, ModeTagNeighbours, ModeUnderrated, ModeSurprise, ModeTagTrend}
 }
 
 // DeclaredModes lists every mode name, implemented or not.
 func DeclaredModes() []Mode {
 	return []Mode{ModeFandomRanking, ModeFandomLandscape, ModeTagNeighbours,
-		ModeUnderrated, ModeSurprise, ModeSimilar}
+		ModeUnderrated, ModeSurprise, ModeTagTrend, ModeSimilar}
 }
 
 // IsImplemented reports whether a mode has a Runner method behind it.

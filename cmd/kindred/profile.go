@@ -297,6 +297,11 @@ func runCorpusQuery(ctx context.Context, corpusPath string, args []string) error
 			return errors.New("corpus-query: --tag is required for tag-neighbours")
 		}
 		res, err = r.TagNeighbours(ctx, *tag, opts)
+	case corpusquery.ModeTagTrend:
+		if *tag == "" {
+			return errors.New("corpus-query: --tag is required for tag-trend")
+		}
+		res, err = r.TagTrend(ctx, *tag, opts)
 	default:
 		// Reached for a DECLARED-but-unimplemented mode, because ParseMode now
 		// accepts those (see corpusquery.ParseMode). The message names the
