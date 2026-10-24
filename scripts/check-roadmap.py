@@ -11,13 +11,20 @@ The same pass found three spellings of the same status ("BUILT", "**BUILT**",
 "OPEN (count built)") in one column, so no mechanical count could agree with the
 hand-written one. The vocabulary is now fixed, and this script enforces both.
 
+DECLINED joined the vocabulary on 2026-10-24, when every remaining row was triaged
+against the data the mirror actually holds. It is a DIFFERENT statement from OPEN: an
+open row is work waiting, and a declined row is work whose premise the data cannot
+support. Keeping them in one bucket is how a backlog becomes a wish list that nobody
+can size -- and a status column that hides a decision is no better than one that hides
+a spelling.
+
 Usage: scripts/check-roadmap.py [path]     (default: docs/PLAN-recsurfaces-31-100.md)
 Exit 0 = consistent, 1 = drifted, 2 = the file could not be read or parsed.
 """
 import re
 import sys
 
-STATUSES = {"BUILT", "PARTIAL", "OPEN", "NO PREMISE"}
+STATUSES = {"BUILT", "PARTIAL", "OPEN", "DECLINED", "NO PREMISE"}
 DEFAULT = "docs/PLAN-recsurfaces-31-100.md"
 
 
@@ -93,7 +100,8 @@ def main(argv):
     counts = {s: sum(1 for st in rows.values() if st == s) for s in sorted(STATUSES)}
     print(
         f"roadmap consistent: {counts['BUILT']} built, {counts['PARTIAL']} partial, "
-        f"{counts['OPEN']} open, {counts['NO PREMISE']} without a premise ({len(rows)} rows)"
+        f"{counts['OPEN']} open, {counts['DECLINED']} declined, "
+        f"{counts['NO PREMISE']} without a premise ({len(rows)} rows)"
     )
     return 0
 
