@@ -412,7 +412,14 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 		if enrichShrunk <= 1 {
 			continue
 		}
-		gap := float64(c.support) * (enrichShrunk - 1) * (1 - lift)
+		// EVIDENCE IS A GATE, LIFT IS THE SCORE -- the rule this package's own doc states
+		// and the third thing this mode got wrong. Multiplying by support made the ranking
+		// a popularity list again: corpus-wide attributes (`no category`, `general
+		// audiences`, `not rated`) carry enormous support and an enrichment of 1.3, and they
+		// led every list. Support is already the gate above (HAVING support >= the floor);
+		// what is left is how strongly the genre wants the tag and how much the seed lacks
+		// it, both of which are ratios and neither of which the archive's size can inflate.
+		gap := (enrichShrunk - 1) * (1 - lift)
 		res.Rows = append(res.Rows, Row{
 			Key:     c.name,
 			Label:   c.name,
