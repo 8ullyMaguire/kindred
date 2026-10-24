@@ -278,11 +278,32 @@ func runEval(ctx context.Context, args []string) error {
 	// measurement of this signal (recall 0.1063 -> 0.1373) was exactly that, a number about
 	// memory. This retrains on split.Train, which by construction omits the test items.
 	if *alsHonest {
-		var pairs []als.Interaction
-		for user, works := range split.Train {
+		// Train on the WHOLE mirror minus the held-out pairs, not on the eval's training
+		// split alone. Both are leak-free; only one is a fair test of the signal.
+		//
+		// The first version used split.Train, which is the 38 evaluated readers' ~50
+		// bookmarks each -- 1,990 pairs, and a factor model learned from that is not the
+		// model the deployment would ship. It measured the tiny model's uselessness and
+		// would have been reported as the signal's uselessness. Excluding the ~370
+		// held-out pairs from the full 180,418 keeps the model the size it really is.
+		held := make(map[[2]int64]struct{}, 512)
+		for user, works := range split.Test {
 			for _, w := range works {
-				pairs = append(pairs, als.Interaction{User: user, Work: w})
+				held[[2]int64{user, w}] = struct{}{}
 			}
+		}
+		all, ierr := eng.Corpus.Interactions(ctx)
+		if ierr != nil {
+			return fmt.Errorf("als-honest: read interactions: %w", ierr)
+		}
+		pairs := make([]als.Interaction, 0, len(all))
+		excluded := 0
+		for _, it := range all {
+			if _, isHeld := held[[2]int64{it.UserID, it.WorkID}]; isHeld {
+				excluded++
+				continue
+			}
+			pairs = append(pairs, als.Interaction{User: it.UserID, Work: it.WorkID})
 		}
 		params := als.DefaultParams()
 		start := time.Now()
@@ -292,9 +313,9 @@ func runEval(ctx context.Context, args []string) error {
 			factors[id] = model.Works[i]
 		}
 		eng.SetLatentModel(factors)
-		fmt.Printf("als-honest: retrained %d factors on %d training pairs in %s "+
-			"(rmse %.2f -> %.2f); the held-out bookmarks are not in it\n",
-			len(factors), len(pairs), time.Since(start).Round(time.Millisecond),
+		fmt.Printf("als-honest: retrained %d factors on %d pairs (%d held-out pairs "+
+			"excluded) in %s, rmse %.2f -> %.2f\n",
+			len(factors), len(pairs), excluded, time.Since(start).Round(time.Millisecond),
 			model.Fit[0], model.Fit[len(model.Fit)-1])
 	}
 
