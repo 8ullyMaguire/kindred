@@ -76,7 +76,7 @@ Four statuses:
 | 71 | Per-tag recommendation quality leaderboard | BUILT | Same table, `axis = 'tag'`: every tag a held-out work carries, weakest first, top 25 by size per run. |
 | 72 | Embedding dimension search | PARTIAL | `kindred embed --dim` exists (default 32, `embedcmd.go:47`); eval runs never vary it, so no width is compared. |
 | 73 | Multi-objective Pareto ranking | OPEN | One scalar score; no dominance relation. |
-| 74 | Random walks (personalised PageRank) | OPEN | No walk; ranking is overlap/affinity/collab signals. |
+| 74 | Random walks (personalised PageRank) | BUILT | `signal.Walk`: bounded personalised PageRank over the tag graph (damping 0.85, 20 rounds, 20k-node frontier, restart mass excluded so it is not a slower `tag_overlap`), plus `walkpool.go` — the pool source without which a two-hop signal only re-ranks one-hop candidates. Measured over 37 lists at k=10: walk 0.25 is WORSE than not having it (recall 0.1004 vs 0.1063, nDCG 0.1556 vs 0.1888); 0.06 and 0.12 reorder lists without moving recall and are indistinguishable from each other (nDCG 0.1889 vs 0.1901), so the default stays 0.06 pending a difference that clears a bar. `pool_sources.walk` reports its contribution (152 for a 169-work seed pool). |
 | 75 | Cross-fandom trope transfer | OPEN | Bridges surface works that **are** in both fandoms; "same non-fandom tags, a different fandom" is a different query and no runner does it. |
 | 76 | Embedding drift monitoring | BUILT | `embed_runs` + `store.RecordEmbedRun`, written by `kindred embed` after the table lands; `/mirror` prints the verdict; `GET /api/v1/embed/drift`. A fingerprint, NOT a hash: a hash says "something changed" and cannot say whether the space moved or merely reshuffled. Each run stores rows, width, mean L2 norm, the centroid, and a SAMPLE of 64 tag vectors — the sample is load-bearing, because two tags moving in opposite directions leave the centroid exactly where it was (`TestAnAverageCanHideOppositeMovements`; the centroid-only mutant dies on it). Floor 0.98, not 0.9: a deterministic solver over an unchanged corpus landing at 0.95 has moved positions rather than re-rolled a seed. Two refusals: the page will not print "0% drift" when fewer than two fingerprints exist (no comparison ≠ good result), and a failed fingerprint does not fail the build (the embeddings are correct; a monitoring gap must not become a broken deploy) — it is printed by name. Mutants killed: floor 0, centroid-instead-of-sample, width change not its own verdict, sample compared against itself. |
 | 77 | Tag suggestions for writers | OPEN | No writer surface. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 24 | 33, 40, 41, 42, 43, 46, 50, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 76, 78, 79, 84 |
+| BUILT | 25 | 33, 40, 41, 42, 43, 46, 50, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84 |
 | PARTIAL | 6 | 32, 38, 45, 49, 72, 89 |
-| OPEN | 36 | 31, 34, 35, 36, 37, 39, 44, 47, 48, 52, 53, 55, 58, 59, 68, 69, 73, 74, 75, 77, 80, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 35 | 31, 34, 35, 36, 37, 39, 44, 47, 48, 52, 53, 55, 58, 59, 68, 69, 73, 75, 77, 80, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
@@ -142,9 +142,9 @@ number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). See
 `docs/HANDOFF-2026-10-23j-latency.md`.
 
 2026-10-23k shipped #79 (intra-list diversity, stored with every offline run) and
-corrected this file's totals. 2026-10-24b/c shipped #41 (length_fit) and #84 (the
-significance test the interleave log was missing). **The counts below are the table's,
-not a memory of them: 24 built, 6 partial, 36 open, 4 without a premise.** For two sessions this
+corrected this file's totals. 2026-10-24b/c/d shipped #41 (length_fit), #84 (the significance test the interleave log
+was missing) and #74 (personalised PageRank over the tag graph). **The counts below are
+the table's, not a memory of them: 25 built, 6 partial, 35 open, 4 without a premise.** For two sessions this
 block said "38 built, 49 open" — arithmetically consistent with 100 rows and wrong
 by about thirty, because this roadmap holds rows 31–100 (70 rows) and the phantom
 thirty made the backlog look half finished when it is a third done. The lesson is
