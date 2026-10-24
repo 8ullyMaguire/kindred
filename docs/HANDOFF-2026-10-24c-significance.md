@@ -99,3 +99,78 @@ correct; what was missing was a column that could say "not yet", and the refusal
 more than the test: on this deployment **every** comparison is currently refused, which
 is the honest state of an experiment with 22 impressions and would have been invisible
 before.
+
+---
+
+# The defect the deploy found: a client hanging up decided what the process knew
+
+Two reading-path checks began failing on a page this work never touched:
+
+```
+FAIL reading path walks — expected /step 1/ at /path/17249318
+FAIL path measures from the previous step
+```
+
+The page answered **200** and said *"This mirror has no tag embeddings, so there is no
+space to walk"* — while `/api/v1/stats` in the same process reported **634,232** vectors.
+The log repeated, on every request:
+
+```
+WARN tag embeddings loaded with errors err="read embedding ids: context canceled"
+```
+
+## Cause
+
+`Engine.tagVectors` fills a process-lifetime cache inside `sync.Once`, using **the
+caller's context**:
+
+```go
+e.tagIdx.once.Do(func() {
+    e.tagIdx.idx, e.tagIdx.err = loadTagIndex(ctx, db)   // ctx is the REQUEST's
+})
+```
+
+The first request after a cold start loads 634k rows. If that request is cancelled — a
+deploy health check, a reader closing the tab — the failure is cached by the `Once`, and
+every later request gets the same error **until the process restarts**. One client's
+disconnect permanently decided whether the server had vectors.
+
+The doc comment said "the load happens exactly once, including when it FAILS", which is
+correct for a *database* failure and wrong for a *caller's*. Those are two different
+events that arrived at the same `err`.
+
+## Fix
+
+```go
+loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), embedLoadTimeout)
+defer cancel()
+e.tagIdx.idx, e.tagIdx.err = loadTagIndex(loadCtx, db)
+```
+
+Detached from the caller's cancellation, with a two-minute deadline of its own so a
+stalled database still cannot pin a goroutine. A database failure is still cached once.
+
+## Proof
+
+- **Red first**, by restoring the caller's context: the test reproduces the live message
+  verbatim — `cached read embedding ids: context canceled for the life of the process`.
+- Green with the fix, and a second test pins that two calls share one pointer, so the fix
+  cannot have turned the 634k-row scan into a per-request cost.
+- Live after deploy: `/path/17249318` renders `step 1 · 0.97 from the step before`,
+  the "no tag embeddings" note is gone, and `journalctl -u kindred | grep -c "context
+  canceled"` is **0**.
+
+## Why this belongs in this handoff
+
+It is the third instance this week of one shape: **a measurement taken on the wrong
+context, reported as a fact about the product.**
+
+| what was measured | what was reported | what was true |
+|---|---|---|
+| an empty body from `curl -fsS` on a 503 | "the filter control is MISSING" | the page answered 200 with the control |
+| a rate difference between two arms | an ordering | p = 0.34 |
+| a cancelled read of the embedding table | "this mirror has no tag embeddings" | 634,232 vectors |
+
+The general rule, worth carrying: **a cache that outlives its caller must not be filled
+on the caller's context**, and more broadly, before reporting a zero, a missing thing or
+an empty list, check whether the read that produced it was allowed to finish.
