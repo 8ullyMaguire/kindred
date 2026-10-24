@@ -860,6 +860,16 @@ check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped
 check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
 
 echo
+echo "the learned factor space answers when asked (#89)"
+# latent ships at weight 0 in the default tune, so the only way to check it is to ASK for
+# the tune that weights it. A signal that is registered but never reachable is the
+# registered-and-inert bug this gate exists for; a signal reachable but never scored is
+# the same bug one layer down.
+check "the opt-in tune is honoured"              "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=3&tune=als08" '"tune":"als08"'
+check "and the latent signal scores a live list"  "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=3&tune=als08" '"signal":"latent"'
+check "and it is not merely degraded"             "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=3&tune=als08" '"evidence"'
+
+echo
 echo "a tag's trend is measured against the corpus's own growth (#31)"
 # The window must be anchored on the mirror's newest work. A live check that merely
 # found rows would pass on a table of zero lifts; the note naming the anchor and the
