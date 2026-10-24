@@ -28,6 +28,28 @@ import (
 // with a field rather than a magic number.
 const tagTrendDays = 90
 
+// dayExpr normalises works.update_date to YYYY-MM-DD.
+//
+// THIS MIRROR STORES TWO DATE SHAPES: 112,893 rows read "05 Sep 2007" and two read
+// "2006-01-02". Comparing either shape as a raw string is a silent wrong answer --
+// "31 Oct 2025" >= "2025-08-02" is TRUE lexically because '3' > '2', so a window
+// comparison against a display date would put a decade-old work inside it. The
+// expression makes both shapes comparable, and the tests carry a display-format corpus
+// because the first version of this code parsed only ISO and passed its own tests.
+//
+// Rows with an empty date normalise to NULL, which no comparison matches: an undated
+// work is neither in the window nor outside it, and counting it as outside would make
+// the corpus's growth look slower than it is.
+const dayExpr = `CASE
+		WHEN w.update_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' THEN w.update_date
+		WHEN w.update_date GLOB '[0-9][0-9] [A-Z][a-z][a-z] [0-9][0-9][0-9][0-9]' THEN
+			substr(w.update_date, 8, 4) || '-' ||
+			printf('%02d',
+				(instr('JanFebMarAprMayJunJulAugSepOctNovDec',
+					substr(w.update_date, 4, 3)) - 1) / 3 + 1) || '-' ||
+			substr(w.update_date, 1, 2)
+	END`
+
 // tagTrendRowLimit is how many rising pairs a default query returns.
 const tagTrendRowLimit = 25
 
@@ -59,8 +81,8 @@ func (r *Runner) TagTrend(ctx context.Context, tag string, opts Options) (Result
 
 	// The anchor and the corpus's own counts, in one query.
 	var anchor sql.NullString
-	if err := r.DB.QueryRowContext(ctx, `SELECT MAX(update_date) FROM works
-		WHERE update_date IS NOT NULL AND update_date <> ''`).Scan(&anchor); err != nil {
+	if err := r.DB.QueryRowContext(ctx, `SELECT MAX(`+dayExpr+`) FROM works w
+		WHERE `+dayExpr+` IS NOT NULL`).Scan(&anchor); err != nil {
 		return res, fmt.Errorf("tag-trend: anchor: %w", err)
 	}
 	if !anchor.Valid || anchor.String == "" {
@@ -75,9 +97,9 @@ func (r *Runner) TagTrend(ctx context.Context, tag string, opts Options) (Result
 
 	var totalAll, totalRecent int
 	if err := r.DB.QueryRowContext(ctx, `SELECT
-			COUNT(*),
-			COALESCE(SUM(CASE WHEN update_date >= ? THEN 1 ELSE 0 END), 0)
-		FROM works`, startDay).Scan(&totalAll, &totalRecent); err != nil {
+			COALESCE(SUM(CASE WHEN `+dayExpr+` IS NOT NULL THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN `+dayExpr+` >= ? THEN 1 ELSE 0 END), 0)
+		FROM works w`, startDay).Scan(&totalAll, &totalRecent); err != nil {
 		return res, fmt.Errorf("tag-trend: corpus counts: %w", err)
 	}
 	res.Notes = append(res.Notes, fmt.Sprintf(
@@ -114,7 +136,7 @@ func (r *Runner) TagTrend(ctx context.Context, tag string, opts Options) (Result
 	rows, err := r.DB.QueryContext(ctx, `
 		SELECT t.name,
 		       COUNT(*) AS all_works,
-		       COALESCE(SUM(CASE WHEN w.update_date >= ? THEN 1 ELSE 0 END), 0) AS recent_works
+		       COALESCE(SUM(CASE WHEN `+dayExpr+` >= ? THEN 1 ELSE 0 END), 0) AS recent_works
 		FROM work_tags a
 		JOIN work_tags b ON b.work_id = a.work_id AND b.tag_id <> a.tag_id
 		JOIN tags t ON t.id = b.tag_id
