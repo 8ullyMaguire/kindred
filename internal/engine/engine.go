@@ -38,6 +38,14 @@ type Engine struct {
 	DocFreq *corpus.DocFreq
 	Graph   *graph.CSR
 
+	// AuthorMinDF is the document-frequency floor a tag must clear before it can join an
+	// author's similarity profile (0 = the default, similarAuthorMinDF). A tag on one or two
+	// works relates at most one other work, so a profile of them has no neighbourhood to
+	// search. It is a field rather than a constant for the same reason MinCorpusWorks is an
+	// option in corpus-query: a fixture with twelve works must be able to test the RANKING
+	// without every tag failing a floor written for a 113k-work archive.
+	AuthorMinDF int
+
 	// PoolSize bounds the candidate set. Ranking tens of thousands of
 	// entities per request is what the previous deployment did and it is
 	// where its request latency came from.

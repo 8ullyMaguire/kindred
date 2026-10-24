@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
+	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 )
 
 // handleSimilarAuthors ranks authors by the distinguishing tags their works
@@ -31,6 +32,17 @@ func (s *Server) handleSimilarAuthors(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := s.Engine.SimilarAuthors(r.Context(), name, intParam(r, "limit", 10))
 	if err != nil {
+		if errors.Is(err, engine.ErrAuthorProfileEmpty) {
+			// 200 with a reason: the author exists, the neighbourhood does not. A 404 here
+			// would tell a reader the person is not in the mirror.
+			writeJSON(w, http.StatusOK, map[string]any{
+				"author":   name,
+				"items":    []any{},
+				"returned": 0,
+				"note":     err.Error(),
+			})
+			return
+		}
 		if errors.Is(err, corpus.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
 			return

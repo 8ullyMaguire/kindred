@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -17,10 +18,24 @@ import (
 // byline matches, not a complete bibliography. The constants are named rather
 // than inlined because the sample size is a claim about the answer, and the
 // evidence string says which sample produced it.
+// ErrAuthorProfileEmpty means the author EXISTS but none of their tags is shared widely
+// enough to relate them to anyone. It is distinct from corpus.ErrNotFound on purpose: an
+// author with 26 works is not missing, and a 404 for them would read as "this person is not
+// in the mirror".
+var ErrAuthorProfileEmpty = errors.New("no shareable tags")
+
 const (
 	similarAuthorSeedWorks  = 500
 	similarAuthorCandidates = 5000
 	similarAuthorSeedTags   = 24
+	// similarAuthorMinDF is the floor on a tag's document frequency before it may join the
+	// profile. A tag on one or two works in the whole archive cannot relate two authors: it
+	// can connect at most one other work, so a profile built from it has no neighbourhood to
+	// search. Measured on the live mirror: `Masterweaver` has 26 works and 196 distinct tags,
+	// 37 of them on a SINGLE work -- and because the profile keeps the 24 RAREST tags, all 24
+	// were singletons and the endpoint returned an empty list for an author with 61 readers.
+	// The rarest-first rule is right; it needs to be rarest-first among tags that are shared.
+	similarAuthorMinDF = 3
 )
 
 // SimilarAuthor is one author near the named author, with the evidence.
@@ -101,12 +116,39 @@ func (e *Engine) SimilarAuthors(ctx context.Context, author string, limit int) (
 
 	// Weight by rarity and keep the most distinguishing tags. A tag on every
 	// work in the corpus contributes nothing; a tag on forty is the profile.
+	//
+	// A tag on fewer than similarAuthorMinDF works is dropped rather than prized: it is the
+	// rarest kind of tag, so rarest-first would keep it, and it can relate this author to at
+	// most one other work -- which is not a neighbourhood. The floor is applied BEFORE the
+	// idf weight, because the weight is exactly what made singletons win.
 	freq, total := e.docFrequenciesForTagIDs(ctx, profile)
+	floor := float64(e.AuthorMinDF)
+	if floor <= 0 {
+		floor = similarAuthorMinDF
+	}
+	// NO TABLE, NO FLOOR. Without the document frequencies every tag reads as df=0, and a
+	// floor applied to that number deletes the whole profile -- a mirror that has not been
+	// ingested would answer "no author shares these tags" for every author. The floor is a
+	// statement about a table, so it only applies when there is one.
+	if total <= 1 {
+		floor = 0
+	}
+	shared := 0
 	for id := range profile {
+		if freq[id] < floor {
+			delete(profile, id)
+			continue
+		}
 		profile[id] *= idfOf(total, freq[id])
 		if profile[id] <= 0 {
 			delete(profile, id)
+			continue
 		}
+		shared++
+	}
+	if shared == 0 {
+		return []SimilarAuthor{}, fmt.Errorf("%w: %q's tags are all on fewer than %.0f works in this mirror, so no author can share them",
+			ErrAuthorProfileEmpty, author, floor)
 	}
 	if len(profile) == 0 {
 		return []SimilarAuthor{}, nil

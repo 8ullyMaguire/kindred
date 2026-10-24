@@ -84,6 +84,10 @@ func newFixtureEngineFrom(t *testing.T, c *testcorpus.Corpus) *Engine {
 	e := &Engine{
 		Store: s, Corpus: corpus.NewAO3(s.Corpus), Graph: g,
 		PoolSize: 400, TopN: 24, EmbedDim: 32,
+		// A fixture has twelve works, so every tag is a singleton or a pair. The floor is
+		// written for a 113k-work archive; here it would empty every profile, and the tests
+		// below are about the RANKING.
+		AuthorMinDF: 1,
 	}
 	e.SetArenaRatings(map[int64]float64{}, 0)
 	return e
