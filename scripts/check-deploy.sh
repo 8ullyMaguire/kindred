@@ -879,6 +879,17 @@ check "and names the window it measured"        "$TARGET/api/v1/corpus-query/tag
 check "and the corpus growth it cancels"        "$TARGET/api/v1/corpus-query/tag-trend?tag=angst&limit=3" 'growth'
 
 echo
+echo "a tag's gaps are what its genre carries and its own works do not (#34)"
+# The checks name a REAL tag on this mirror (hurt/comfort, 12,018 works). A fixture-shaped
+# check would pass on an empty corpus; the point of the gate is that the query runs against
+# the archive the deployment serves.
+check "tag-gap answers for a real tag"           "$TARGET/api/v1/corpus-query/tag-gap?tag=hurt%2Fcomfort&limit=3" '"mode":"tag-gap"'
+check "and returns at least one gap"             "$TARGET/api/v1/corpus-query/tag-gap?tag=hurt%2Fcomfort&limit=3" '"rows":\[{"key"'
+check "and names the neighbourhood it used"      "$TARGET/api/v1/corpus-query/tag-gap?tag=hurt%2Fcomfort&limit=3" 'neighbourhood of'
+check "and states the formula it ranked by"      "$TARGET/api/v1/corpus-query/tag-gap?tag=hurt%2Fcomfort&limit=3" 'enrichment'
+check "an unknown tag is named, not empty"       "$TARGET/api/v1/corpus-query/tag-gap?tag=zzz-no-such-tag&limit=3" 'no tag named'
+
+echo
 echo "the ordering survives a second model (#53)"
 # BT is fitted from the judged history on every load, and the page must report the
 # agreement WITH its counts: a correlation over a thin fit is a number about the prior,
