@@ -913,7 +913,7 @@ echo "a tag's gaps are what its genre carries and its own works do not (#34)"
 # the archive the deployment serves.
 checkall "tag-gap answers, rows, formula and neighbourhood" \
   "$TARGET/api/v1/corpus-query/tag-gap?tag=hurt%2Fcomfort&limit=3" \
-  '"mode":"tag-gap"' '"rows":\[{"key"' 'neighbourhood of' 'enrichment'
+  '"mode":"tag-gap"' '"rows":\[{"key"' 'neighbourhood of' 'evidence GATE'
 check "an unknown tag is named, not empty"       "$TARGET/api/v1/corpus-query/tag-gap?tag=zzz-no-such-tag&limit=3" 'no tag named'
 
 echo

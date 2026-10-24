@@ -438,10 +438,11 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 			"WITHOUT %q, so the evidence comes from outside the tag",
 		len(hood), strings.Join(names, ", "), tag))
 	res.Notes = append(res.Notes, fmt.Sprintf(
-		"gap = support x (enrichment-1) x (1-lift), where enrichment is how much more "+
-			"often the %d neighbourhood works carry the tag than the archive does and lift "+
-			"is how often this tag's own works carry it against the archive; shrunk by "+
-			"support/(support+%.0f)", neighWorks, ShrinkK))
+		"gap = (enrichment-1) x (1-lift), where enrichment is how much more often the %d "+
+			"neighbourhood works carry the tag than the archive does (shrunk toward 1 by "+
+			"support/(support+%.0f)) and lift is how often this tag's own works carry it "+
+			"against the archive; support is the evidence GATE, not a factor in the score",
+		neighWorks, ShrinkK))
 	res.Notes = append(res.Notes, "a tag this tag already carries at or above the corpus "+
 		"rate has no gap and is not listed, and neither does a tag the neighbourhood "+
 		"carries no more often than the archive")
