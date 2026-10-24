@@ -256,6 +256,15 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 
 	// The two rates each candidate needs: how often the SEED carries it, and how often
 	// the archive does. Both in one pass over the candidate ids.
+	// Two counts per candidate, in two cheap queries rather than one expensive join:
+	//
+	//	corpus = how many works carry it anywhere (index on tag_id, one seek per tag)
+	//	own    = how many of the SEED's works carry it (index on work_id over the seed's
+	//	         ~12k works, then grouped by tag)
+	//
+	// The first version joined tags to work_tags to work_tags with a LEFT JOIN per row,
+	// which on 600 candidates x ~5k works each was ~9 s of the endpoint's 10 s. The two
+	// queries below are the same numbers without the per-row join.
 	idList := make([]string, 0, len(cands))
 	candArgs := make([]any, 0, len(cands))
 	for _, c := range cands {
@@ -263,36 +272,51 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 		candArgs = append(candArgs, c.id)
 	}
 	inline := strings.Join(idList, ",")
-	// own = the candidate's works that the SEED also carries; corpus = the candidate's
-	// works overall. The LEFT JOIN is the membership test, so the sum counts the join
-	// hitting rather than the work existing.
-	provArgs := append([]any{id}, candArgs...)
-	prov, err := r.DB.QueryContext(ctx, `
-		SELECT c.id,
-		       COALESCE(SUM(CASE WHEN seed.work_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS own,
-		       COUNT(*) AS corpus
-		FROM tags c
-		JOIN work_tags wt ON wt.tag_id = c.id
-		LEFT JOIN work_tags seed ON seed.work_id = wt.work_id AND seed.tag_id = ?
-		WHERE c.id IN (`+inline+`)
-		GROUP BY c.id`, provArgs...)
-	if err != nil {
-		return res, fmt.Errorf("tag-gap: coverage: %w", err)
-	}
-	defer prov.Close()
-	own := map[int64]int{}
 	corpus := map[int64]int{}
-	for prov.Next() {
+	crows, err := r.DB.QueryContext(ctx,
+		`SELECT tag_id, COUNT(*) FROM work_tags WHERE tag_id IN (`+inline+`) GROUP BY tag_id`,
+		candArgs...)
+	if err != nil {
+		return res, fmt.Errorf("tag-gap: corpus counts: %w", err)
+	}
+	for crows.Next() {
 		var cid int64
-		var o, n int
-		if err := prov.Scan(&cid, &o, &n); err != nil {
-			return res, fmt.Errorf("tag-gap: coverage scan: %w", err)
+		var n int
+		if err := crows.Scan(&cid, &n); err != nil {
+			crows.Close()
+			return res, fmt.Errorf("tag-gap: corpus count scan: %w", err)
 		}
-		own[cid], corpus[cid] = o, n
+		corpus[cid] = n
 	}
-	if err := prov.Err(); err != nil {
-		return res, fmt.Errorf("tag-gap: coverage rows: %w", err)
+	if err := crows.Err(); err != nil {
+		crows.Close()
+		return res, fmt.Errorf("tag-gap: corpus count rows: %w", err)
 	}
+	crows.Close()
+
+	own := map[int64]int{}
+	orows, err := r.DB.QueryContext(ctx, `
+		SELECT wt.tag_id, COUNT(*) FROM work_tags wt
+		WHERE wt.work_id IN (SELECT work_id FROM work_tags WHERE tag_id = ?)
+		  AND wt.tag_id IN (`+inline+`)
+		GROUP BY wt.tag_id`, append([]any{id}, candArgs...)...)
+	if err != nil {
+		return res, fmt.Errorf("tag-gap: own counts: %w", err)
+	}
+	for orows.Next() {
+		var cid int64
+		var n int
+		if err := orows.Scan(&cid, &n); err != nil {
+			orows.Close()
+			return res, fmt.Errorf("tag-gap: own count scan: %w", err)
+		}
+		own[cid] = n
+	}
+	if err := orows.Err(); err != nil {
+		orows.Close()
+		return res, fmt.Errorf("tag-gap: own count rows: %w", err)
+	}
+	orows.Close()
 
 	corpusShare := func(c int) float64 {
 		if corpusWorks == 0 {
