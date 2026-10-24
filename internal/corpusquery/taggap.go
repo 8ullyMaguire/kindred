@@ -134,16 +134,36 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 		return res, nil
 	}
 
-	// The neighbourhood: what travels with the seed, by co-occurrence.
+	// The neighbourhood: what travels with the seed, ranked by ASSOCIATION rather than
+	// frequency.
+	//
+	//	association(N, seed) = P(seed | N) / P(seed) = co x total / (seedWorks x works(N))
+	//
+	// The first version took the seed's 30 heaviest co-tags, which on this mirror are
+	// `m/m`, `f/m`, `Explicit`, `No Archive Warnings Apply` -- tags on a third of the
+	// archive, carrying no information about what KIND of work this is. Every candidate
+	// then came out at enrichment 1.1x ("the whole archive is like this") and the ranking
+	// fell back to raw support, i.e. popularity. Ranked by association the same seed's
+	// neighbourhood is whump, sickfic, chronic pain, seizures, "tim drake needs a hug" --
+	// the genre, and the rows that follow are about the genre.
+	//
+	// The floor is on co-occurrence, not on association: a tag that travels with the seed
+	// twice has an association of 300 and means nothing. 20 is the same evidence gate the
+	// other modes use, scaled down because a neighbourhood is a description of a tag rather
+	// than a ranking of works.
+	const minCooccur = 20
 	nrows, err := r.DB.QueryContext(ctx, `
 		SELECT b.tag_id, t.name, COUNT(*) AS co
 		FROM work_tags a
 		JOIN work_tags b ON b.work_id = a.work_id AND b.tag_id <> a.tag_id
 		JOIN tags t ON t.id = b.tag_id
+		JOIN (SELECT tag_id, COUNT(*) AS n FROM work_tags GROUP BY tag_id) wb
+		  ON wb.tag_id = b.tag_id
 		WHERE a.tag_id = ?
 		GROUP BY b.tag_id
-		ORDER BY co DESC, b.tag_id
-		LIMIT ?`, id, tagGapNeighbours)
+		HAVING co >= ?
+		ORDER BY (COUNT(*) * 1.0 * ?) / (? * 1.0 * wb.n) DESC, co DESC
+		LIMIT ?`, id, minCooccur, corpusWorks, ownWorks, tagGapNeighbours)
 	if err != nil {
 		return res, fmt.Errorf("tag-gap: neighbourhood: %w", err)
 	}
