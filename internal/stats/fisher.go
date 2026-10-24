@@ -191,7 +191,7 @@ func trimFloat(v float64, places int) string {
 	}
 	scale := math.Pow(10, float64(places))
 	rounded := math.Round(v*scale) / scale
-	s := itoa(int(rounded*scale))
+	s := itoa(int(rounded * scale))
 	for len(s) < places+1 {
 		s = "0" + s
 	}

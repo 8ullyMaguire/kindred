@@ -1241,6 +1241,13 @@ var pageRenderCases = []pageRenderCase{
 			Arms: []store.InterleaveArmStat{{
 				Arm: "default", Impressions: 200, Credits: 14, CreditRate: 0.07,
 			}},
+			// A young pair: 3 slots and 0 slots, refused by the floor. The
+			// dashboard must render its verdict rather than the rate alone.
+			Pairs: []store.InterleavePairStat{{
+				ArmA: "default", ArmB: "hybrid", ImpressionsA: 3, ImpressionsB: 0,
+				Difference: 0, P: 1, Underpowered: true,
+				NoLeadReason: "too few slots to compare: 3 slots for default and 0 slots for hybrid, and 50 each are needed.",
+			}},
 			Works: 112935, Tags: 634231, WorkTags: 2884447, Edges: 2884447,
 		},
 		wantContains: []string{
@@ -1249,6 +1256,8 @@ var pageRenderCases = []pageRenderCase{
 			// The dashboard must say the rates are RAW when no pair has cleared
 			// the test: a table of rates beside a heading is read as a result.
 			"No result yet.", "no pair has enough",
+			// The pair's own row, with the floor's reason attached.
+			"too few slots to compare", "interleaved-verdict",
 		},
 		wantNotContains: []string{"has cleared the test (exact"},
 	},
@@ -1259,9 +1268,31 @@ var pageRenderCases = []pageRenderCase{
 		name: "eval.html with a pair that earned a winner",
 		data: EvalPage{
 			Base: sweepBase,
+			// A run, so the page is genuinely populated: the empty-state test
+			// requires that no data-empty marker survives a render with rows.
+			Runs: []store.EvalRun{{
+				ID: 9, RanAt: "2026-10-24 10:00:00", K: 10, Mode: "full",
+				Readers: 40, Bookmarks: 900, Evaluated: 37, HeldOut: 370, Hits: 39,
+				Recall: 0.1063, NDCG: 0.1888, Coverage: 0.6579, LengthFit: 0.713,
+				LengthRuns: 37,
+			}},
+			Algos: []store.AlgoStanding{{Algo: "hybrid", Judged: 30, Wins: 17, Losses: 11, Ties: 2}},
 			Arms: []store.InterleaveArmStat{{
 				Arm: "hybrid", Impressions: 200, Credits: 40, CreditRate: 0.20,
 			}},
+			// Every section, because the two-sided empty-state test requires a
+			// populated render to carry no data-empty marker at all -- one
+			// unpopulated section would fail it for a reason unrelated to what
+			// this case is about.
+			SliceRunID: 9,
+			SliceMinN:  20,
+			FandomSlices: []store.EvalSlice{
+				{Axis: "fandom", Name: "selkie au", N: 40, Hits: 12, HitRate: 0.30},
+			},
+			TagSlices: []store.EvalSlice{
+				{Axis: "tag", Name: "slow burn", N: 25, Hits: 8, HitRate: 0.32},
+			},
+			Works: 112935, Tags: 634231, WorkTags: 2884447, Edges: 2884447,
 			Pairs: []store.InterleavePairStat{{
 				ArmA: "hybrid", ArmB: "tags", ImpressionsA: 200, ImpressionsB: 200,
 				CreditsA: 40, CreditsB: 10, Difference: 0.15,
@@ -1269,7 +1300,7 @@ var pageRenderCases = []pageRenderCase{
 			}},
 			AnyLead: true,
 		},
-		wantContains: []string{"has cleared the test (exact", "p &lt; 0.05"},
+		wantContains:    []string{"has cleared the test (exact", "p &lt; 0.05"},
 		wantNotContains: []string{"No result yet."},
 	},
 	{

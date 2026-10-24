@@ -840,7 +840,7 @@ echo "an interleaved difference is not a result (#84)"
 # and a page that prints the first without the second invites a reader to treat a
 # 0.0004 difference as an ordering. The verdict column must be there, and on a young
 # deployment it must say "no lead" rather than naming one.
-check "the head-to-head table carries a verdict column" "$TARGET/algo?mode=interleave" 'data-testid="interleaved-verdict"'
+check "the head-to-head table carries a verdict column" "$TARGET/eval" 'data-testid="interleaved-verdict"'
 check "the dashboard says whether any pair has cleared the test" "$TARGET/eval" 'data-testid="eval-no-lead"'
 check "and the endpoint carries the p-value"                          "$TARGET/api/v1/interleave/standings" '"p"'
 

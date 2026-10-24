@@ -192,7 +192,7 @@
     <p class="count" data-testid="eval-lead">
       At least one pair has cleared the test (exact two-sided p &lt; 0.05 with
       enough slots on both sides). See
-      <a href="/algo?mode=interleave">the head-to-head table</a> for which.
+      which pair, below.
     </p>
   {{else}}
     <p class="count" data-testid="eval-no-lead">
@@ -201,6 +201,33 @@
       finding. A read mark on <a href="/algo?mode=interleave">the merged list</a>
       is what changes that.
     </p>
+  {{end}}
+  {{/* The pairs table lives here as well as on /algo because /algo shows it only
+       after it has just SERVED a merged list -- so making a gate look at it would
+       mean generating impressions on every deploy, which is fabricating the very
+       evidence the test is about. The dashboard reads, and does not serve. */}}
+  {{if .Pairs}}
+    <table class="standings" data-testid="eval-pairs">
+      <thead>
+        <tr><th>A</th><th>B</th><th class="num">Slots A</th><th class="num">Slots B</th>
+            <th class="num">Read A</th><th class="num">Read B</th><th class="num">A &minus; B</th>
+            <th>Verdict</th></tr>
+      </thead>
+      <tbody>
+        {{range .Pairs}}
+          <tr>
+            <td><code>{{.ArmA}}</code></td>
+            <td><code>{{.ArmB}}</code></td>
+            <td class="num">{{.ImpressionsA}}</td>
+            <td class="num">{{.ImpressionsB}}</td>
+            <td class="num">{{.CreditsA}}</td>
+            <td class="num">{{.CreditsB}}</td>
+            <td class="num">{{printf "%+.3f" .Difference}}</td>
+            <td data-testid="interleaved-verdict">{{if .Leading}}<strong>{{.Leading}}</strong> leads (p = {{printf "%.4f" .P}}){{else}}<span class="muted">no lead — {{.NoLeadReason}}</span>{{end}}</td>
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
   {{end}}
 {{else}}
   <p class="count" data-testid="eval-arms-empty" data-empty="true">
