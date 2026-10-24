@@ -25,6 +25,14 @@ import (
 // already uses: a measurement package that imported the engine would be
 // unable to measure a second ranker without depending on both, and the engine
 // would then be free to import eval and make the dependency circular.
+// tuneOr names the empty tune for what it is: the built-in default.
+func tuneOr(name string) string {
+	if name == "" {
+		return "default"
+	}
+	return name
+}
+
 type engineRecommender struct {
 	eng *engine.Engine
 	// tune is the weight tune to rank with; empty means the built-in default.
@@ -290,7 +298,15 @@ func runEval(ctx context.Context, args []string) error {
 		// Which weights produced these numbers. Without it, four ablations on
 		// one afternoon are four rows of numbers nobody can attribute -- which
 		// is what this table was until 2026-10-24.
-		Tune: rec.tune,
+		//
+		// The default is stored AS "default" rather than as the empty string.
+		// An empty tune name means "use the built-in default" on the command
+		// line, and '' in this column means "this run predates the column", so
+		// letting the first spelling through would make the two
+		// indistinguishable in exactly the table that exists to distinguish
+		// them -- caught by reading the deployed table back and finding run #35,
+		// which certainly used the default, labelled "(unrecorded)".
+		Tune: tuneOr(rec.tune),
 	}); rerr != nil {
 		fmt.Fprintf(os.Stderr, "eval: could not record this run (it was still measured): %v\n", rerr)
 	} else {
