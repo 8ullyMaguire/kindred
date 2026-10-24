@@ -1080,12 +1080,12 @@ echo "the summaries are read, not just indexed (#52)"
 # the signal skips for every candidate while looking registered -- which is exactly what
 # happened to the first version of this row: two tunes that differ by a tenth of the weight
 # produced byte-identical rankings).
-checkall "the summary signal scores a live list" \
+checkall "the summary signal scores the DEFAULT list" \
+  "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=3" \
+  '"signal":"summary_style"' 'weighted subject word' 'with the seeds: '
+checkall "and the measured tune agrees with it" \
   "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=3&tune=with_summary" \
-  '"tune":"with_summary"' '"signal":"summary_style"' 'weighted subject word'
-check "and it names the words that matched"  "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=3&tune=with_summary" 'with the seeds: '
-check_absent "and the default tune leaves it out, as measured" \
-  "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=3" '"signal":"summary_style"'
+  '"tune":"with_summary"' '"signal":"summary_style"'
 
 # --- verdict ------------------------------------------------------------
 echo
