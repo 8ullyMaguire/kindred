@@ -41,7 +41,7 @@ Four statuses:
 | 36 | Session taste vector export/import | OPEN | No `/api/v1/taste`; session taste is derived per request (`signal/session_taste.go`) and never serialised. |
 | 37 | Tag hierarchy from embedding clusters | OPEN | `internal/tagfamily` holds a hand-written `families.json`; nothing clusters the embeddings into a tree. |
 | 38 | Quality-adjusted co-occurrence | PARTIAL | Co-occurrence edges are shrunk by `DefaultShrinkK` (`collab.go`) — evidence weighting, not per-work kudos weighting. |
-| 39 | Bayesian average for tag quality | OPEN | Shrinkage exists for collab lift only; no per-tag Bayesian average of kudos across a tag's works. |
+| 39 | Bayesian average for tag quality | BUILT | The tag page printed `mean kudos` over as few as three works — a number that reads as a quality claim and is really one hit. Now a fourth number, shrunk toward the corpus mean: `(sum + 10*prior)/(n + 10)`, with the prior and the pseudo-work weight printed beside it (`data-prior`, `data-weight`). The prior excludes zero-kudos works (112,937 works, most unkudosed — the all-in mean would shrink every tag toward "nobody liked this") and is cached per process on a detached context. Symmetric by construction and tested both ways: a tag worse than the corpus is pulled up. No ranking consumes it — `quality` already measures a work's own kudos, and a second tag-level quality dimension arrives with a measurement or not at all. |
 | 40 | Ordered "reading path" | BUILT | `GET /api/v1/works/{id}/path?steps=N` and `/path/{id}`. Each step is chosen against the PREVIOUS work (`sim_to_prev - 0.5*sim_to_seed`), so the list drifts instead of describing the seed N times; every step publishes both distances. Measured on work 17249318: seed distance falls 0.966 -> 0.896 -> 0.798 -> 0.701 over four steps while hops stay 0.89-0.97, against 0.966 flat for plain nearest-neighbour. |
 | 41 | Length binning for similar-length recs | BUILT | A `length_fit` SIGNAL, not a bin: `score = min(words, seedsMedian) / max(words, seedsMedian)` over up to 40 seeds (the ratio of the smaller length to the larger — 1.0 at the median, 0.5 at twice or half, 0.06 at sixteen). A seed with no word count is silence, not a zero-length work; an unknown-length work and a request whose seeds all lack lengths both SKIP into `meta.degraded[]` rather than scoring 0. Registered at 0.08 (a real weight: `rank.Score` skips weight-0 signals, so a dimension shipped at zero never runs and never names itself). MEASURED, 37 lists, both tunes summing to 1.0: `length_fit` 0.713 with vs 0.575 without (+24% relative), recall 0.1063 vs 0.1035, nDCG 0.1888 vs 0.1953 (−3%), diversity identical (overlap 0.099, 2.2 fandoms). The eval grew `length_fit` + `length_runs` (unmeasured is never 0.0) and `--tune` carries the ablation. THE ABLATION FOUND A REAL DEFECT: `diversify.Apply` mixed `lambda*score` with a [0,1] Jaccard, so the tune vector's absolute SCALE changed the ranking — identical ratios at sum 1.66 vs 1.0 gave recall 0.1050 vs 0.1152, while `kindred tune` refuses any vector that does not sum to 1.0. Scores are normalised by the list's top score now; the invariant test was red first ([1 3] vs [1 2] at half scale) and the product-level proof is runs #21 and #24 agreeing to four decimals at two different scales. |
 | 42 | Calibrated recommendation confidence | BUILT | The recommendation page now says what the ORDER is worth, measured rather than asserted. `kindred eval` records, per position 1..k, how many readers' lists reached it and how many of those held a work the reader later bookmarked (`eval_positions`, written by every run); `/recommend` prints three bands of it with the run id, and `GET /api/v1/calibration` serves the unrounded numbers and every position so the page's "26%" can be checked against 29 of 111. LIVE (run #18, 37 lists): first three 26% (29/111), next four 14% (21/148), the rest 9% (10/111) — the tail is 3x worse than the top, not 10x, and position 1 alone is 32%. Three facts the block refuses to merge: no run says "not calibrated yet" and names the command (never 0%), a band nothing reached prints an em dash with its counts, and a run under 20 lists prints no percentage at all. The LABEL IS THE RATE — "strong"/"speculative" would be an opinion the data does not contain. The reader count is derived from position 1 rather than from the split, so it cannot drift from the denominators. 8/8 mutants killed. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 25 | 33, 40, 41, 42, 43, 46, 50, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84 |
+| BUILT | 26 | 33, 39, 40, 41, 42, 43, 46, 50, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84 |
 | PARTIAL | 6 | 32, 38, 45, 49, 72, 89 |
-| OPEN | 35 | 31, 34, 35, 36, 37, 39, 44, 47, 48, 52, 53, 55, 58, 59, 68, 69, 73, 75, 77, 80, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 34 | 31, 34, 35, 36, 37, 44, 47, 48, 52, 53, 55, 58, 59, 68, 69, 73, 75, 77, 80, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
@@ -143,8 +143,9 @@ number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). See
 
 2026-10-23k shipped #79 (intra-list diversity, stored with every offline run) and
 corrected this file's totals. 2026-10-24b/c/d shipped #41 (length_fit), #84 (the significance test the interleave log
-was missing) and #74 (personalised PageRank over the tag graph). **The counts below are
-the table's, not a memory of them: 25 built, 6 partial, 35 open, 4 without a premise.** For two sessions this
+was missing), #74 (personalised PageRank over the tag graph) and #39 (the tag shelf's
+shrunk kudos). **The counts below are the table's, not a memory of them: 26 built,
+6 partial, 34 open, 4 without a premise.** For two sessions this
 block said "38 built, 49 open" — arithmetically consistent with 100 rows and wrong
 by about thirty, because this roadmap holds rows 31–100 (70 rows) and the phantom
 thirty made the backlog look half finished when it is a third done. The lesson is
