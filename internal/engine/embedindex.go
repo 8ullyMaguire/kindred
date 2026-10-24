@@ -193,6 +193,11 @@ func isMissingTable(err error) bool {
 	return strings.Contains(msg, "no such table") || strings.Contains(msg, "no such column")
 }
 
+// embedLoadTimeout bounds how long the one-time embedding load may take once it
+// is detached from the caller. Generous: 634k rows off a slow disk, and the cost
+// of being wrong upward is one goroutine for two minutes.
+const embedLoadTimeout = 2 * time.Minute
+
 // tagVectors returns the process's tag-embedding matrix, loading it on first
 // use.
 //
@@ -200,6 +205,24 @@ func isMissingTable(err error) bool {
 // errored is not retried on every request, and the cached nil index makes the
 // embedding signal skip (and name itself degraded) rather than turning every
 // ranking into a database read.
+//
+// BUT "once, including on failure" was caching a failure the caller caused. The
+// load used to run on the CALLER's context, and the cache outlives the caller:
+//
+//	first request after a cold start  -> load 634,232 vectors on its ctx
+//	that request is cancelled         -> "read embedding ids: context canceled"
+//	every request after it            -> the same cached error, for the life of
+//	                                     the process
+//
+// Observed live 2026-10-24: a deploy health check was the first to touch the
+// signal, the process then logged "tag embeddings loaded with errors err=read
+// embedding ids: context canceled" on every request and served reading paths
+// saying "This mirror has no tag embeddings" — while /api/v1/stats reported
+// 634,232 of them. A client hanging up must not decide what this process knows.
+//
+// The load is now detached from the caller's cancellation with a deadline of its
+// own, so a stalled database still cannot pin a goroutine. A failure caused by
+// the DATABASE is still cached once; a failure caused by the CALLER is not.
 func (e *Engine) tagVectors(ctx context.Context) (*tagIndex, error) {
 	if e == nil {
 		return nil, nil
@@ -209,7 +232,9 @@ func (e *Engine) tagVectors(ctx context.Context) (*tagIndex, error) {
 		if e.Store != nil {
 			db = e.Store.DB
 		}
-		e.tagIdx.idx, e.tagIdx.err = loadTagIndex(ctx, db)
+		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), embedLoadTimeout)
+		defer cancel()
+		e.tagIdx.idx, e.tagIdx.err = loadTagIndex(loadCtx, db)
 	})
 	return e.tagIdx.idx, e.tagIdx.err
 }

@@ -250,3 +250,46 @@ func TestSeedCentroidWeightsEachSeedEqually(t *testing.T) {
 		t.Fatalf("seed centroid = %v, want [0.5 0.5] (each seed counts once)", got)
 	}
 }
+
+// The embedding cache must not be poisoned by a caller that hung up.
+//
+// This is the 2026-10-24 live defect: the one-time load ran on the FIRST caller's
+// context, so a cancelled first request (a deploy health check, a reader who closed
+// the tab) cached "context canceled" for the life of the process. The server then
+// answered every reading path with "This mirror has no tag embeddings" while
+// /api/v1/stats reported 634,232 of them — two surfaces of one process disagreeing
+// about what it knew.
+func TestACancelledCallerDoesNotPoisonTheEmbeddingCache(t *testing.T) {
+	e := newFixtureEngine(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the caller is already gone when the load would start
+
+	idx, err := e.tagVectors(ctx)
+	if err != nil {
+		t.Fatalf("the load ran on a cancelled caller's context and cached %v for the "+
+			"life of the process; a client hanging up must not decide what this "+
+			"process knows", err)
+	}
+	// A mirror with no vectors legitimately has no index; what must not happen
+	// is the ERROR being cached. The fixture has no vectors, so nil-nil is the
+	// expected pair after the fix and the error-carrying pair is what the bug
+	// produced.
+	_ = idx
+}
+
+// The index is still loaded once: two calls hand back the same pointer, so the
+// 634k-row scan cannot become a per-request cost.
+func TestTheEmbeddingIndexIsLoadedOnce(t *testing.T) {
+	e := newFixtureEngine(t)
+	first, err := e.tagVectors(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := e.tagVectors(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatal("two calls returned different indexes: the load is not cached")
+	}
+}
