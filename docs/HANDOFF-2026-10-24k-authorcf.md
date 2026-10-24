@@ -98,8 +98,10 @@ floor, merge order.
 ## Deployment
 
 `CoReaders` is built at boot from the same interaction table the collab index uses: 63,245
-authors, ~1 s, and the service sits around 180 MB RSS after the restart (ceiling 768 MB
-`MemoryHigh` / 1 GB `MemoryMax`). The gate is **130 checks**, three of them new:
+authors, ~1 s. Memory: 180 MB RSS immediately after a restart, **573 MB once the index, the
+graph, the collab index and the doc-frequency table are all resident and serving** — the
+ceiling is 768 MB `MemoryHigh` / 1 GB `MemoryMax`, so the headroom is real but this index is
+the largest single addition to it. A mirror with no interaction table builds nothing. The gate is **130 checks**, three of them new:
 
 - the live default ranks by readers (`ranked_by: co_readers`, a `readers` count, and the
   evidence sentence),
