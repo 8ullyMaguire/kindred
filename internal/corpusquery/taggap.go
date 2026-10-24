@@ -360,30 +360,39 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 		if share > 0 {
 			lift = ownRate / share
 		}
-		// How much the neighbourhood over-carries the candidate, relative to the
-		// archive, shrunk toward 1.0 by its own evidence. A candidate the neighbourhood
-		// carries at exactly the archive's rate has enrichment 1 and no gap, whatever
-		// its raw support.
+		// How much the neighbourhood over-carries the candidate, relative to the archive,
+		// shrunk toward 1.0 by its own evidence. A candidate the neighbourhood carries at
+		// exactly the archive's rate has enrichment 1 and no gap, whatever its support.
 		enrichment := 0.0
 		if share > 0 && neighWorks > 0 {
 			enrichment = (float64(c.support) / float64(neighWorks)) / share
 		}
 		enrichShrunk := 1 + (enrichment-1)*float64(c.support)/(float64(c.support)+ShrinkK)
-		// NOTE: there is no explicit `enrichShrunk <= 1` guard here. It was written, and a
-		// mutation showed it was dead: shrinking pulls toward 1 without crossing it, so
-		// enrichment <= 1 implies enrichShrunk <= 1 implies a non-positive gap, which the
-		// `gap <= 0` test below already refuses. Both factors of the score are required to
-		// be positive, and ONE comparison enforces it.
-		// A tag the seed carries at or above the corpus rate has NO gap: 1-lift is zero
-		// at parity and negative above it, so the row is dropped below rather than
-		// ranked low. There was an explicit math.Min(lift, 1) here, and a mutation run
-		// proved it redundant -- deleting it changed no test outcome, because a lift
-		// above 1 already produces a non-positive gap. The exclusion is the `gap <= 0`,
-		// which is what a mutant does break.
-		gap := float64(c.support) * (enrichShrunk - 1) * (1 - lift)
-		if gap <= 0 {
+
+		// TWO INDEPENDENT GUARDS, and the pair is not redundancy.
+		//
+		// The score is a PRODUCT of two signed factors:
+		//
+		//	gap = support x (enrichShrunk - 1) x (1 - lift)
+		//
+		// A product of two negatives is POSITIVE, so a single `gap <= 0` check accepts a
+		// tag the seed already covers more than the archive does (1 - lift < 0) whose
+		// neighbourhood also under-carries it (enrichShrunk - 1 < 0) -- and that is exactly
+		// the bug that shipped: the live list led with "implied/referenced child abuse,
+		// 2.94x the corpus rate" for hurt/comfort, rows whose own note said the tag's works
+		// carry it THREE TIMES more often than the archive. The names looked right, which is
+		// why it took reading the numbers beside them.
+		//
+		// So each factor is required to be positive on its own, and the earlier claim in
+		// this file that `enrichShrunk <= 1` implied a non-positive gap was true only while
+		// the other factor was positive -- which is the thing that is not guaranteed.
+		if lift >= 1 {
 			continue
 		}
+		if enrichShrunk <= 1 {
+			continue
+		}
+		gap := float64(c.support) * (enrichShrunk - 1) * (1 - lift)
 		res.Rows = append(res.Rows, Row{
 			Key:     c.name,
 			Label:   c.name,

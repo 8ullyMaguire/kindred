@@ -122,6 +122,12 @@ func TestTagGapDropsWhatTheSeedAlreadyCovers(t *testing.T) {
 			t.Fatalf("row %q is in a gap list with score %v: only positive gaps belong "+
 				"in one", r.Key, r.Score)
 		}
+		if r.Key == "familiar" {
+			t.Fatalf("\"familiar\" is listed with score %v: the seed covers it %.2fx the "+
+				"corpus rate AND the neighbourhood under-carries it, so both factors of the "+
+				"score are negative and their product is positive -- the shape that shipped "+
+				"live as \"2.94x the corpus rate\" in a gap list", r.Key, r.Score)
+		}
 		if r.Key == "covered" {
 			t.Fatalf("\"covered\" is listed with lift %v: the seed carries it %.2fx the "+
 				"corpus rate, so it has no gap", r.Lift, r.Lift)
@@ -145,6 +151,28 @@ func TestTagGapRequiresTheNeighbourhoodToOverCarry(t *testing.T) {
 					"LESS often than the archive does: a tag outside the genre is not a "+
 					"gap in this tag, however rare it is in the seed", bad, r.Score)
 			}
+		}
+	}
+}
+
+// BOTH factors negative is not "no gap": their product is POSITIVE, and a score computed
+// as one product accepts it. This is the shape that shipped live -- hurt/comfort's top row
+// was "implied/referenced child abuse, 2.94x the corpus rate", a tag its own works carry
+// nearly three times more often than the archive, listed as something the tag LACKS.
+//
+// Its own test rather than a line in the one above, because that one stops at the first
+// bad row and "spread" (a single negative factor) is caught before this case is reached.
+func TestTagGapRefusesATagWhoseBothFactorsAreNegative(t *testing.T) {
+	db := gapDB(t)
+	res, err := NewRunner(db).TagGap(context.Background(), "seed", Options{Limit: 50, MinCoWorks: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range res.Rows {
+		if r.Key == "familiar" {
+			t.Fatalf("\"familiar\" is listed with score %v and lift %.2f: the seed already "+
+				"covers it and the neighbourhood under-carries it, so both factors of the "+
+				"score are negative and their product is positive", r.Score, r.Lift)
 		}
 	}
 }
@@ -286,7 +314,7 @@ func gapDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 
-	for i, name := range []string{"seed", "wanted", "covered", "inline", "spread"} {
+	for i, name := range []string{"seed", "wanted", "covered", "inline", "spread", "familiar"} {
 		if _, err := db.Exec(`INSERT INTO tags (id, name) VALUES (?, ?)`, i+1, name); err != nil {
 			t.Fatal(err)
 		}
@@ -304,11 +332,12 @@ func gapDB(t *testing.T) *sql.DB {
 		}
 	}
 	const (
-		tSeed    = 1
-		tWanted  = 2
-		tCovered = 3
-		tInline  = 4
-		tSpread  = 5
+		tSeed     = 1
+		tWanted   = 2
+		tCovered  = 3
+		tInline   = 4
+		tSpread   = 5
+		tFamiliar = 6
 	)
 	seedWorks := make([]int, 0, 100)
 	for w := 1; w <= 100; w++ {
@@ -348,6 +377,24 @@ func gapDB(t *testing.T) *sql.DB {
 	}
 	for w := 501; w <= 900; w++ {
 		add(w, tSpread)
+	}
+	for w := 501; w <= 960; w++ {
+		add(w, tFamiliar)
+	}
+	// familiar: the case where BOTH factors are on the wrong side, so their product is
+	// positive and a single sign check would accept it. 70 of the seed's works and 60 of
+	// the neighbourhood's, 460 more outside: corpus 590 of 1000 -> the seed carries it at
+	// 0.70 against 0.59 (lift 1.19, already covered) and the neighbourhood at 0.15 against
+	// 0.59 (enrichment 0.25, under-carried).
+	//
+	// The 60 hood works matter twice: the candidate query's floor is 50 SUPPORT, so 40 --
+	// the first version of this fixture -- meant familiar was never a candidate and the
+	// test passed without ever exercising the guards.
+	for w := 1; w <= 70; w++ {
+		add(w, tFamiliar)
+	}
+	for w := 101; w <= 160; w++ {
+		add(w, tFamiliar)
 	}
 	return db
 }
