@@ -85,3 +85,24 @@ row earlier: a difference that cannot clear a significance bar does not retune a
    60-work corpus where every work shares the same few tags — where a correct walk
    legitimately has nothing to score. Replaced with a dense graph over the fixture's real
    tag ids.
+
+## The `eval_runs.tune` column, and the second thing it caught
+
+Added this session because four ablation runs had produced four rows of numbers that
+nothing could attribute. Reading the deployed table back immediately found a defect in
+the column itself: run #35 — the default tune, certainly — was labelled "(unrecorded)",
+because an empty `--tune` flag was stored as `''`, and `''` is also what a run written
+before the column looks like.
+
+Two different statements had become one string, in the column that exists to separate
+them. The default is now stored as `"default"`; `''` keeps its honest meaning (this run
+predates the column) and the earlier rows keep their numbers rather than being relabelled
+— inventing provenance is worse than admitting its absence.
+
+Live after the fix:
+
+```
+36 | default | 0.1063 | 0.1889
+35 |         | 0.1063 | 0.1889   (predates the column)
+34 | walk25  | 0.1004 | 0.1556
+```
