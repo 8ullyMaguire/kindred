@@ -13,6 +13,13 @@ established it.
 - [x] **#50 "Complete your collection"** — `/author?q=` says "you have read 2 of
       4 — 2 to go" and `?unread=1` shows the rest. Live with a session; anonymous
       readers get no claim at all.
+- [x] **#41 Length, measured** (2026-10-24b): a `length_fit` signal (ratio of the
+      smaller length to the larger, against the seeds' median) plus the metric that can
+      judge it. Live, 37 lists: length fit 0.713 with the signal vs 0.575 without, recall
+      0.1063 vs 0.1035, nDCG −3%, diversity unchanged. The ablation also found that
+      `diversify` mixed a raw score with a [0,1] similarity, so a tune's absolute SCALE
+      changed the ranking — fixed, with the proof being two runs at different scales
+      agreeing to four decimals.
 - [x] **#42 What the order is worth** (2026-10-24a): every eval run records where
       hits land, position by position; `/recommend` prints three bands with the run
       id and `GET /api/v1/calibration` serves the unrounded numbers. Live (run #18,
