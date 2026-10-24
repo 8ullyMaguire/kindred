@@ -1074,8 +1074,8 @@ check "and an unknown arm is refused by name"    "$TARGET/api/v1/authors/similar
 
 echo
 echo "the summaries are read, not just indexed (#52)"
-# summary_style ships at weight 0 in the default tune, so the check raises the measured tune
-# and looks for the signal in the evidence. Two things have to be true at once: the term table
+# summary_style carries the measured weight in the DEFAULT tune (a share of 0.1), so the first
+# check needs no tune at all. Two things have to be true at once: the term table
 # is loaded (or the signal names itself degraded), and the POOL QUERY carries the summary (or
 # the signal skips for every candidate while looking registered -- which is exactly what
 # happened to the first version of this row: two tunes that differ by a tenth of the weight

@@ -654,11 +654,22 @@ func DefaultTune() rank.Tune {
 			// the ablation (`kindred tune --name no_walk --set walk=0`) is
 			// what decides the number.
 			"walk": 0.06,
-			// summary_style is the only signal that reads PROSE (#52). It ships at 0 for the
-			// same reason latent does: a weight nobody measured is the bug this project keeps
-			// finding. `kindred tune --name with_summary --set summary_style=0.1` is the
-			// ablation, and docs/HANDOFF-2026-10-24l-summary.md records what it found.
-			"summary_style": 0.0,
+			// summary_style is the only signal that reads PROSE (#52): cosine over the words of
+			// the summaries, weighted by how rare each word is in the archive.
+			//
+			// 0.1911 here is a SHARE of 0.1 -- the defaults above sum to 1.72, so what decides
+			// a ranking is each weight over the total. The number is not a guess: the ablation
+			// ran at 0.00 / 0.10 / 0.20 on the live mirror's 295-reader holdout, and the middle
+			// point is the peak (docs/HANDOFF-2026-10-24l-summary.md):
+			//
+			//	 share   recall@10   ndcg@10   coverage
+			//	 0.00      0.1196     0.1570     0.5220
+			//	 0.10      0.1219     0.1586     0.5322
+			//	 0.20      0.1215     0.1581     0.5254
+			//
+			// All three metrics move together at both non-zero points, which is what makes this
+			// different from ALS (#89, weight 0: its gain disappeared under an honest retrain).
+			"summary_style": 0.1911,
 		},
 	}
 }
