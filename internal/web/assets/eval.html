@@ -151,10 +151,13 @@
       {{end}}
     </tbody>
   </table>
-  <p class="hint">
+  <p class="hint" data-testid="eval-vote-standard">
     From <a href="/algo">/algo</a>: a reader saw two lists and chose one. A
     draw is stored rather than dropped, or every win rate inflates as readers
-    grow indifferent.
+    grow indifferent — and a draw is <em>not</em> counted toward the test, since
+    a reader who could not choose has said nothing about which list is better. A
+    record becomes evidence only when a two-sided sign test over the decisive
+    comparisons gives p &lt; 0.05 with at least ten of them.
   </p>
 {{else}}
   <p class="count" data-testid="eval-algos-empty" data-empty="true">
