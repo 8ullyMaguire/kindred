@@ -56,7 +56,14 @@ const (
 
 	// tagGapCandidates caps the second hop before ranking, so a very common neighbour
 	// tag cannot pull a hundred thousand candidates into memory.
-	tagGapCandidates = 600
+	//
+	// 150 rather than 600, measured: the two count queries cost roughly linearly in this
+	// number, and through the Go driver they were 6.5 s of a 15 s request at 600 against
+	// 1.6 s at 150. The list returns 25 rows and the filters reject a minority, so 150
+	// candidates is not a bind on the answer -- and a query that takes longer than the
+	// server's 20-second request timeout returns a 500, which is not a slow answer but no
+	// answer at all.
+	tagGapCandidates = 150
 
 	// tagGapRowLimit is how many gaps a default query returns.
 	tagGapRowLimit = 25
