@@ -1243,3 +1243,45 @@ func (s *Store) OwnerForSession(ctx context.Context, sessionKey string) (string,
 	}
 	return owner, nil
 }
+
+// BTDuels returns the arena's whole judged history as Bradley-Terry duels, plus the
+// number of comparisons read (#53).
+//
+// The whole history, not a period: Glicko-2 is sequential by design (a rating is a
+// state that moves), while BT is a static fit over everything at once. Fitting BT on
+// one batch would answer "who won most recently", which is the question Glicko-2
+// already answers with more care.
+//
+// The duels carry the comparison's agreement as their weight, which is the same weight
+// the Glicko batch uses, so a comparison the voter disagreed with counts the same in
+// both models. If the two fits used different weights, any disagreement between them
+// would be unattributable.
+func (s *Store) BTDuels(ctx context.Context, kind arena.EntityKind) ([]arena.Duel, int, error) {
+	rows, err := s.JudgedAfterKind(ctx, kind, time.Time{}, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	duels := make([]arena.Duel, 0, len(rows))
+	for _, r := range rows {
+		w := r.Agreement
+		if w <= 0 {
+			// Zero agreement would mean "this voter's opinion counts for nothing",
+			// and BT has no way to say that other than dropping the row. Dropping is
+			// what the batch does with its agreement floor, so it is what happens here.
+			continue
+		}
+		switch {
+		case r.Score > 0.5:
+			duels = append(duels, arena.Duel{Winner: r.Winner, Loser: r.Loser, Weight: w})
+		case r.Score < 0.5:
+			duels = append(duels, arena.Duel{Winner: r.Loser, Loser: r.Winner, Weight: w})
+		default:
+			// A draw is half a win each way; BT has no draw term and half-weight duels
+			// in both directions are the standard reduction.
+			duels = append(duels,
+				arena.Duel{Winner: r.Winner, Loser: r.Loser, Weight: w / 2},
+				arena.Duel{Winner: r.Loser, Loser: r.Winner, Weight: w / 2})
+		}
+	}
+	return duels, len(rows), nil
+}

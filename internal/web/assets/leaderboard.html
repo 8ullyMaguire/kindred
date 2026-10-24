@@ -9,6 +9,26 @@
      standings, which is true before the first rating exists.
      Empty on a deployment with no owner cohort. */}}
 {{if .CohortNote}}<p class="cohort-note" data-testid="cohort-note">{{.CohortNote}}</p>{{end}}
+{{/* #53: the ordering cross-checked against a second model. One number and its
+     counts, not a second table -- a second leaderboard invites a reader to pick the
+     column they prefer, and the useful question is whether the order survives the
+     choice of model. */}}
+{{with .BT}}
+<p class="cohort-note" data-testid="bt-crosscheck"
+   data-bt-rho="{{printf "%.3f" .Rho}}" data-bt-items="{{.Items}}"
+   data-bt-comparisons="{{.Comparisons}}" data-bt-converged="{{.Converged}}"
+   {{if .Thin}}data-bt-thin="true"{{end}}>
+  Ordering cross-checked against Bradley-Terry, fitted on the same {{.Comparisons}}
+  comparisons: Spearman &rho; = {{printf "%.2f" .Rho}} over the {{.Items}} works both
+  models rank{{if not .Converged}} (the fit did not converge in {{.Iterations}} sweeps, so
+  read this as a failed check rather than a close one){{end}}. BT has no uncertainty
+  term and no inactivity decay, which is why it cross-checks this table instead of
+  replacing it &mdash; where the two disagree, the disagreement is the finding.
+  {{if .Thin}}<strong>Read this as unmeasured:</strong> {{.Comparisons}} comparisons over
+  {{.Items}} works is fewer than three apiece, so both fits are mostly their own prior
+  and their agreement says little about the works.{{end}}
+</p>
+{{end}}
 {{if .Empty}}
 <p class="empty" data-empty="true">{{.Note}}</p>
 {{else}}

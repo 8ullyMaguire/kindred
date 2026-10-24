@@ -132,6 +132,29 @@ type LeaderboardPage struct {
 	// one, and is empty when it does not. Printed directly under the heading,
 	// before the table, because it qualifies every number in it.
 	CohortNote string
+	// BT is the cross-check (#53): a Bradley-Terry fit over the same comparisons,
+	// reported as an agreement with the Glicko-2 ordering rather than as a second
+	// table. Nil when there is nothing to fit.
+	BT *BTAgreement
+}
+
+// BTAgreement is how much the ordering depends on the model that produced it.
+//
+// Reported as ONE number and its counts, deliberately. A second leaderboard beside
+// the first invites a reader to pick the column they prefer; the question worth
+// answering is whether the order survives a different model, and that is a
+// correlation with an n.
+type BTAgreement struct {
+	Comparisons int     // judged comparisons the fit read
+	Items       int     // items with a strength in both models
+	Rho         float64 // Spearman between BT strength and Glicko-2 effective rating
+	Converged   bool
+	Iterations  int
+	// Thin is true when the fit has fewer than three comparisons per item, which is
+	// where BT stops measuring and starts repeating the prior. Printed as a
+	// qualifier because a correlation over a thin fit is a number about the prior,
+	// and the page must not present it as a finding about the works.
+	Thin bool
 }
 
 // LeaderboardRow is one standing.
@@ -1051,6 +1074,26 @@ func (d Deps) renderLeaderboard(w http.ResponseWriter, r *http.Request) {
 			row.Title, row.Author = title, author
 		}
 	}
+	// The cross-check, computed here rather than stored: BT is a fit over the whole
+	// history, so it cannot go stale in a table the way a rating can.
+	if duels, n, derr := d.Engine.Store.BTDuels(ctx, arena.KindWork); derr == nil && n > 0 {
+		if strengths, iters, conv := arena.FitBT(duels); len(strengths) > 0 {
+			glicko := make(map[int64]float64, len(entries))
+			for _, e := range entries {
+				// Effective, not Mu: Effective is what the leaderboard orders by
+				// (Mu shrunk by RD), so comparing BT against raw Mu would be
+				// comparing against a number the page does not show.
+				glicko[e.WorkID] = e.Effective
+			}
+			rho, shared := arena.Spearman(strengths, glicko)
+			page.BT = &BTAgreement{
+				Comparisons: n, Items: shared, Rho: rho,
+				Converged: conv, Iterations: iters,
+				Thin: n < 3*shared,
+			}
+		}
+	}
+
 	for _, e := range entries {
 		row := byID[e.WorkID]
 		if row.Title == "" {

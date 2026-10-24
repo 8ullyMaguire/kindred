@@ -55,7 +55,7 @@ Four statuses:
 | 50 | "Complete your collection" for an author | BUILT | `/author?q=` prints "you have read **2** of **4** — **2** to go" for a reader with a session, and `?unread=1` lists the rest ("Showing 2 of 2"). `store.ReadAmong` reads the read set for a bounded id list (400 per statement) because `works` (corpus) and `seen_works` (state) are different SQLite files with no possible join. Three exclusions: a work only SHOWN is not read; another reader's reads are not this one's; and no session means NO CLAIM — an anonymous reader gets no line at all rather than "0 of 4". The count is over the shelf (capped at 5,000 ids, and the page says "counted over the first 5,000" when it hits the cap), not the page: "2 of 20" where 20 is the page size is a number about pagination. `OwnerForSession` is not `TouchSession`: rendering a list must not look like activity. LIVE: signed in, two of Titus621's four works marked read → data-read="2" data-total="4", "2 to go", and ?unread=1 answered "Showing 2 of 2" with exactly the two unread ids. Mutants killed: shown counted as read, filter inert, filter unannounced, shelf counted as one page. |
 | 51 | Series-aware recommendations | NO PREMISE | No series column or table; AO3 series metadata is not crawled. |
 | 52 | Writing-style similarity via summary embeddings | OPEN | Embeddings are tag-level (`embeddings.kind='tag'`); there is no text model and no summary vector. |
-| 53 | Bradley-Terry vs Glicko | OPEN | Glicko-2 only (`internal/arena/glicko.go`); no BT fit and no rank-correlation comparison. |
+| 53 | Bradley-Terry vs Glicko | BUILT | `arena.FitBT`: MM fit on the SAME judged comparisons with the SAME agreement weights, Jeffreys prior (half a win + half a loss vs the field) so a perfect record stays finite — the MLE is +Inf there, and a work compared once and preferred is the commonest row. Reported on `/leaderboard` as one number, Spearman(BT strength, Glicko-2 effective) with its counts, not as a second table. The live arena's 16 comparisons over 15 works is flagged "read this as unmeasured" by the same `< 3 per item` rule the significance test uses. `prior = 0` is exposed for the pure MLE and is scale-invariant to 1e-9; with the prior, duplication sharpens — both properties tested, because my first test asserted invariancy of the shrunk fit and failed against correct code. |
 | 54 | Rich tag profile page | BUILT | `/tag/{id}` gained "This tag in numbers": median and mean length and kudos, total words, the most-saved work, and a trend by update year (12 years, bars scaled to the busiest). Medians with the mean beside them, because AO3 is skewed — live tag 29 reads median 30,603 words against a mean of 76,222, and 105 kudos against 201. The trend is by UPDATE year and says so (no first-published column exists here) and undated works are counted out loud. Two defects the tests found: `work_tags` is keyed by (work_id, tag_id, tag_type) so a work carrying one tag under two types was counted TWICE (43 where there are 42 — every query now starts from `SELECT DISTINCT work_id`), and the fixture writes ONE update date for every work, so "oldest-first" and "share of total" both SURVIVED until the trend test stamped its own years. Computed in one pass: the SQL alone is 67 ms, the page 0.53 s for sort=kudos. 5/5 mutants killed. |
 | 55 | Explanation quality evaluation | OPEN | `/algo` compares two tunes' **result lists** and records a preference; two explanations are never shown side by side. |
 | 56 | Weighted tag matching with IDF | BUILT | `signal/idf_overlap.go`, plus document-frequency weighting in `engine/authors.go`. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 26 | 33, 39, 40, 41, 42, 43, 46, 50, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84 |
+| BUILT | 27 | 33, 39, 40, 41, 42, 43, 46, 50, 53, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84 |
 | PARTIAL | 6 | 32, 38, 45, 49, 72, 89 |
-| OPEN | 34 | 31, 34, 35, 36, 37, 44, 47, 48, 52, 53, 55, 58, 59, 68, 69, 73, 75, 77, 80, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
+| OPEN | 33 | 31, 34, 35, 36, 37, 44, 47, 48, 52, 55, 58, 59, 68, 69, 73, 75, 77, 80, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 93, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
 With the tier-1/2 audit in `PLAN-recsurfaces-tier2.md` (18 built, 1 partial, 11
@@ -143,9 +143,9 @@ number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). See
 
 2026-10-23k shipped #79 (intra-list diversity, stored with every offline run) and
 corrected this file's totals. 2026-10-24b/c/d shipped #41 (length_fit), #84 (the significance test the interleave log
-was missing), #74 (personalised PageRank over the tag graph) and #39 (the tag shelf's
-shrunk kudos). **The counts below are the table's, not a memory of them: 26 built,
-6 partial, 34 open, 4 without a premise.** For two sessions this
+was missing), #74 (personalised PageRank), #39 (the tag shelf's shrunk kudos) and #53
+(the Bradley-Terry cross-check). **The counts below are the table's, not a memory of
+them: 27 built, 6 partial, 33 open, 4 without a premise.** For two sessions this
 block said "38 built, 49 open" — arithmetically consistent with 100 rows and wrong
 by about thirty, because this roadmap holds rows 31–100 (70 rows) and the phantom
 thirty made the backlog look half finished when it is a third done. The lesson is

@@ -755,3 +755,59 @@ func TestJudgingOneKindLeavesTheOtherPending(t *testing.T) {
 		t.Fatalf("judging the tag pair changed the work pair: %+v -> %+v", before, after)
 	}
 }
+
+// BTDuels reads the whole judged history for ONE kind, weights each duel by the
+// comparison's agreement, and drops rows the Glicko batch would also drop (#53).
+//
+// The kind filter is the one that matters: the arena's id spaces alias, so a fandom
+// with id 7 and a work with id 7 are different entities, and a BT fit that read both
+// would rank one against the other.
+func TestBTDuelsReadsOneKindWithAgreementWeights(t *testing.T) {
+	ctx := context.Background()
+	s := kindsStore(t)
+
+	// A work comparison judged 'a' (work_a wins), at full agreement.
+	if _, err := s.RecordPresentation(ctx, Comparison{
+		Kind: arena.KindWork, WorkA: 11, WorkB: 12,
+		SessionKey: "w1", OwnerKey: "o", Strategy: "maxinfo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TouchSession(ctx, "w1", "o"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordJudgementKind(ctx, "w1", "a", arena.KindWork); err != nil {
+		t.Fatal(err)
+	}
+	// A fandom comparison in the same table: it must not reach the work fit.
+	if _, err := s.RecordPresentation(ctx, Comparison{
+		Kind: arena.KindFandom, WorkA: 11, WorkB: 12,
+		SessionKey: "f1", OwnerKey: "o", Strategy: "maxinfo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TouchSession(ctx, "f1", "o"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordJudgementKind(ctx, "f1", "b", arena.KindFandom); err != nil {
+		t.Fatal(err)
+	}
+
+	duels, n, err := s.BTDuels(ctx, arena.KindWork)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("read %d comparisons, want only the work one", n)
+	}
+	if len(duels) != 1 {
+		t.Fatalf("produced %d duels, want 1", len(duels))
+	}
+	d := duels[0]
+	if d.Winner != 11 || d.Loser != 12 {
+		t.Fatalf("duel = %d over %d, want 11 over 12 (choice 'a')", d.Winner, d.Loser)
+	}
+	if d.Weight != 1 {
+		t.Fatalf("duel weight %v, want the comparison's agreement 1", d.Weight)
+	}
+}

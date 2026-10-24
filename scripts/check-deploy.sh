@@ -860,6 +860,15 @@ check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped
 check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
 
 echo
+echo "the ordering survives a second model (#53)"
+# BT is fitted from the judged history on every load, and the page must report the
+# agreement WITH its counts: a correlation over a thin fit is a number about the prior,
+# and the page has to be able to say so (data-bt-thin).
+check "the leaderboard carries the BT cross-check"   "$TARGET/leaderboard" 'data-testid="bt-crosscheck"'
+check "with a correlation and the items it covers"   "$TARGET/leaderboard" 'data-bt-rho='
+check "and the comparison count it was fitted on"    "$TARGET/leaderboard" 'data-bt-comparisons='
+
+echo
 echo "a thin tag cannot brag (#39)"
 # The tag page printed a MEAN over as few as three works, which reads as a quality
 # claim. The shrunk number and its prior must both be on the page: a shrunk value with
