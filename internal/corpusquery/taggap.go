@@ -42,8 +42,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -72,6 +74,15 @@ const (
 
 // TagGap ranks the tags a tag's neighbourhood carries and its own works do not.
 func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, error) {
+	trace := os.Getenv("KINDRED_TAG_GAP_TRACE") != ""
+	mark := time.Now()
+	lap := func(what string) {
+		if trace {
+			fmt.Fprintf(os.Stderr, "tag-gap %-14s %s\n", what, time.Since(mark).Round(time.Millisecond))
+			mark = time.Now()
+		}
+	}
+	defer lap("total")
 	res := Result{Mode: string(ModeTagGap)}
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
@@ -157,6 +168,7 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 	if err := nrows.Close(); err != nil {
 		return res, fmt.Errorf("tag-gap: neighbourhood close: %w", err)
 	}
+	lap("neighbourhood")
 
 	// The second hop: what the neighbourhood carries on works that are NOT the seed's.
 	//
@@ -228,6 +240,7 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 	}
 	crow.Close()
 
+	lap("candidates")
 	if len(cands) == 0 {
 		res.Notes = append(res.Notes, fmt.Sprintf(
 			"no tag outside the neighbourhood is carried by the works around %q often "+
@@ -254,6 +267,7 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 		return res, fmt.Errorf("tag-gap: neighbourhood size: %w", err)
 	}
 
+	lap("neighworks")
 	// The two rates each candidate needs: how often the SEED carries it, and how often
 	// the archive does. Both in one pass over the candidate ids.
 	// Two counts per candidate, in two cheap queries rather than one expensive join:
@@ -318,6 +332,7 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 	}
 	orows.Close()
 
+	lap("counts")
 	corpusShare := func(c int) float64 {
 		if corpusWorks == 0 {
 			return 0
