@@ -2,8 +2,7 @@ package main
 
 import "testing"
 
-
-// The empty tune name means "the built-in default" on the command line, and '' in
+// The empty tune name means "the built-in default" on the command line, and ” in
 // `eval_runs.tune` means "this run predates the column". Letting the first spelling
 // through makes those two indistinguishable in the table that exists to tell them
 // apart — found by reading the deployed table back and finding the default run
