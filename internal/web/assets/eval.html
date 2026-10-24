@@ -185,6 +185,23 @@
     the work. Slots include the ones nobody acted on, because a rate over
     clicks alone is a rate among clicks. Window: 30 days.
   </p>
+  {{/* The rate is a number; whether it is evidence is a different question, and
+       the dashboard is where a reader looks for the answer. A young experiment
+       says so once rather than per row. */}}
+  {{if .AnyLead}}
+    <p class="count" data-testid="eval-lead">
+      At least one pair has cleared the test (exact two-sided p &lt; 0.05 with
+      enough slots on both sides). See
+      <a href="/algo?mode=interleave">the head-to-head table</a> for which.
+    </p>
+  {{else}}
+    <p class="count" data-testid="eval-no-lead">
+      <strong>No result yet.</strong> These rates are raw: no pair has enough
+      slots to clear the significance test, so the ordering above is not a
+      finding. A read mark on <a href="/algo?mode=interleave">the merged list</a>
+      is what changes that.
+    </p>
+  {{end}}
 {{else}}
   <p class="count" data-testid="eval-arms-empty" data-empty="true">
     No interleaved impressions yet.

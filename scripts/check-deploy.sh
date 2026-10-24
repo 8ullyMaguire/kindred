@@ -835,6 +835,16 @@ check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped
 check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
 
 echo
+echo "an interleaved difference is not a result (#84)"
+# The standings print a rate. Whether that rate is EVIDENCE is a second question,
+# and a page that prints the first without the second invites a reader to treat a
+# 0.0004 difference as an ordering. The verdict column must be there, and on a young
+# deployment it must say "no lead" rather than naming one.
+check "the head-to-head table carries a verdict column" "$TARGET/algo?mode=interleave" 'data-testid="interleaved-verdict"'
+check "the dashboard says whether any pair has cleared the test" "$TARGET/eval" 'data-testid="eval-no-lead"'
+check "and the endpoint carries the p-value"                          "$TARGET/api/v1/interleave/standings" '"p"'
+
+echo
 echo "length, measured rather than assumed (#41)"
 # A length signal is judged by no other number: recall cannot see the shape of a
 # list, so "the signal works" and "the signal does nothing" score the same on every

@@ -86,6 +86,14 @@ func (d Deps) renderEval(w http.ResponseWriter, r *http.Request) {
 			page.Err = err.Error()
 		}
 		page.Arms, page.Pairs = arms, pairs
+		// Whether any pair has EARNED a winner. The page uses it to say
+		// "no result yet" once, rather than repeating a per-pair reason that
+		// is the same sentence with different numbers.
+		for _, p := range pairs {
+			if p.Leading != "" {
+				page.AnyLead = true
+			}
+		}
 	}
 	if d.Engine != nil && d.Engine.Corpus != nil {
 		works, _ := d.Engine.Corpus.CountWorks(ctx)

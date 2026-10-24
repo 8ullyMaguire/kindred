@@ -805,6 +805,10 @@ type EvalPage struct {
 	// Arms and Pairs are the interleaving results.
 	Arms  []store.InterleaveArmStat
 	Pairs []store.InterleavePairStat
+	// AnyLead is true when at least one pair has cleared the significance test.
+	// False is the normal state of a young experiment, and the page says so once
+	// instead of printing "no lead" beside every row.
+	AnyLead bool
 	// Slices is the newest run's per-group breakdown, weakest first. Two
 	// axes, because a fandom is what a reader recognises and a tag is what
 	// the recommender actually scores with.

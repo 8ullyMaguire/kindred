@@ -1246,7 +1246,31 @@ var pageRenderCases = []pageRenderCase{
 		wantContains: []string{
 			"#7", "0.1402", "0.0931", "0.6120", "default", "112,935",
 			"held-out", "30 days",
+			// The dashboard must say the rates are RAW when no pair has cleared
+			// the test: a table of rates beside a heading is read as a result.
+			"No result yet.", "no pair has enough",
 		},
+		wantNotContains: []string{"has cleared the test (exact"},
+	},
+	{
+		// The other side of the same sentence: one pair with a named lead flips
+		// the dashboard from "no result yet" to "at least one pair cleared it".
+		tpl:  "eval.html",
+		name: "eval.html with a pair that earned a winner",
+		data: EvalPage{
+			Base: sweepBase,
+			Arms: []store.InterleaveArmStat{{
+				Arm: "hybrid", Impressions: 200, Credits: 40, CreditRate: 0.20,
+			}},
+			Pairs: []store.InterleavePairStat{{
+				ArmA: "hybrid", ArmB: "tags", ImpressionsA: 200, ImpressionsB: 200,
+				CreditsA: 40, CreditsB: 10, Difference: 0.15,
+				P: 0.00001, Leading: "hybrid",
+			}},
+			AnyLead: true,
+		},
+		wantContains: []string{"has cleared the test (exact", "p &lt; 0.05"},
+		wantNotContains: []string{"No result yet."},
 	},
 	{
 		tpl:          "eval.html",

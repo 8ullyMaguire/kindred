@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"git.polarisocial.xyz/kindred/kindred/internal/stats"
 )
 
 // Interleaved impressions and their attribution.
@@ -55,6 +57,19 @@ type InterleavePairStat struct {
 	// experiment asks is comparative, and two rates a reader has to subtract
 	// in their head is a table, not an answer.
 	Difference float64 `json:"difference"`
+	// Verdict is what the comparison is allowed to SAY. A rate difference is a
+	// number; whether it is evidence is a question, and printing the number
+	// without the answer is what the standings did until this existed.
+	//
+	// P is the two-sided Fisher exact p over the four cells (read/not-read per
+	// arm). Leading is empty unless the sample clears stats.MinImpressions per
+	// arm AND p clears stats.Alpha -- the floor first, because a "perfect" 2-of-2
+	// is a coin landing and a p-value computed from it is arithmetic about
+	// nothing.
+	P            float64 `json:"p"`
+	Leading      string  `json:"leading,omitempty"`
+	NoLeadReason string  `json:"no_lead_reason,omitempty"`
+	Underpowered bool    `json:"underpowered,omitempty"`
 }
 
 // RecordInterleave logs one presented merged list for an owner.
@@ -226,6 +241,11 @@ func (s *Store) InterleaveStats(ctx context.Context) ([]InterleaveArmStat, []Int
 	for _, k := range pairOrder {
 		p := pairs[k]
 		p.Difference = rate(p.CreditsA, p.ImpressionsA) - rate(p.CreditsB, p.ImpressionsB)
+		v := stats.Compare(p.ArmA, p.CreditsA, p.ImpressionsA, p.ArmB, p.CreditsB, p.ImpressionsB)
+		p.P = v.P
+		p.Leading = v.Leading
+		p.NoLeadReason = v.Reason
+		p.Underpowered = v.Underpowered
 		pairOut = append(pairOut, *p)
 	}
 	return out, pairOut, nil

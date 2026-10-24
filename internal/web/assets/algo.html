@@ -107,11 +107,14 @@
     </table>
     {{if .Pairs}}
       <p class="count">Head to head. The difference is A minus B, so a negative
-      number means B's slots were read more often.</p>
+      number means B's slots were read more often. A difference is not a result
+      until it clears the test: the last column names a winner only when there are
+      enough slots AND p &lt; 0.05, and otherwise says what is missing.</p>
       <table class="standings" data-testid="interleaved-pairs">
         <thead>
           <tr><th>A</th><th>B</th><th class="num">Slots A</th><th class="num">Slots B</th>
-              <th class="num">Read A</th><th class="num">Read B</th><th class="num">A &minus; B</th></tr>
+              <th class="num">Read A</th><th class="num">Read B</th><th class="num">A &minus; B</th>
+              <th>Verdict</th></tr>
         </thead>
         <tbody>
           {{range .Pairs}}
@@ -123,6 +126,9 @@
               <td class="num">{{.CreditsA}}</td>
               <td class="num">{{.CreditsB}}</td>
               <td class="num">{{printf "%+.3f" .Difference}}</td>
+              <td data-testid="interleaved-verdict">
+                {{if .Leading}}<strong>{{.Leading}}</strong> leads (p = {{printf "%.4f" .P}}){{else}}<span class="muted">no lead — {{.NoLeadReason}}</span>{{end}}
+              </td>
             </tr>
           {{end}}
         </tbody>
