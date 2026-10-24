@@ -48,6 +48,12 @@ type EvalRun struct {
 	TagOverlap      float64 `json:"tag_overlap"`
 	DistinctFandoms float64 `json:"distinct_fandoms"`
 	DiversityRuns   int     `json:"diversity_runs"`
+	// LengthFit is how closely the returned lists came back at the length the
+	// reader actually reads, and LengthRuns how many readers it covers. 0 with
+	// LengthRuns 0 means NOT MEASURED, which is not the same as "the lists were
+	// sixteen times the wrong length".
+	LengthFit  float64 `json:"length_fit"`
+	LengthRuns int     `json:"length_runs"`
 	// Degraded names the signals that skipped for every candidate in this
 	// run, comma separated. A run with idf_overlap in this list measured a
 	// different recommender from the one serving requests, and the recall
@@ -69,12 +75,14 @@ func (s *Store) RecordEvalRun(ctx context.Context, r EvalRun) (int64, error) {
 			(k, readers, bookmarks, evaluated, failures, held_out, hits,
 			 recall_at_k, ndcg_at_k, coverage, mode, degraded,
 			 pool_depth, pool_hits, pool_recall,
-		 tag_overlap, distinct_fandoms, diversity_runs)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 tag_overlap, distinct_fandoms, diversity_runs,
+		 length_fit, length_runs)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.K, r.Readers, r.Bookmarks, r.Evaluated, r.Failures, r.HeldOut, r.Hits,
 		r.Recall, r.NDCG, r.Coverage, r.Mode, r.Degraded,
 		r.PoolDepth, r.PoolHits, r.PoolRecall,
-		r.TagOverlap, r.DistinctFandoms, r.DiversityRuns)
+		r.TagOverlap, r.DistinctFandoms, r.DiversityRuns,
+		r.LengthFit, r.LengthRuns)
 	if err != nil {
 		return 0, fmt.Errorf("record eval run: %w", err)
 	}
@@ -97,7 +105,8 @@ func (s *Store) EvalRuns(ctx context.Context, limit int) ([]EvalRun, error) {
 		SELECT id, ran_at, k, readers, bookmarks, evaluated, failures,
 		       held_out, hits, recall_at_k, ndcg_at_k, coverage, mode, degraded,
 		       pool_depth, pool_hits, pool_recall,
-		       tag_overlap, distinct_fandoms, diversity_runs
+		       tag_overlap, distinct_fandoms, diversity_runs,
+		       length_fit, length_runs
 		  FROM eval_runs
 		 ORDER BY id DESC
 		 LIMIT ?`, limit)
@@ -113,7 +122,8 @@ func (s *Store) EvalRuns(ctx context.Context, limit int) ([]EvalRun, error) {
 			&r.Evaluated, &r.Failures, &r.HeldOut, &r.Hits,
 			&r.Recall, &r.NDCG, &r.Coverage, &r.Mode, &r.Degraded,
 			&r.PoolDepth, &r.PoolHits, &r.PoolRecall,
-			&r.TagOverlap, &r.DistinctFandoms, &r.DiversityRuns); err != nil {
+			&r.TagOverlap, &r.DistinctFandoms, &r.DiversityRuns,
+			&r.LengthFit, &r.LengthRuns); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

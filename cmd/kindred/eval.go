@@ -59,6 +59,17 @@ func (r engineRecommender) Degraded() []string { return r.degraded }
 // import the engine or the corpus (it is the offline arm and has to work against
 // any Recommender), and because the ids the recommender just returned are the
 // only list whose diversity is being measured.
+// WordCounts implements eval.WordCountSource: how long each returned work is, so
+// the evaluation can measure whether a list came back at the length the reader
+// actually reads. On the recommender for the same reason TagsFor is: eval must not
+// import the corpus.
+func (r engineRecommender) WordCounts(ctx context.Context, ids []int64) (map[int64]int, error) {
+	if r.eng == nil || r.eng.Corpus == nil {
+		return nil, fmt.Errorf("no corpus to read word counts from")
+	}
+	return r.eng.Corpus.WordCounts(ctx, ids)
+}
+
 func (r engineRecommender) TagsFor(ctx context.Context, ids []int64) (map[int64]eval.WorkTags, error) {
 	if r.eng == nil || r.eng.Corpus == nil {
 		return nil, fmt.Errorf("no corpus to read tags from")
@@ -275,6 +286,7 @@ func runEval(ctx context.Context, args []string) error {
 		PoolDepth: rep.PoolDepth, PoolHits: rep.PoolHits, PoolRecall: rep.PoolRecall,
 		TagOverlap: rep.TagOverlap, DistinctFandoms: rep.DistinctFandoms,
 		DiversityRuns: rep.DiversityRuns,
+		LengthFit:     rep.LengthFit, LengthRuns: rep.LengthRuns,
 	}); rerr != nil {
 		fmt.Fprintf(os.Stderr, "eval: could not record this run (it was still measured): %v\n", rerr)
 	} else {
@@ -340,6 +352,15 @@ func runEval(ctx context.Context, args []string) error {
 			rep.TagOverlap, rep.DistinctFandoms, rep.DiversityRuns)
 	} else {
 		fmt.Printf("diversity: not measured -- %s\n", rep.DiversitySkipped)
+	}
+	// Did the list come back at the length the reader actually reads? A length
+	// signal can be judged by no other number: recall cannot see the shape of a
+	// list, so a signal that reshapes it and one that does nothing score the same.
+	if rep.LengthRuns > 0 {
+		fmt.Printf("length fit %.3f (1 = the reader's own length, 0.5 = half or double), over %d readers\n",
+			rep.LengthFit, rep.LengthRuns)
+	} else {
+		fmt.Printf("length fit: not measured -- %s\n", rep.LengthSkipped)
 	}
 	if rep.Failures > 0 {
 		fmt.Printf("%d recommendations failed; first: %s\n", rep.Failures, rep.Errors[0])

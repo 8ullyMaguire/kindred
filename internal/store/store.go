@@ -742,7 +742,13 @@ CREATE TABLE IF NOT EXISTS eval_runs (
 	   did not measure them, which is NOT the same as zero overlap. */
 	tag_overlap      REAL NOT NULL DEFAULT 0,
 	distinct_fandoms REAL NOT NULL DEFAULT 0,
-	diversity_runs   INTEGER NOT NULL DEFAULT 0
+	diversity_runs   INTEGER NOT NULL DEFAULT 0,
+	/* How close the returned lists came to the length the reader actually
+	   reads, with the same log falloff the length_fit signal uses, and how
+	   many readers it covers. length_runs 0 means the run did not measure it,
+	   which is not the same as a list sixteen times the wrong length. */
+	length_fit  REAL NOT NULL DEFAULT 0,
+	length_runs INTEGER NOT NULL DEFAULT 0
 );
 
 /* Works a reader has already been shown or has marked as read.
@@ -1056,6 +1062,10 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"tag_overlap", "REAL NOT NULL DEFAULT 0"},
 		{"distinct_fandoms", "REAL NOT NULL DEFAULT 0"},
 		{"diversity_runs", "INTEGER NOT NULL DEFAULT 0"},
+		// The length columns, for the same reason: a run from before they
+		// existed reads length_runs 0 and the report says "not measured".
+		{"length_fit", "REAL NOT NULL DEFAULT 0"},
+		{"length_runs", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		has, err = s.columnExists(ctx, "eval_runs", col.name)
 		if err != nil {

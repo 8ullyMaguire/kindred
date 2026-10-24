@@ -33,7 +33,7 @@
         <th class="num">Readers</th><th class="num">Evaluated</th>
         <th class="num">Recall</th><th class="num">NDCG</th><th class="num">Coverage</th>
         <th class="num">Pool recall</th>
-        <th class="num">Overlap</th><th class="num">Fandoms</th><th>Signals blind</th>
+        <th class="num">Overlap</th><th class="num">Fandoms</th><th class="num">Length fit</th><th>Signals blind</th>
       </tr>
     </thead>
     <tbody>
@@ -51,6 +51,7 @@
           <td class="num" data-testid="eval-pool">{{if .PoolDepth}}{{printf "%.4f" .PoolRecall}} @{{.PoolDepth}}{{else}}—{{end}}</td>
           <td class="num" data-testid="eval-overlap">{{if .DiversityRuns}}{{printf "%.3f" .TagOverlap}}{{else}}not measured{{end}}</td>
           <td class="num" data-testid="eval-fandoms">{{if .DiversityRuns}}{{printf "%.1f" .DistinctFandoms}}{{else}}—{{end}}</td>
+          <td class="num" data-testid="eval-length">{{if .LengthRuns}}{{printf "%.3f" .LengthFit}}{{else}}not measured{{end}}</td>
           <td data-testid="eval-degraded">{{if not .Degraded}}not recorded{{else if eq .Degraded "all"}}none{{else}}{{.Degraded}}{{end}}</td>
         </tr>
       {{end}}

@@ -217,6 +217,18 @@ type Report struct {
 	// DiversitySkipped says why it could not be computed at all. A run with
 	// DiversityRuns==0 did NOT measure a perfectly diverse list: unmeasured and
 	// zero overlap are different facts.
+	// LengthFit is the mean per-reader agreement between a returned list's
+	// median length and the median length of the works that reader went on to
+	// bookmark, using the same log falloff the length_fit signal uses. Recall
+	// cannot see the SHAPE of a list, so without this a signal that reshapes the
+	// list by length and one that does nothing are the same measurement.
+	//
+	// LengthRuns counts the readers it was averaged over and LengthSkipped says
+	// why it could not be measured at all: an unmeasured fit is not a perfect
+	// one.
+	LengthFit     float64 `json:"length_fit"`
+	LengthRuns    int     `json:"length_runs"`
+	LengthSkipped string  `json:"length_skipped,omitempty"`
 	// Calibration records where hits LAND, position by position. Every other
 	// metric here says how many held-out works were found; this one says how
 	// far down the list a reader had to go, which is the only claim the page
@@ -383,8 +395,32 @@ func Run(ctx context.Context, rec Recommender, split Split, k int, opts ...Optio
 	if !canMeasureDiversity {
 		rep.DiversitySkipped = "the recommender cannot supply tags, so intra-list diversity was not measured"
 	}
+	wordSrc, canMeasureLength := rec.(WordCountSource)
+	if !canMeasureLength {
+		rep.LengthSkipped = "the recommender cannot supply word counts, so how close the lists came in LENGTH was not measured"
+	}
+	// One batched word-count read for the whole run rather than one per reader:
+	// the held-out works are known up front, and a query per reader would make the
+	// evaluation's cost follow the corpus rather than the run.
+	var heldOutWords map[int64]int
+	if canMeasureLength {
+		all := make([]int64, 0, len(split.Test)*4)
+		for _, ids := range split.Test {
+			all = append(all, ids...)
+		}
+		words, werr := wordSrc.WordCounts(ctx, all)
+		if werr != nil {
+			// A corpus that cannot answer is reported, not fatal: the recall
+			// numbers are already being computed and are still valid.
+			canMeasureLength = false
+			rep.LengthSkipped = "word counts could not be read: " + werr.Error()
+		} else {
+			heldOutWords = words
+		}
+	}
 
 	var recallSum, ndcgSum, poolSum, overlapSum, fandomsSum float64
+	var lengthSum float64
 	// Position counters, one slot per position to k, filled as the list is
 	// walked. Observed counts past the end of a short list stay zero rather
 	// than becoming misses: see PositionRate.
@@ -502,6 +538,40 @@ func Run(ctx context.Context, rec Recommender, split Split, k int, opts ...Optio
 				rep.DiversityRuns++
 			}
 		}
+		// Length: the list's median against the median of the works this reader
+		// went on to bookmark. Recall cannot see the shape of a list, so this is
+		// the only number that can judge a length signal at all.
+		if canMeasureLength {
+			topIDs := make([]int64, 0, k)
+			for i, id := range recs {
+				if i >= k {
+					break
+				}
+				topIDs = append(topIDs, id)
+			}
+			// The held-out side was read once for the whole run; the RETURNED
+			// side cannot be, because it is not known until the recommender
+			// answers. It is k ids, which is one small query, and asking for them
+			// is what makes the comparison symmetric -- measuring only the side
+			// that was read up front would leave every list length unknown and the
+			// metric silently absent (which is exactly how it first shipped).
+			listWords, lerr := wordSrc.WordCounts(ctx, topIDs)
+			if lerr != nil {
+				rep.LengthSkipped = "the returned list's word counts could not be read: " + lerr.Error()
+			} else {
+				words := make(map[int64]int, len(heldOutWords)+len(listWords))
+				for id, w := range heldOutWords {
+					words[id] = w
+				}
+				for id, w := range listWords {
+					words[id] = w
+				}
+				if fit, ok := MeasureLengthFit(topIDs, test, words); ok {
+					lengthSum += fit.Value
+					rep.LengthRuns++
+				}
+			}
+		}
 	}
 	rep.PoolDepth = depth
 	if rep.Evaluated > 0 {
@@ -523,6 +593,14 @@ func Run(ctx context.Context, rec Recommender, split Split, k int, opts ...Optio
 		if rep.DiversityRuns > 0 {
 			rep.TagOverlap = overlapSum / float64(rep.DiversityRuns)
 			rep.DistinctFandoms = fandomsSum / float64(rep.DiversityRuns)
+		}
+		if rep.LengthRuns > 0 {
+			rep.LengthFit = lengthSum / float64(rep.LengthRuns)
+		} else if canMeasureLength && rep.LengthSkipped == "" {
+			// The reader had no measurable length on either side: the list held
+			// no work with a word count, or the held-out works were all undated.
+			// A reason, so "not measured" cannot pass for "measured as zero".
+			rep.LengthSkipped = "no reader's list and held-out works both carried a word count"
 		}
 	} else if rep.Failures > 0 {
 		return rep, fmt.Errorf("every recommendation failed (%d readers); first: %s",

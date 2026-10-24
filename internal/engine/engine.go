@@ -607,6 +607,11 @@ func DefaultTune() rank.Tune {
 			// assumed: `kindred eval` records recall and the per-fandom
 			// slices, and the tune exists to be changed on that evidence.
 			"seed_agreement": 0.10,
+			// length_fit: the seeds' median length in log space. The weight is
+			// the subject of an ablation rather than a guess -- `kindred tune
+			// --name no_length --set length_fit=0` removes it and `kindred eval
+			// --tune no_length` measures what the two lists differ by.
+			"length_fit": 0.08,
 		},
 	}
 }
@@ -1782,6 +1787,20 @@ func (e *Engine) signals(ctx context.Context, seeds []rank.Candidate, collabVote
 		DocFreq: docFreq,
 		Total:   corpusTotal,
 	})
+
+	// length_fit prefers works whose LENGTH is close to the seeds' median, in log
+	// space: the reader who spent the evening on 3k-word fics and the one who
+	// wants a 300k-word epic are not the same reader, and no tag signal here can
+	// tell them apart. See signal/lengthfit.go for the falloff.
+	//
+	// Registered UNCONDITIONALLY, like the rest. It carries a REAL weight rather
+	// than a placeholder zero, and that is deliberate: rank.Score skips any signal
+	// whose weight is 0, so a dimension shipped at zero is a dimension that never
+	// runs, never appears in evidence and never names itself in meta.degraded[] --
+	// this repo has shipped exactly that bug once already (embedding, 2026-10-23).
+	// The weight below is the one `kindred eval` was asked to judge, and
+	// docs/HANDOFF-2026-10-24b-length.md records the ablation that produced it.
+	sigs = append(sigs, signal.LengthFit{MaxSeeds: 40})
 
 	// embedding places a work in the tag-embedding space and scores its
 	// cosine to the seeds' position there.
