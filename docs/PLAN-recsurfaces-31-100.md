@@ -36,7 +36,7 @@ Four statuses:
 | 31 | Tag trend detection (90-day vs corpus average) | BUILT | `ModeTagTrend` / `*Runner.TagTrend` — the fifth runner and the first that compares time windows. Rows are the tags travelling WITH the seed, ranked by `lift = (pair's growth) / (corpus's own growth)`, so a trope doubling because the corpus doubled lifts to 1.0. Three things had to be true and each cost a round: the window is anchored on the MIRROR'S newest date (2026-10-15 here, not today — a wall-clock window is empty); dates are normalised in SQL because 112,893 rows read `05 Sep 2007` and `"31 Oct 1999" >= "2020-12-12"` is TRUE lexically; and the window WIDENS until it holds enough works (90→180 days here, 2 → 16,153 works) instead of computing lifts from a handful. Live: corpus grew 0.14x, top pair `ryland grace × project hail mary (2026)` lifts 6.32 (19 of 21 works inside the window). Reachable as `--mode tag-trend --tag angst` and `GET /api/v1/corpus-query/tag-trend?tag=angst`. `/eval` still has no time slice. |
 | 32 | Completion-aware ranking | PARTIAL | Completion is a tri-state **filter** (`engine.Request.Complete`: `CompleteAny`/`CompleteOnly`/`CompleteWIP`) and a tag-page sort; no tune carries a completion weight. |
 | 33 | Multi-seed intersection scoring | BUILT | `signal.SeedAgreement`: IDF-weighted coverage of each seed, averaged over seeds INCLUDING zeros, so a perfect match on 1 of 4 seeds scores 0.25 and partial matches on all 4 score 0.625. Skips (and names itself in `meta.degraded`) with fewer than two usable seeds, because one seed is `idf_overlap` under a second name. Weight 0.10, and the ablation is a flag (`kindred eval --tune ablate_no_agreement`). |
-| 34 | "Works this tag needs" gap analysis | OPEN | No writer-facing surface, and no query diffs a tag's neighbours against its own co-occurrence. |
+| 34 | "Works this tag needs" gap analysis | BUILT | `corpusquery.TagGap` + `GET /api/v1/corpus-query/tag-gap`: two hops (seed → its 30 highest-ASSOCIATION tags → the tags those works carry and the seed's do not), ranked by `(enrichment−1) × (1−lift)` with support as the evidence gate. Rows print own/corpus/lift/both rates so any row is checkable by hand. Three popularity traps were fixed in sequence (support as the score, a neighbourhood of archive-wide tags, candidates chosen by support); the live archive's top rows are still rating/meta attributes, and the documented fix is a fandom-anchored neighbourhood. 125 gate checks; the query is 14 s (NOT EXISTS as a materialised CTE, 600→150 candidates). See `docs/HANDOFF-2026-10-24j-taggap.md`. |
 | 35 | Author-author co-readership | OPEN | `/api/v1/authors/similar` is **IDF-weighted tag-profile overlap** (`engine/authors.go`), not a co-bookmark matrix aggregated to authors. |
 | 36 | Session taste vector export/import | OPEN | No `/api/v1/taste`; session taste is derived per request (`signal/session_taste.go`) and never serialised. |
 | 37 | Tag hierarchy from embedding clusters | OPEN | `internal/tagfamily` holds a hand-written `families.json`; nothing clusters the embeddings into a tree. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 29 | 31, 33, 39, 40, 41, 42, 43, 46, 50, 53, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84, 89 |
+| BUILT | 30 | 31, 33, 34, 39, 40, 41, 42, 43, 46, 50, 53, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84, 89 |
 | PARTIAL | 5 | 32, 38, 45, 49, 72 |
-| OPEN | 13 | 34, 35, 36, 37, 44, 47, 48, 52, 55, 75, 77, 80, 93 |
+| OPEN | 12 | 35, 36, 37, 44, 47, 48, 52, 55, 75, 77, 80, 93 |
 | DECLINED | 19 | 58, 59, 68, 69, 73, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
@@ -146,7 +146,7 @@ number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). See
 corrected this file's totals. 2026-10-24b/c/d shipped #41 (length_fit), #84 (the significance test the interleave log
 was missing), #74 (personalised PageRank), #39 (the tag shelf's shrunk kudos) and #53
 (the Bradley-Terry cross-check) and #31 (tag trend). **The counts below are the table's,
-not a memory of them: 29 built, 5 partial, 13 open, 19 declined, 4 without a premise.**
+not a memory of them: 30 built, 5 partial, 12 open, 19 declined, 4 without a premise.**
 
 **Every remaining row was triaged on 2026-10-24 against the data actually in the mirror
 (`docs/HANDOFF-2026-10-24h-triage.md`), and the verdict is now a STATUS: `DECLINED` means
