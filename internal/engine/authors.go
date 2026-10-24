@@ -120,7 +120,7 @@ func (e *Engine) SimilarAuthors(ctx context.Context, author string, limit int) (
 		}
 		return []SimilarAuthor{}, nil
 	}
-	merged := e.mergeAuthors(tagged, pairs, author, limit)
+	merged := e.mergeAuthors(tagged, pairs, e.CoReaders.Readers(author), author, limit)
 	return merged, nil
 }
 
@@ -133,8 +133,11 @@ const similarAuthorsMaxLimit = 50
 // candidate on the tag arm only keeps its cosine and ranks after every co-read candidate
 // with a reader -- one shared reader is weak evidence, but a tag-only match is no evidence
 // about readers at all, and the measured question is what readers do.
-func (e *Engine) mergeAuthors(tagged []SimilarAuthor, pairs []authorcf.Pair, seed string, limit int) []SimilarAuthor {
-	seedReaders := e.CoReaders.Readers(seed)
+// seedReaders is passed in rather than read from the index so the ordering arithmetic can be
+// tested without a corpus: the first version of this function took it from `e.CoReaders`,
+// which made every share zero on a unit fixture and let a mutant that sorted by tag score
+// instead of read share SURVIVE.
+func (e *Engine) mergeAuthors(tagged []SimilarAuthor, pairs []authorcf.Pair, seedReaders int, seed string, limit int) []SimilarAuthor {
 	byKey := make(map[string]*SimilarAuthor, len(tagged))
 	out := make([]SimilarAuthor, 0, len(tagged)+len(pairs))
 	for _, t := range tagged {

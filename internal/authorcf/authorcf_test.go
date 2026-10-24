@@ -105,11 +105,19 @@ func TestIndexCountsReadersNotWorks(t *testing.T) {
 }
 
 func TestCoReadersFromVotesOncePerReader(t *testing.T) {
-	idx, err := Build(context.Background(), fixture(t))
+	db := fixture(t)
+	// Reader 1 reads BOTH seeds and C, which is the case the dedupe exists for. Without a
+	// reader who spans both seeds, a per-seed counter and a per-reader set agree and the test
+	// passes with the dedupe deleted -- it did, until this row was added.
+	if _, err := db.Exec(`INSERT INTO user_work_interactions (user_id, work_id, interaction_type, timestamp)
+		VALUES (1, 7, 'bookmarked', '2024-01-01')`); err != nil {
+		t.Fatal(err)
+	}
+	idx, err := Build(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Reader 9 read A, B and C. Starting from [A, B], C must count reader 9 ONCE (9 read
+	// Reader 1 read A, B and C; readers 9 and 10 read A and C. Starting from [A, B], C must count reader 9 ONCE (9 read
 	// both) rather than twice, and the two seeds themselves must not be candidates.
 	pairs := idx.CoReadersFrom([]string{"Author A", "Author B"}, 10)
 	var c Pair
@@ -121,9 +129,11 @@ func TestCoReadersFromVotesOncePerReader(t *testing.T) {
 			t.Fatalf("%q is listed as its own co-reader", p.Author)
 		}
 	}
-	// Readers of A (10) or B (8): 1..10. Of those, who read C? 9 and 10 -> 2, not 3.
-	if c.Readers != 2 {
-		t.Fatalf("C counts %d readers from [A,B], want 2 (reader 9 read both seeds)", c.Readers)
+	// Readers of A (1..10) or B (1..8): 1..10. Of those, who read C? 1, 9, 10 -> 3 DISTINCT
+	// people. A counter that increments per seed occurrence answers 4, because reader 1 is
+	// reached through A and again through B.
+	if c.Readers != 3 {
+		t.Fatalf("C counts %d readers from [A,B], want 3 (reader 1 read both seeds)", c.Readers)
 	}
 }
 
@@ -173,5 +183,40 @@ func TestMeasureRanksOnlyWhatTheProxylReturns(t *testing.T) {
 	if tot.ProxyHits == 0 {
 		t.Fatalf("a proxy returning every author in a sensible order found 0 of %d truth pairs at k=2",
 			tot.Truth)
+	}
+}
+
+// The orphan account and Anonymous are bylines, not people: 1,889 and 1,650 works in the
+// mirror, read by 1,585 distinct readers for the first. Every rule that counts readers
+// includes them, so a list ranked by readers would open with orphan_account almost anywhere.
+func TestNotAPersonIsNeverACandidate(t *testing.T) {
+	db := fixture(t)
+	// Author E is the orphan account, read by everyone.
+	if _, err := db.Exec(`INSERT INTO works (id, url, title, authors) VALUES (13,'','w13','orphan_account')`); err != nil {
+		t.Fatal(err)
+	}
+	for u := int64(1); u <= 10; u++ {
+		if _, err := db.Exec(`INSERT INTO user_work_interactions (user_id, work_id, interaction_type, timestamp)
+			VALUES (?, 13, 'bookmarked', '2024-01-01')`, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	idx, err := Build(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range idx.CoReaders("Author A", 10) {
+		if p.Key == Key("orphan_account") {
+			t.Fatalf("the orphan account is offered as a co-reader with %d readers", p.Readers)
+		}
+	}
+	for _, p := range idx.CoReadersFrom([]string{"Author A"}, 10) {
+		if p.Key == Key("orphan_account") {
+			t.Fatalf("the orphan account is offered by CoReadersFrom with %d readers", p.Readers)
+		}
+	}
+	// As a seed it is allowed: "who reads the orphan account" is a fair question.
+	if len(idx.CoReaders("orphan_account", 10)) == 0 {
+		t.Fatal("the orphan account cannot be used as a seed")
 	}
 }

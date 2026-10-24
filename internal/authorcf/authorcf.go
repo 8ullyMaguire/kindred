@@ -29,6 +29,22 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/arena"
 )
 
+// notAPerson holds bylines the mirror uses for works with no author. They are real rows and
+// real readership -- orphan_account has 1,889 works read by 1,585 people, Anonymous 1,650 --
+// so no data rule excludes them, and they would rank near the top of almost every list. An
+// author recommendation that says "orphan_account" is not a recommendation, so they are
+// excluded as CANDIDATES and allowed as seeds: asking who reads the orphan account is a fair
+// question, answering "the orphan account" is not.
+var notAPerson = map[string]struct{}{
+	"orphan_account": {},
+	"anonymous":      {},
+}
+
+func isAPerson(key string) bool {
+	_, no := notAPerson[key]
+	return !no
+}
+
 // Pair is one co-readership observation: how many readers read both authors.
 type Pair struct {
 	// Author is the corpus's own spelling.
@@ -163,7 +179,7 @@ func (i *Index) CoReaders(seed string, limit int) []Pair {
 	counts := make(map[string]int, 256)
 	for reader := range seedReaders {
 		for author := range i.byReader[reader] {
-			if author == key {
+			if author == key || !isAPerson(author) {
 				continue
 			}
 			counts[author]++
@@ -189,7 +205,7 @@ func (i *Index) CoReadersFrom(seeds []string, limit int) []Pair {
 	for _, s := range seeds {
 		for reader := range i.byAuthor[arena.NormalizeAuthorName(s)] {
 			for author := range i.byReader[reader] {
-				if _, skip := exclude[author]; skip {
+				if _, skip := exclude[author]; skip || !isAPerson(author) {
 					continue
 				}
 				set := seen[author]

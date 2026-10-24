@@ -146,7 +146,10 @@ func measureOne(idx *Index, proxy ProxyRanker, seed string, p Params) (SeedResul
 	counts := map[string]int{}
 	for r := range evidence {
 		for author := range idx.byReader[r] {
-			if author == seed {
+			// The same exclusion the product applies: a candidate ranked by readers that the
+			// endpoint would never show would score the measurement against a list it does not
+			// serve.
+			if author == seed || !isAPerson(author) {
 				continue
 			}
 			counts[author]++

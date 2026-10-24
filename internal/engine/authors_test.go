@@ -131,38 +131,44 @@ func TestSimilarAuthorsAppliesNoFloorWithoutATable(t *testing.T) {
 // correctness is measured by `kindred author-eval` on a real mirror, which no fixture can
 // stand in for.
 func TestMergeAuthorsOrdersByReadShare(t *testing.T) {
-	seed := 10 // readers of the seed author
-	// The tag arm returns two authors, one of which the readers also read.
+	const seedReaders = 100 // readers of the seed author
+	// The two arms must DISAGREE, or the test cannot see which one ordered the list. X has
+	// five readers and a weak tag score; Y has a strong tag score and no reader evidence is
+	// needed to place it -- so a comparator rewritten to sort by tag score puts Y first.
+	// Z is on BOTH arms too, with the STRONGER tag score and the weaker reader count: only a
+	// comparator that orders by readers can put X above Z, so the mutant has somewhere to
+	// show. (The tag-only row is appended after the sort by design -- it never competes -- so
+	// it cannot be the discriminating case.)
 	tagged := []SimilarAuthor{
-		{Name: "Tag Only", Score: 0.9, SharedWorks: 3,
+		{Name: "Y: tags only", Score: 0.9, SharedWorks: 3,
 			Evidence: []rank.Evidence{{Signal: "author_tag_profile"}}},
-		{Name: "Both", Score: 0.2, SharedWorks: 1,
+		{Name: "X: both arms", Score: 0.1, SharedWorks: 1,
+			Evidence: []rank.Evidence{{Signal: "author_tag_profile"}}},
+		{Name: "Z: readers only", Score: 0.9, SharedWorks: 2,
 			Evidence: []rank.Evidence{{Signal: "author_tag_profile"}}},
 	}
 	pairs := []authorcf.Pair{
-		{Author: "Both", Key: authorcf.Key("Both"), Readers: 5},
-		{Author: "Reader Only", Key: authorcf.Key("Reader Only"), Readers: 2},
+		{Author: "X: both arms", Key: authorcf.Key("X: both arms"), Readers: 5},
+		{Author: "Z: readers only", Key: authorcf.Key("Z: readers only"), Readers: 2},
 	}
-	e := &Engine{CoReaders: &authorcf.Index{}}
-	// mergeAuthors asks the index for the seed's readership; Readers() on an empty index is
-	// zero, so the share would be zero for everyone. Feed the share through the pair count by
-	// using a seed whose readership is known: the test asserts the ORDER, which holds at any
-	// denominator, plus the presence of the evidence.
-	got := e.mergeAuthors(tagged, pairs, "seed", seed)
+	got := (&Engine{}).mergeAuthors(tagged, pairs, seedReaders, "seed", 10)
 	if len(got) != 3 {
-		t.Fatalf("merged %d authors, want 3 (one both-arms, one reader-only, one tag-only)", len(got))
+		t.Fatalf("merged %d authors, want 3", len(got))
 	}
-	if got[0].Name != "Both" {
-		t.Fatalf("first is %q, want Both: it has readers AND a tag score", got[0].Name)
+	if got[0].Name != "X: both arms" {
+		t.Fatalf("first is %q, want X: five readers rank above a stronger tag score, because the "+
+			"measured question is what readers do", got[0].Name)
 	}
-	if got[1].Name != "Reader Only" {
-		t.Fatalf("second is %q, want Reader Only (2 readers, no tag overlap)", got[1].Name)
+	if got[1].Name != "Z: readers only" {
+		t.Fatalf("second is %q, want Z: two readers, and a tag score that would put it first", got[1].Name)
 	}
-	if got[2].Name != "Tag Only" {
-		t.Fatalf("third is %q, want Tag Only: no reader evidence ranks after everyone with one", got[2].Name)
+	if got[2].Name != "Y: tags only" {
+		t.Fatalf("third is %q, want Y: a tag-only author ranks after everyone a reader placed", got[2].Name)
 	}
-
-	if got[0].Score != 0.2 || got[0].SharedWorks != 1 {
+	if got[1].Score != 0.9 {
+		t.Fatalf("Z's tag score = %v, want 0.9 kept from the tag arm", got[1].Score)
+	}
+	if got[0].Score != 0.1 || got[0].SharedWorks != 1 {
 		t.Fatalf("the both-arms row lost its tag numbers: score=%v works=%d", got[0].Score, got[0].SharedWorks)
 	}
 	if len(got[0].Evidence) != 2 {
@@ -171,5 +177,8 @@ func TestMergeAuthorsOrdersByReadShare(t *testing.T) {
 	if got[0].Evidence[0].Signal != "author_co_readers" {
 		t.Fatalf("first evidence is %q, want author_co_readers first: it is what ranked the row",
 			got[0].Evidence[0].Signal)
+	}
+	if got[0].ReadShare != 0.05 {
+		t.Fatalf("read share = %v, want 5/100", got[0].ReadShare)
 	}
 }
