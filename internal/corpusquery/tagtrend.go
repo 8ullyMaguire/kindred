@@ -50,6 +50,11 @@ const dayExpr = `CASE
 			substr(w.update_date, 1, 2)
 	END`
 
+// tagTrendMinWindowWorks is the fewest works a window must hold before a lift is
+// computed. Below it the corpus's growth is a handful of rows and every ratio is noise
+// wearing two decimal places.
+const tagTrendMinWindowWorks = 200
+
 // tagTrendRowLimit is how many rising pairs a default query returns.
 const tagTrendRowLimit = 25
 
@@ -93,23 +98,60 @@ func (r *Runner) TagTrend(ctx context.Context, tag string, opts Options) (Result
 	if err != nil {
 		return res, fmt.Errorf("tag-trend: anchor %q is not a date: %w", anchor.String, err)
 	}
-	startDay := anchorDay.AddDate(0, 0, -tagTrendDays).Format("2006-01-02")
 
+	// The floor scales with the corpus, because a fixture corpus of forty works cannot
+	// hold two hundred: a window must hold at least a tenth of the archive, capped at
+	// the absolute floor, and never fewer than five.
 	var totalAll, totalRecent int
 	if err := r.DB.QueryRowContext(ctx, `SELECT
-			COALESCE(SUM(CASE WHEN `+dayExpr+` IS NOT NULL THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN `+dayExpr+` >= ? THEN 1 ELSE 0 END), 0)
-		FROM works w`, startDay).Scan(&totalAll, &totalRecent); err != nil {
-		return res, fmt.Errorf("tag-trend: corpus counts: %w", err)
+			COALESCE(SUM(CASE WHEN `+dayExpr+` IS NOT NULL THEN 1 ELSE 0 END), 0)
+		FROM works w`).Scan(&totalAll); err != nil {
+		return res, fmt.Errorf("tag-trend: corpus size: %w", err)
+	}
+	floor := tagTrendMinWindowWorks
+	if tenth := totalAll / 10; tenth < floor {
+		floor = tenth
+	}
+	if floor < 5 {
+		floor = 5
+	}
+
+	// The window widens until it holds enough works to measure. This mirror's newest
+	// date is a single crawled row from 2026-10-15 while the body of the archive ends in
+	// 2025, so a strict 90-day window held TWO works out of 112,895 and every pair's
+	// lift came out 0.00 -- a ranking of zeros that reads as "nothing is rising" and is
+	// really "nothing was measured". Widening is said out loud; going below the floor is
+	// refused rather than guessed.
+	var startDay string
+	usedDays := 0
+	for _, days := range []int{tagTrendDays, 180, 365, 730, 1460, 3650} {
+		candidate := anchorDay.AddDate(0, 0, -days).Format("2006-01-02")
+		if err := r.DB.QueryRowContext(ctx, `SELECT
+				COALESCE(SUM(CASE WHEN `+dayExpr+` >= ? THEN 1 ELSE 0 END), 0)
+			FROM works w`, candidate).Scan(&totalRecent); err != nil {
+			return res, fmt.Errorf("tag-trend: corpus counts: %w", err)
+		}
+		startDay, usedDays = candidate, days
+		if totalRecent >= floor {
+			break
+		}
 	}
 	res.Notes = append(res.Notes, fmt.Sprintf(
-		"window %s..%s (the mirror's newest work, not today), %d of %d works",
-		startDay, anchor.String, totalRecent, totalAll))
-	if totalRecent == 0 || totalAll == 0 {
+		"window %s..%s (%d days, %d of %d works) anchored on the mirror's newest work, "+
+			"not today", startDay, anchor.String, usedDays, totalRecent, totalAll))
+	if usedDays != tagTrendDays {
+		res.Notes = append(res.Notes, fmt.Sprintf(
+			"the window was widened from %d to %d days: %d of %d works fall inside the "+
+				"shorter one, which cannot measure a trend", tagTrendDays, usedDays,
+			totalRecent, totalAll))
+	}
+	if totalRecent < floor || totalAll == 0 {
 		// Naming this instead of returning zero lifts: a window with nothing in it is
 		// a fact about the snapshot, and every row would be a division by zero dressed
 		// as a ranking.
-		res.Notes = append(res.Notes, "no works fall inside the window, so no trend can be measured")
+		res.Notes = append(res.Notes, fmt.Sprintf(
+			"only %d of %d works fall inside even a %d-day window, which is too few to "+
+				"measure a trend against", totalRecent, totalAll, usedDays))
 		return res, nil
 	}
 

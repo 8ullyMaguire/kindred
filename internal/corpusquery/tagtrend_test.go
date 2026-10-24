@@ -267,3 +267,57 @@ func TestDisplayDatesMeasureBothSidesOfTheWindow(t *testing.T) {
 			res.Notes)
 	}
 }
+
+// A window too thin to measure must widen and SAY SO. The live mirror's newest date is
+// one crawled row from 2026 while the archive's body ends in 2025: a strict 90-day
+// window there held 2 of 112,895 works, and every pair's lift came out 0.00 -- a table
+// of zeros that reads as "nothing is rising" and is really "nothing was measured".
+func TestAThinWindowWidensAndSaysSo(t *testing.T) {
+	db := trendDB(t)
+	// Forty works: one at "now" (setting the anchor) and the rest a year earlier, so
+	// the 90-day window holds exactly one work.
+	if _, err := db.Exec(`UPDATE works SET update_date = '31 Oct 1999'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE works SET update_date = '31 Oct 2000' WHERE id = (SELECT MAX(id) FROM works)`); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRunner(db)
+	var tag string
+	if err := db.QueryRow(`SELECT name FROM tags ORDER BY id LIMIT 1`).Scan(&tag); err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.TagTrend(context.Background(), tag, Options{Limit: 5, MinCoWorks: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Rows) == 0 {
+		t.Fatalf("no rows: the window did not widen (%v)", res.Notes)
+	}
+	var widened, anchored bool
+	for _, n := range res.Notes {
+		if contains(n, "widened from 90") {
+			widened = true
+		}
+		if contains(n, "newest work, not today") {
+			anchored = true
+		}
+	}
+	if !widened {
+		t.Fatalf("the window was widened without saying so: %v", res.Notes)
+	}
+	if !anchored {
+		t.Fatalf("the anchor is no longer named: %v", res.Notes)
+	}
+	// And the widened window must actually measure: the corpus grew, so some pair has
+	// recent works.
+	var sawRecent bool
+	for _, row := range res.Rows {
+		if row.Works > 0 {
+			sawRecent = true
+		}
+	}
+	if !sawRecent {
+		t.Fatalf("no pair has a work in the widened window: %v", res.Notes)
+	}
+}
