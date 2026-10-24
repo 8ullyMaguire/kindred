@@ -217,11 +217,11 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 	// threshold belongs -- which reads as "no candidates found", the wrong answer every
 	// other test in this file was written to distinguish from a right one. It was found
 	// by printing the query's arguments rather than by reading them.
-	args := make([]any, 0, 2*len(hood)+3)
-	args = append(args, hoodArgs...)                 // IN (neighbourhood)
-	args = append(args, id)                          // NOT EXISTS (the seed)
-	args = append(args, hoodArgs...)                 // NOT IN (neighbourhood)
-	args = append(args, minCorpus, tagGapCandidates) // HAVING, LIMIT
+	args := make([]any, 0, 2*len(hood)+4)
+	args = append(args, hoodArgs...)                                  // IN (neighbourhood)
+	args = append(args, id)                                           // NOT EXISTS (the seed)
+	args = append(args, hoodArgs...)                                  // NOT IN (neighbourhood)
+	args = append(args, opts.MinCoWorks, minCorpus, tagGapCandidates) // HAVING support, HAVING works, LIMIT
 	// MATERIALIZED, and the materialisation is the whole performance story: measured on
 	// this mirror (3.89M work_tags rows, a 30-tag neighbourhood covering ~600k works) the
 	// plain join took 10.0 s because the NOT EXISTS was evaluated once per JOINED row --
@@ -235,14 +235,16 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 				SELECT 1 FROM work_tags x WHERE x.work_id = w.work_id AND x.tag_id = ?
 			  )
 		)
-		SELECT c.tag_id, t.name, COUNT(*) AS support
+		SELECT c.tag_id, t.name, COUNT(*) AS support, wb.n AS works
 		FROM hood_works hw
 		JOIN work_tags c ON c.work_id = hw.work_id
 		JOIN tags t ON t.id = c.tag_id
+		JOIN (SELECT tag_id, COUNT(*) AS n FROM work_tags GROUP BY tag_id) wb
+		  ON wb.tag_id = c.tag_id
 		WHERE c.tag_id NOT IN (`+strings.Join(inList, ",")+`)
 		GROUP BY c.tag_id
-		HAVING support >= ?
-		ORDER BY support DESC
+		HAVING support >= ? AND works >= ?
+		ORDER BY (support * 1.0 / works) DESC, support DESC
 		LIMIT ?`, args...)
 	if err != nil {
 		return res, fmt.Errorf("tag-gap: candidates: %w", err)
@@ -253,11 +255,12 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 		id      int64
 		name    string
 		support int
+		works   int // the candidate's own size in the archive
 	}
 	var cands []candidate
 	for crow.Next() {
 		var c candidate
-		if err := crow.Scan(&c.id, &c.name, &c.support); err != nil {
+		if err := crow.Scan(&c.id, &c.name, &c.support, &c.works); err != nil {
 			return res, fmt.Errorf("tag-gap: candidate scan: %w", err)
 		}
 		cands = append(cands, c)
@@ -313,27 +316,10 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 		candArgs = append(candArgs, c.id)
 	}
 	inline := strings.Join(idList, ",")
-	corpus := map[int64]int{}
-	crows, err := r.DB.QueryContext(ctx,
-		`SELECT tag_id, COUNT(*) FROM work_tags WHERE tag_id IN (`+inline+`) GROUP BY tag_id`,
-		candArgs...)
-	if err != nil {
-		return res, fmt.Errorf("tag-gap: corpus counts: %w", err)
+	corpus := make(map[int64]int, len(cands))
+	for _, c := range cands {
+		corpus[c.id] = c.works
 	}
-	for crows.Next() {
-		var cid int64
-		var n int
-		if err := crows.Scan(&cid, &n); err != nil {
-			crows.Close()
-			return res, fmt.Errorf("tag-gap: corpus count scan: %w", err)
-		}
-		corpus[cid] = n
-	}
-	if err := crows.Err(); err != nil {
-		crows.Close()
-		return res, fmt.Errorf("tag-gap: corpus count rows: %w", err)
-	}
-	crows.Close()
 
 	own := map[int64]int{}
 	orows, err := r.DB.QueryContext(ctx, `
