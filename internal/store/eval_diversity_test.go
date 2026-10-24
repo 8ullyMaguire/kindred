@@ -166,3 +166,46 @@ func TestTheMigrationAddsTheColumnsToAnOlderTable(t *testing.T) {
 			runs[0].DiversityRuns)
 	}
 }
+
+// The tune must round-trip, and a run from before the column must read "" -- not
+// "default". The difference matters: "" says the run did not RECORD what it
+// measured, which is true; "default" would be a claim about a run nobody can check.
+func TestTheTuneRoundTripsAndOlderRunsReadEmpty(t *testing.T) {
+	s := evalStore(t)
+	ctx := context.Background()
+	id, err := s.RecordEvalRun(ctx, EvalRun{
+		K: 10, Readers: 40, Bookmarks: 900, Evaluated: 37, HeldOut: 370, Hits: 39,
+		Recall: 0.1063, NDCG: 0.1888, Coverage: 0.6579, Mode: "full",
+		Tune: "walk25", LengthRuns: 37, LengthFit: 0.713,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := s.EvalRuns(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].ID != id {
+		t.Fatalf("expected the run just written, got %+v", runs)
+	}
+	if runs[0].Tune != "walk25" {
+		t.Fatalf("tune = %q, want walk25: an ablation that cannot be attributed is "+
+			"four rows of numbers", runs[0].Tune)
+	}
+	// A row written before the column existed.
+	if _, err := s.DB.ExecContext(ctx,
+		`INSERT INTO eval_runs (k, readers, bookmarks, evaluated, failures, held_out,
+			hits, recall_at_k, ndcg_at_k, coverage, mode, degraded, pool_depth,
+			pool_hits, pool_recall, tag_overlap, distinct_fandoms, diversity_runs,
+			length_fit, length_runs)
+		 VALUES (10, 1, 1, 1, 0, 1, 0, 0, 0, 0, 'full', '', 0, 0, 0, 0, 0, 0, 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	runs, err = s.EvalRuns(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs[0].Tune != "" {
+		t.Fatalf("an unattributed run reads %q, want the empty string", runs[0].Tune)
+	}
+}

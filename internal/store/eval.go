@@ -27,6 +27,11 @@ type EvalRun struct {
 	Failures  int `json:"failures"`
 	HeldOut   int `json:"held_out"`
 	Hits      int `json:"hits"`
+	// Tune is the weight vector this run measured, by name. Stored because an
+	// ablation that cannot be attributed is not an ablation: four runs recorded
+	// on 2026-10-24 differed only by tune, and nothing in this table could say
+	// which was which -- the numbers were citable only from a shell history.
+	Tune string `json:"tune"`
 	// Recall, NDCG and Coverage are the report's own numbers, unrounded.
 	Recall   float64 `json:"recall_at_k"`
 	NDCG     float64 `json:"ndcg_at_k"`
@@ -76,13 +81,13 @@ func (s *Store) RecordEvalRun(ctx context.Context, r EvalRun) (int64, error) {
 			 recall_at_k, ndcg_at_k, coverage, mode, degraded,
 			 pool_depth, pool_hits, pool_recall,
 		 tag_overlap, distinct_fandoms, diversity_runs,
-		 length_fit, length_runs)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 length_fit, length_runs, tune)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.K, r.Readers, r.Bookmarks, r.Evaluated, r.Failures, r.HeldOut, r.Hits,
 		r.Recall, r.NDCG, r.Coverage, r.Mode, r.Degraded,
 		r.PoolDepth, r.PoolHits, r.PoolRecall,
 		r.TagOverlap, r.DistinctFandoms, r.DiversityRuns,
-		r.LengthFit, r.LengthRuns)
+		r.LengthFit, r.LengthRuns, r.Tune)
 	if err != nil {
 		return 0, fmt.Errorf("record eval run: %w", err)
 	}
@@ -106,7 +111,7 @@ func (s *Store) EvalRuns(ctx context.Context, limit int) ([]EvalRun, error) {
 		       held_out, hits, recall_at_k, ndcg_at_k, coverage, mode, degraded,
 		       pool_depth, pool_hits, pool_recall,
 		       tag_overlap, distinct_fandoms, diversity_runs,
-		       length_fit, length_runs
+		       length_fit, length_runs, tune
 		  FROM eval_runs
 		 ORDER BY id DESC
 		 LIMIT ?`, limit)
@@ -123,7 +128,7 @@ func (s *Store) EvalRuns(ctx context.Context, limit int) ([]EvalRun, error) {
 			&r.Recall, &r.NDCG, &r.Coverage, &r.Mode, &r.Degraded,
 			&r.PoolDepth, &r.PoolHits, &r.PoolRecall,
 			&r.TagOverlap, &r.DistinctFandoms, &r.DiversityRuns,
-			&r.LengthFit, &r.LengthRuns); err != nil {
+			&r.LengthFit, &r.LengthRuns, &r.Tune); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

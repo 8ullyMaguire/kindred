@@ -287,12 +287,23 @@ func runEval(ctx context.Context, args []string) error {
 		TagOverlap: rep.TagOverlap, DistinctFandoms: rep.DistinctFandoms,
 		DiversityRuns: rep.DiversityRuns,
 		LengthFit:     rep.LengthFit, LengthRuns: rep.LengthRuns,
+		// Which weights produced these numbers. Without it, four ablations on
+		// one afternoon are four rows of numbers nobody can attribute -- which
+		// is what this table was until 2026-10-24.
+		Tune: rec.tune,
 	}); rerr != nil {
 		fmt.Fprintf(os.Stderr, "eval: could not record this run (it was still measured): %v\n", rerr)
 	} else {
 		runID = id
 		if !*asJSON {
-			fmt.Printf("recorded as run #%d\n", id)
+			// The tune is printed WITH the id, because a table of runs that
+			// cannot say what they measured is a table of numbers nobody can
+			// compare: four ablations on 2026-10-24 were indistinguishable.
+			if rec.tune != "" && rec.tune != "default" {
+				fmt.Printf("recorded as run #%d (tune %q)\n", id, rec.tune)
+			} else {
+				fmt.Printf("recorded as run #%d (default tune)\n", id)
+			}
 		}
 	}
 

@@ -748,7 +748,10 @@ CREATE TABLE IF NOT EXISTS eval_runs (
 	   many readers it covers. length_runs 0 means the run did not measure it,
 	   which is not the same as a list sixteen times the wrong length. */
 	length_fit  REAL NOT NULL DEFAULT 0,
-	length_runs INTEGER NOT NULL DEFAULT 0
+	length_runs INTEGER NOT NULL DEFAULT 0,
+	/* The tune this run measured, by name. Empty means the run predates the
+	   column, which is a different statement from "" = the default tune. */
+	tune TEXT NOT NULL DEFAULT ''
 );
 
 /* Works a reader has already been shown or has marked as read.
@@ -1066,6 +1069,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		// existed reads length_runs 0 and the report says "not measured".
 		{"length_fit", "REAL NOT NULL DEFAULT 0"},
 		{"length_runs", "INTEGER NOT NULL DEFAULT 0"},
+		// Which tune the run measured. A run from before this column reads ''
+		// -- "unrecorded", not "default": those runs really did not say.
+		{"tune", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		has, err = s.columnExists(ctx, "eval_runs", col.name)
 		if err != nil {
