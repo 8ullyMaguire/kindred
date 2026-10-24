@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
+	"git.polarisocial.xyz/kindred/kindred/internal/signal"
 )
 
 func TestTheWalkIsRegisteredWeightedAndActuallyScores(t *testing.T) {
@@ -103,6 +104,51 @@ func TestTheWalkNamesItselfWhenThereIsNoGraph(t *testing.T) {
 			if ev.Signal == "walk" {
 				t.Fatalf("walk scored %v with no graph: a zero would be a claim", ev.Value)
 			}
+		}
+	}
+}
+
+// The pool source is what makes the signal non-inert.
+//
+// Measured 2026-10-24 on the live mirror: at weight 0.06 the walk changed no list,
+// with and without it, because every candidate it could score came from the tag
+// pool — works sharing a SEED tag — and the walk's whole contribution is on tags the
+// seeds do not have. This test pins the source that fixes that: works carrying the
+// walk's tags are admitted, and they are works the tag pool would not have found.
+func TestTheWalkPoolSourceAdmitsWorksTheSeedDoesNotReach(t *testing.T) {
+	e := newFixtureEngine(t)
+	ctx := context.Background()
+	g := denselyConnected(e)
+	if g == nil {
+		t.Skip("fixture has no tags to build a graph over")
+	}
+
+	// Seed on work 1, and take its tags as the restart set.
+	seedEnts, err := e.Corpus.CandidateRows(ctx, []int64{1})
+	if err != nil || len(seedEnts) == 0 {
+		t.Skipf("fixture seed unavailable: %v", err)
+	}
+	seeds, err := e.toCandidates(ctx, seedEnts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mass, total := signal.WalkMass(g, seedTagIDs(seeds), signal.WalkOptions{})
+	if total == 0 || len(mass) == 0 {
+		t.Fatal("the walk produced no mass on a dense graph")
+	}
+
+	got, err := walkCandidates(ctx, e.Store.Corpus, mass, 20, []int64{1}, Filter{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("the walk's pool source found no works: every candidate the signal " +
+			"can score would share a seed tag, which is the inertness this source exists " +
+			"to remove")
+	}
+	for _, id := range got {
+		if id == 1 {
+			t.Fatal("the seed is in its own walk pool")
 		}
 	}
 }

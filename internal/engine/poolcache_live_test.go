@@ -50,7 +50,7 @@ func callPool(t *testing.T, e *Engine, seed int64, f Filter) []int64 {
 		t.Fatalf("seed tags: %v", err)
 	}
 	req := Request{Filter: f}
-	ids, _, _, err := e.poolFor(ctx, seeds, lanesOf(e), true, []int64{seed}, req)
+	ids, _, _, err := e.poolFor(ctx, seeds, lanesOf(e), true, []int64{seed}, req, nil)
 	if err != nil {
 		t.Fatalf("poolFor: %v", err)
 	}

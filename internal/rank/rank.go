@@ -110,6 +110,11 @@ type PoolSources struct {
 	Collab    int `json:"collab"`
 	Embedding int `json:"embedding"`
 	Overlap   int `json:"overlap"`
+	// Walk counts the candidates admitted ONLY because the walk reached their
+	// tags: works sharing no tag with any seed. They are the case the signal
+	// exists for, and counting them separately is what makes "the walk
+	// contributed nothing" visible rather than inferred from a ranking.
+	Walk int `json:"walk"`
 }
 
 // Short records that fewer results were returned than asked for, and why.

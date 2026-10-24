@@ -102,7 +102,7 @@ func TestSeenIDsActuallyLeaveThePool(t *testing.T) {
 	}
 
 	pool, _, _, err := e.poolFor(ctx, seeds, 20, true, []int64{10},
-		Request{SeenIDs: map[string]bool{}})
+		Request{SeenIDs: map[string]bool{}}, nil)
 	if err != nil {
 		t.Fatalf("poolFor: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestSeenIDsActuallyLeaveThePool(t *testing.T) {
 	}
 
 	after, _, _, err := e.poolFor(ctx, seeds, 20, true, []int64{10},
-		Request{SeenIDs: excluded})
+		Request{SeenIDs: excluded}, nil)
 	if err != nil {
 		t.Fatalf("poolFor with exclusions: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestSeenExclusionIsNamespaced(t *testing.T) {
 
 	// A bare id is not a valid exclusion key and must exclude nothing.
 	pool, _, _, err := e.poolFor(ctx, seeds, 20, true, []int64{10},
-		Request{SeenIDs: map[string]bool{"12": true}})
+		Request{SeenIDs: map[string]bool{"12": true}}, nil)
 	if err != nil {
 		t.Fatalf("poolFor: %v", err)
 	}

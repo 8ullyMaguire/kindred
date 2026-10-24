@@ -78,6 +78,31 @@ check () {
   if grep -qE -- "$pattern" <<<"$body"; then ok "$name"; else bad "$name — expected /$pattern/ at $url"; fi
 }
 
+# check_not NAME URL PATTERN
+#   asserts PATTERN does NOT appear in the body of URL. Same reachability rule.
+#
+#   An absence assertion must name its own subject, or it passes vacuously: a page
+#   that failed to load has no forbidden string in it either. Every caller pairs this
+#   with a check() of the same URL that proves the part of the body being denied
+#   exists at all.
+check_not () {
+  local name="$1" url="$2" pattern="$3"
+  local body code
+  body=$(curl -sS --max-time 20 -w $'\n__CODE__%{http_code}' "$url" 2>/dev/null) || true
+  code=${body##*__CODE__}
+  body=${body%$'\n__CODE__'*}
+  if [ -z "$code" ] || [ "$code" = "000" ]; then
+    unreachable=$((unreachable+1))
+    echo "  UNREACHABLE  $name ($url)"
+    return 0
+  fi
+  if grep -qE -- "$pattern" <<<"$body"; then
+    bad "$name — found /$pattern/ at $url, which must not be there"
+  else
+    ok "$name"
+  fi
+}
+
 # header NAME URL PATTERN
 #   asserts a response header matching PATTERN. Same rule as check(): a non-200
 #   is an answer, and SPEC §3.2.2 wants the staleness headers on EVERY response,
@@ -833,6 +858,20 @@ check "the skipping page renders"        "$TARGET/skipped" 'Works you keep skipp
 check "and states its threshold"         "$TARGET/skipped" '3</strong> or more'
 check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped-(empty|items)"'
 check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
+
+echo
+echo "the walk reaches what one hop cannot (#74)"
+# A registered signal at weight zero is this project's most repeated bug: it runs
+# never, appears in no evidence, and names itself nowhere. The check is therefore
+# not that the name exists in the tune, but that a live list carries a walk
+# COMPONENT with a weight and a value.
+check      "the API says which signals were skipped"    "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=5" '"degraded":\['
+check      "a live list carries a walk component"      "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=5" '\"signal\":\"walk\"'
+# The absence assertion names its own subject: the degraded array must EXIST (the
+# check above), and walk must not be inside it. A bare grep for "walk", would pass
+# on the very failure it is meant to catch, because a degraded walk is still the
+# word "walk" in the same body.
+check_not  "and the walk is not in that skipped list"  "$TARGET/api/v1/recommend?seed=ao3_work:17249318&n=5" '"degraded":\[[^]]*"walk"'
 
 echo
 echo "an interleaved difference is not a result (#84)"

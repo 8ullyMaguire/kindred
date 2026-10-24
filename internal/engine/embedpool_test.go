@@ -58,7 +58,7 @@ func poolOf(t *testing.T, e *Engine, seedID int64, mode PoolMode, n int) ([]int6
 		t.Fatalf("load seed tags: %v", err)
 	}
 	pool, _, src, err := e.poolFor(ctx, seeds, n, true, []int64{seedID},
-		Request{PoolMode: mode})
+		Request{PoolMode: mode}, nil)
 	if err != nil {
 		t.Fatalf("poolFor(%s): %v", mode, err)
 	}
@@ -141,7 +141,7 @@ func TestEmbedPoolHonoursFiltersInTheQuery(t *testing.T) {
 	pool, _, _, err := e.poolFor(ctx, seeds, 400, true, []int64{1}, Request{
 		PoolMode: PoolTagsEmbed,
 		Filter:   Filter{MaxWords: 20_000},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

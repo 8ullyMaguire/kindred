@@ -729,7 +729,16 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 	// collab votes are computed once here and handed to both. Computing them
 	// in signals() separately would be a second walk of the same adjacency
 	// for the same request.
-	poolIDs, collabVotes, poolSources, err := e.poolFor(ctx, seeds, pool, req.Exclude, seedIDs, req)
+	// The walk's mass, computed once per request over the whole tag graph and
+	// BEFORE the pool is built, because the pool needs it twice: to admit the
+	// works only the walk can reach, and to score them afterwards.
+	//
+	// A nil graph (lite mode, or a mirror whose `kindred graph build` never ran)
+	// leaves the mass empty, the pool gains nothing, and the signal skips for
+	// every candidate naming itself in meta.degraded[] -- never a silent zero.
+	walkMass, walkTotal := signal.WalkMass(graphOf(e), seedTagIDs(seeds), signal.WalkOptions{})
+
+	poolIDs, collabVotes, poolSources, err := e.poolFor(ctx, seeds, pool, req.Exclude, seedIDs, req, walkMass)
 	if err != nil {
 		return nil, err
 	}
@@ -803,12 +812,6 @@ func (e *Engine) Recommend(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The walk's mass, computed once per request over the whole tag graph.
-	//
-	// A nil graph (lite mode, or a mirror whose `kindred graph build` never ran)
-	// leaves the mass empty, and the signal then skips for every candidate and
-	// names itself in meta.degraded[] -- never a silent zero.
-	walkMass, walkTotal := signal.WalkMass(graphOf(e), seedTagIDs(seeds), signal.WalkOptions{})
 	sigs, tune := e.signals(ctx, seeds, collabVotes, collabScale, tuneWeights, tuneName, !req.NoOwnerTaste,
 		signalOptions{
 			sessionTaste:         req.SessionTaste,
@@ -925,7 +928,7 @@ func seedNames(seeds []Seed) []string {
 //     even though thousands of qualifying works exist further down.
 //
 // Both failures report success and return a short or empty list.
-func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int, exclude bool, seedIDs []int64, req Request) ([]int64, map[int64]float64, *rank.PoolSources, error) {
+func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int, exclude bool, seedIDs []int64, req Request, walkMass map[int32]float64) ([]int64, map[int64]float64, *rank.PoolSources, error) {
 	tagIDs := map[int32]bool{}
 	for _, s := range seeds {
 		for _, id := range s.TagIDs {
@@ -1200,6 +1203,24 @@ func (e *Engine) poolFor(ctx context.Context, seeds []rank.Candidate, limit int,
 				slog.Warn("embedding pool source failed for this request", "err", err)
 			} else {
 				admit(extra, &src.Embedding)
+			}
+		}
+	}
+	// The walk's own reach: works carrying the tags mass actually landed on,
+	// which by construction share NO tag with any seed. Without this admission
+	// the signal can only re-rank works the tag pool already found, i.e. it can
+	// never surface the case it was built for -- measured 2026-10-24: at weight
+	// 0.06 the walk changed no list at all, not because the walk was wrong but
+	// because a two-hop signal against a one-hop pool has nothing new to order.
+	if len(walkMass) > 0 {
+		if room := limit - len(out); room > 0 {
+			extra, err := walkCandidates(ctx, e.Corpus.DB, walkMass, room, seedIDs, f, req.BlockedTagIDs, req.SeenIDs)
+			if err != nil {
+				// Dropped and logged, like the other extra sources: a union
+				// that loses one arm still ranks.
+				slog.Warn("walk pool source failed for this request", "err", err)
+			} else {
+				admit(extra, &src.Walk)
 			}
 		}
 	}
