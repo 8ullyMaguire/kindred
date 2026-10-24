@@ -2,20 +2,28 @@ package corpusquery
 
 // TagGap (#34), on a corpus small enough to count by hand.
 //
-// The claims that matter are the ones that separate a gap analysis from a list of
-// popular tags:
+// WHY THE FIXTURES ARE SHAPED THE WAY THEY ARE. Two of the three properties here were
+// passing VACUOUSLY in the first two versions, and both times the cause was the same: the
+// neighbourhood is the seed's top THIRTY co-occurring tags, and a fixture with four tags
+// put every candidate inside the neighbourhood, where the candidate query then excluded it
+// by `c.tag_id NOT IN (neighbours)`.
 //
-//  1. the evidence comes from works WITHOUT the seed (a candidate carried only by the
-//     seed's own works has no support, or the number says nothing the seed did not
-//     already say);
-//  2. a tag the seed already carries at or above the corpus rate is clamped out, however
-//     heavy its neighbourhood support;
-//  3. the row's own/works/corpus numbers are the ones the ranking used;
-//  4. a seed too small to have a distribution is refused by name rather than ranked.
+//	* "covered" (a tag the seed carries heavily) co-occurs with the seed by definition, so
+//	  with four tags it WAS a neighbour and never reached the lift test. The test passed
+//	  and proved nothing.
+//	* "insider" was a neighbour too, so it never reached the support column, and the
+//	  mutant that deletes the NOT EXISTS survived.
+//
+// Both fixtures therefore carry thirty FILLER tags that co-occur with the seed on every
+// one of its works, which fills the neighbourhood and pushes the tags under test into the
+// candidate set where they belong. That is also what the real mirror looks like: a tag's
+// neighbourhood is full of rating, warning and pairing tags before it gets to anything
+// interesting.
 
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -24,127 +32,53 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/testcorpus"
 )
 
-// gapDB builds a corpus with a seed tag ("seed"), two neighbours ("n1", "n2"), a tag the
-// neighbourhood wants and the seed lacks ("wanted"), a tag the seed already carries
-// heavily ("covered"), and a tag carried ONLY by the seed's works ("inline").
-//
-// Counts, by construction:
-//
-//	seed's works:        40 (works 1..40), each carrying "seed" + one posted tag
-//	wanted:               0 of the seed's works, 60 works elsewhere
-//	covered:             30 of the seed's works (75%), 60 works elsewhere (75% of the
-//	                     neighbourhood) -- so lift ~1.0 and no gap
-//	inline:              20 of the seed's works, 0 elsewhere
-//	n1/n2:               the neighbourhood tags, on every seed work plus 40 more each
-//
-// "wanted" is on 60 works that carry n1 or n2 and never "seed", which is exactly the
-// second-hop shape the query is for.
-func gapDB(t *testing.T, seedWorks int) *sql.DB {
+const (
+	gapFillers    = 30   // tags that fill the neighbourhood
+	gapFillerBase = 1000 // filler tag ids start here
+)
+
+// addFillers gives every work in seedWorks these 30 tags, so the neighbourhood is full.
+func addFillers(t *testing.T, db *sql.DB, seedWorks []int) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "corpus.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if _, err := db.Exec(testcorpus.Schema); err != nil {
-		t.Fatal(err)
-	}
-
-	// Tags.
-	tags := []string{"seed", "n1", "n2", "wanted", "covered", "inline"}
-	for i, name := range tags {
-		if _, err := db.Exec(`INSERT INTO tags (id, name) VALUES (?, ?)`, i+1, name); err != nil {
+	for i := 0; i < gapFillers; i++ {
+		id := gapFillerBase + i
+		if _, err := db.Exec(`INSERT INTO tags (id, name) VALUES (?, ?)`,
+			id, fmt.Sprintf("filler-%02d", i)); err != nil {
 			t.Fatal(err)
 		}
-	}
-	const (
-		tSeed    = 1
-		tN1      = 2
-		tN2      = 3
-		tWanted  = 4
-		tCovered = 5
-		tInline  = 6
-	)
-
-	// Works 1..seedWorks are the seed's. 101..260 are the neighbourhood's.
-	works := 260
-	for i := 1; i <= works; i++ {
-		if _, err := db.Exec(`INSERT INTO works (id, url, title, authors, update_date)
-			VALUES (?, '', '', '', '2020-01-01')`, i); err != nil {
-			t.Fatal(err)
+		for _, w := range seedWorks {
+			if _, err := db.Exec(`INSERT OR IGNORE INTO work_tags (work_id, tag_id, tag_type)
+				VALUES (?, ?, 'freeform')`, w, id); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	add := func(work, tag int) {
-		if _, err := db.Exec(`INSERT OR IGNORE INTO work_tags (work_id, tag_id, tag_type)
-			VALUES (?, ?, 'freeform')`, work, tag); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for w := 1; w <= seedWorks; w++ {
-		add(w, tSeed)
-	}
-	for w := 1; w <= seedWorks; w += 2 {
-		add(w, tN1)
-	}
-	for w := 2; w <= seedWorks; w += 2 {
-		add(w, tN2)
-	}
-	// covered: three quarters of the seed's works.
-	for w := 1; w <= seedWorks*3/4; w++ {
-		add(w, tCovered)
-	}
-	// inline: 12 of the seed's works, plus 400 works that carry NOTHING else.
-	//
-	// This shape is chosen so that ONLY the query's NOT EXISTS can explain its absence,
-	// and it took two attempts to find one:
-	//
-	//   * 20 works, all the seed's -- excluded by tagGapMinCorpusWorks, so the mutant
-	//     that deletes NOT EXISTS survived (nothing reached the support column).
-	//   * 30 works inside the seed plus 40 outside -- then lift = 4.7, the clamp kills
-	//     it, and the absence is explained by the clamp instead.
-	//
-	// With own = 12 of 40 (0.30) and a corpus rate of 412/840 (0.49), lift is 0.61: the
-	// clamp does NOT apply, the floor does not apply, and the only remaining reason for
-	// the row to be missing is that its support comes entirely from works that carry the
-	// seed -- which is the thing being tested.
-	for w := 1; w <= 12; w++ {
-		add(w, tInline)
-	}
-	for w := 441; w <= 840; w++ {
-		add(w, tInline)
-	}
-
-	// The neighbourhood's own works: 160 works, none carrying "seed".
-	next := seedWorks + 1
-	neighWorks := 60
-	for i := 0; i < neighWorks; i++ {
-		add(next, tN1)
-		next++
-	}
-	for i := 0; i < neighWorks; i++ {
-		add(next, tN2)
-		next++
-	}
-	// wanted: 60 of the neighbourhood's works, spread over both neighbours.
-	for i := 0; i < neighWorks; i++ {
-		add(seedWorks+1+i, tWanted)
-	}
-	// covered: 60 of the neighbourhood's works too, so its corpus rate matches the
-	// seed's and the clamp has something to clamp.
-	for i := 0; i < neighWorks; i++ {
-		add(seedWorks+1+neighWorks+i, tCovered)
-	}
-	// Every neighbourhood work also carries n1 or n2 (already true above for the ones we
-	// just wrote, but be explicit about the second batch).
-	for i := 0; i < neighWorks; i++ {
-		add(seedWorks+1+neighWorks+i, tN2)
-	}
-	return db
 }
 
+// Main fixture arithmetic, all of it checkable against the inserts below.
+//
+//	works            1000 total
+//	seed's works      100 (1..100): "seed" + all 30 fillers
+//	hood works        400 (101..500): the 30 fillers
+//	outside works     400 (501..900): "inline" only
+//	tagless           100 (901..1000)
+//
+//	neighbourhood = the 30 fillers (co-occurrence 100 each); everything below ranks 31st
+//	                or lower and is therefore a CANDIDATE
+//	neighWorks    = 400
+//
+//	wanted:  0 of the seed's works, 300 of the hood's. Neighbourhood rate 0.75 against a
+//	         corpus rate of 0.30 -> enrichment 2.5; lift 0 -> the clear top gap.
+//	covered: 50 of the seed's works (0.50) and 200 of the hood's (0.50 against a corpus
+//	         rate of 0.25 -> enrichment 2.0, so enrichment passes it). Lift 2.0: the seed
+//	         carries it MORE than the archive, so it is excluded by the lift and by
+//	         nothing else.
+//	inline:  10 of the seed's works and 400 works outside the neighbourhood, none inside
+//	         it: honest support 0. Whether a mutant that drops the NOT EXISTS would be
+//	         caught here is arithmetic -- 10 of 400 is a rate too small to clear
+//	         enrichment -- which is what the second, smaller fixture is for.
 func TestTagGapRanksWhatTheNeighbourhoodWantsAndTheSeedLacks(t *testing.T) {
-	db := gapDB(t, 40)
+	db := gapDB(t)
 	res, err := NewRunner(db).TagGap(context.Background(), "seed", Options{Limit: 10, MinCoWorks: 5})
 	if err != nil {
 		t.Fatal(err)
@@ -160,54 +94,75 @@ func TestTagGapRanksWhatTheNeighbourhoodWantsAndTheSeedLacks(t *testing.T) {
 		}
 		t.Fatalf("top gap is %q, want \"wanted\" (rows: %v; notes: %v)", top.Key, got, res.Notes)
 	}
-	// The row's own numbers must be the ones the ranking used: none of the seed's works
-	// carry it, and lift is 0.
 	if top.CoWorks != 0 {
 		t.Fatalf("\"wanted\" reports %d of the seed's works carrying it, want 0", top.CoWorks)
 	}
 	if top.Lift != 0 {
 		t.Fatalf("\"wanted\" lift is %v, want 0 (the seed never carries it)", top.Lift)
 	}
-	if top.Works == 0 {
-		t.Fatal("\"wanted\" reports no corpus works: the row could not be checked by hand")
+	if top.Score <= 0 {
+		t.Fatalf("\"wanted\" scores %v", top.Score)
 	}
 }
 
-// "covered" is carried by three quarters of the seed's works and three quarters of the
-// neighbourhood's: lift ~1.0, so it is already covered and must not be a gap, even though
-// its support is as heavy as "wanted"'s.
-func TestTagGapClampsWhatTheSeedAlreadyCarries(t *testing.T) {
-	db := gapDB(t, 40)
+// "covered" passes the enrichment test (the neighbourhood carries it twice as often as the
+// archive) and must still be excluded, because the seed already carries it more than the
+// archive does. This is the lift test, isolated.
+func TestTagGapDropsWhatTheSeedAlreadyCovers(t *testing.T) {
+	db := gapDB(t)
 	// A LIMIT large enough that truncation cannot hide a bad row: with Limit 20 a
-	// negative-gap row sorted last and was cut, and the mutant that removed the
-	// exclusion SURVIVED. Every row is also checked for a positive score, which is the
-	// property the list is supposed to have.
+	// negative-gap row sorted last and was cut, and the mutant that removed the exclusion
+	// SURVIVED.
 	res, err := NewRunner(db).TagGap(context.Background(), "seed", Options{Limit: 50, MinCoWorks: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, r := range res.Rows {
 		if r.Score <= 0 {
-			t.Fatalf("row %q is in a gap list with score %v: a tag the seed already "+
-				"covers as often as the corpus does has no gap", r.Key, r.Score)
+			t.Fatalf("row %q is in a gap list with score %v: only positive gaps belong "+
+				"in one", r.Key, r.Score)
 		}
 		if r.Key == "covered" {
-			t.Fatalf("a tag the seed carries at %.2f of the corpus rate is listed as a "+
-				"gap (lift %v, score %v): the clamp is not applied", r.Lift, r.Lift, r.Score)
-		}
-		if r.Key == "inline" {
-			t.Fatalf("\"inline\" is listed as a gap, but only the seed's own works carry "+
-				"it: the support is coming from inside the set being described (support %d)",
-				r.CoWorks)
+			t.Fatalf("\"covered\" is listed with lift %v: the seed carries it %.2fx the "+
+				"corpus rate, so it has no gap", r.Lift, r.Lift)
 		}
 	}
 }
 
-// A seed with too few works is refused by name: with a handful of works every lift is 0
-// or 1 and the ranking is noise with two decimal places.
+// A tag the NEIGHBOURHOOD does not over-carry is not a gap either, however rare it is in
+// the seed. This is the test the first live run needed: raw support ranked the archive's
+// sex tags at the top of every seed's list, identically.
+func TestTagGapRequiresTheNeighbourhoodToOverCarry(t *testing.T) {
+	db := gapDB(t)
+	res, err := NewRunner(db).TagGap(context.Background(), "seed", Options{Limit: 50, MinCoWorks: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range res.Rows {
+		for _, bad := range []string{"inline", "spread"} {
+			if r.Key == bad {
+				t.Fatalf("%q is listed with score %v although the neighbourhood carries it "+
+					"LESS often than the archive does: a tag outside the genre is not a "+
+					"gap in this tag, however rare it is in the seed", bad, r.Score)
+			}
+		}
+	}
+}
+
+// A seed with too few works is refused by name: with a handful of works every lift is 0 or
+// 1 and the ranking is noise with two decimal places.
 func TestTagGapRefusesASeedTooSmallToDescribe(t *testing.T) {
-	db := gapDB(t, 5)
-	res, err := NewRunner(db).TagGap(context.Background(), "seed", Options{Limit: 10, MinCoWorks: 5})
+	db := gapDB(t)
+	if _, err := db.Exec(`INSERT INTO tags (id, name) VALUES (99, 'tiny')`); err != nil {
+		t.Fatal(err)
+	}
+	for w := 1; w <= 5; w++ {
+		if _, err := db.Exec(`INSERT OR IGNORE INTO work_tags (work_id, tag_id, tag_type)
+			VALUES (?, 99, 'freeform')`, w); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := NewRunner(db).TagGap(context.Background(), "tiny", Options{Limit: 10, MinCoWorks: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +171,7 @@ func TestTagGapRefusesASeedTooSmallToDescribe(t *testing.T) {
 	}
 	found := false
 	for _, n := range res.Notes {
-		if len(n) > 0 && contains(n, "too few works") {
+		if contains(n, "too few works") {
 			found = true
 		}
 	}
@@ -227,7 +182,7 @@ func TestTagGapRefusesASeedTooSmallToDescribe(t *testing.T) {
 
 // An unknown tag is a named absence, not an empty ranking.
 func TestTagGapNamesAnUnknownTag(t *testing.T) {
-	db := gapDB(t, 40)
+	db := gapDB(t)
 	res, err := NewRunner(db).TagGap(context.Background(), "nosuchtag", Options{Limit: 5})
 	if err != nil {
 		t.Fatal(err)
@@ -235,8 +190,164 @@ func TestTagGapNamesAnUnknownTag(t *testing.T) {
 	if len(res.Rows) != 0 || len(res.Notes) == 0 {
 		t.Fatalf("unknown tag gave %d rows and %d notes", len(res.Rows), len(res.Notes))
 	}
-	// And an empty tag name is an error, not an empty result.
 	if _, err := NewRunner(db).TagGap(context.Background(), "  ", Options{}); err == nil {
 		t.Fatal("an empty tag was accepted")
 	}
+}
+
+// The NOT EXISTS is the load-bearing clause of the second hop, and this corpus is built so
+// that deleting it changes the answer:
+//
+//	works 260: the seed's 40 (1..40, "seed" + 30 fillers), the hood 20 (41..60, one filler
+//	each), others 200 (61..260)
+//	insider: 12 of the SEED's works and 100 of the others; no hood work carries it
+//	own rate 0.30 against a corpus rate of 112/260 = 0.43 -> lift 0.70, so the lift test
+//	passes it and cannot be what keeps it out
+//	honest support 0 -> not a candidate
+//	mutant support 12 of 20 neighbourhood works = 0.60 against 0.43 -> enriched, so the
+//	row appears
+//
+// The small numbers are the point: in the main fixture, 12 of 400 neighbourhood works is a
+// rate too small to clear enrichment, so a mutant would survive there for the wrong
+// reason.
+func TestTagGapIgnoresSupportFromInsideTheSeed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corpus.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(testcorpus.Schema); err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range []string{"seed", "n1", "insider"} {
+		if _, err := db.Exec(`INSERT INTO tags (id, name) VALUES (?, ?)`, i+1, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 1; i <= 260; i++ {
+		if _, err := db.Exec(`INSERT INTO works (id, url, title, authors, update_date)
+			VALUES (?, '', '', '', '2020-01-01')`, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add := func(work, tag int) {
+		if _, err := db.Exec(`INSERT OR IGNORE INTO work_tags (work_id, tag_id, tag_type)
+			VALUES (?, ?, 'freeform')`, work, tag); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedWorks := make([]int, 0, 40)
+	for w := 1; w <= 40; w++ {
+		add(w, 1) // seed
+		seedWorks = append(seedWorks, w)
+	}
+	addFillers(t, db, seedWorks)
+	for w := 1; w <= 12; w++ {
+		add(w, 3) // insider, inside the seed
+	}
+	for w := 41; w <= 60; w++ {
+		// The neighbourhood: one filler each, so neighWorks is 20 and a support of 12 is
+		// a rate large enough for the mutant to clear enrichment.
+		add(w, gapFillerBase)
+	}
+	for w := 61; w <= 160; w++ {
+		add(w, 3) // insider elsewhere, nowhere near the neighbourhood
+	}
+
+	res, err := NewRunner(db).TagGap(context.Background(), "seed", Options{
+		Limit: 50, MinCoWorks: 5,
+		// The floor is what keeps this fixture small; the hop is what is under test.
+		MinCorpusWorks: -1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range res.Rows {
+		if r.Key == "insider" {
+			t.Fatalf("\"insider\" is listed as a gap with support %d: the only works "+
+				"carrying both it and a neighbourhood tag are the seed's OWN, so the "+
+				"evidence came from inside the set being described", r.CoWorks)
+		}
+	}
+}
+
+// gapDB builds the main fixture. Split out so the arithmetic above reads next to the code
+// that makes it true.
+func gapDB(t *testing.T) *sql.DB {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "corpus.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(testcorpus.Schema); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, name := range []string{"seed", "wanted", "covered", "inline", "spread"} {
+		if _, err := db.Exec(`INSERT INTO tags (id, name) VALUES (?, ?)`, i+1, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 1; i <= 1000; i++ {
+		if _, err := db.Exec(`INSERT INTO works (id, url, title, authors, update_date)
+			VALUES (?, '', '', '', '2020-01-01')`, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add := func(work, tag int) {
+		if _, err := db.Exec(`INSERT OR IGNORE INTO work_tags (work_id, tag_id, tag_type)
+			VALUES (?, ?, 'freeform')`, work, tag); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const (
+		tSeed    = 1
+		tWanted  = 2
+		tCovered = 3
+		tInline  = 4
+		tSpread  = 5
+	)
+	seedWorks := make([]int, 0, 100)
+	for w := 1; w <= 100; w++ {
+		add(w, tSeed)
+		seedWorks = append(seedWorks, w)
+	}
+	addFillers(t, db, seedWorks)
+	// The neighbourhood's own works carry the fillers too: that is what makes them the
+	// genre around the tag rather than tags that merely appear beside it.
+	for w := 101; w <= 500; w++ {
+		add(w, gapFillerBase)
+	}
+	// wanted: 300 of the neighbourhood's works, none of the seed's.
+	for w := 101; w <= 400; w++ {
+		add(w, tWanted)
+	}
+	// covered: 50 of the seed's works and 200 of the neighbourhood's.
+	for w := 51; w <= 100; w++ {
+		add(w, tCovered)
+	}
+	for w := 101; w <= 300; w++ {
+		add(w, tCovered)
+	}
+	// inline: 10 of the seed's works and 400 works that carry nothing else.
+	for w := 1; w <= 10; w++ {
+		add(w, tInline)
+	}
+	for w := 501; w <= 900; w++ {
+		add(w, tInline)
+	}
+	// spread: 100 of the neighbourhood's works (rate 0.25) and 400 works outside it
+	// (corpus rate 0.50). It has real support and the neighbourhood UNDER-carries it, so
+	// it must be excluded by the enrichment factor and by nothing else -- the gap is
+	// negative, and dropping enrichment from the score would promote it.
+	for w := 101; w <= 200; w++ {
+		add(w, tSpread)
+	}
+	for w := 501; w <= 900; w++ {
+		add(w, tSpread)
+	}
+	return db
 }

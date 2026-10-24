@@ -72,6 +72,12 @@ type Options struct {
 	// weighting, i.e. the corpus distribution itself.
 	ProfileName string
 
+	// MinCorpusWorks is TagGap's floor on a candidate's own size in the archive: a tag
+	// carried by forty works cannot be "what this genre needs" whatever the neighbourhood
+	// does with it. 0 means tagGapMinCorpusWorks; negative disables it, which exists so a
+	// small fixture can test the ranking logic rather than the floor.
+	MinCorpusWorks int
+
 	// MinTags is Surprise's eligibility gate: the fewest tags a work must
 	// carry to be worth recommending from. 0 means surpriseMinTags.
 	//

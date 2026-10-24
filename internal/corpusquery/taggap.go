@@ -83,6 +83,10 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 	if opts.MinCoWorks == 0 {
 		opts.MinCoWorks = DefaultMinCoWorksToRank
 	}
+	minCorpus := tagGapMinCorpusWorks
+	if opts.MinCorpusWorks != 0 {
+		minCorpus = opts.MinCorpusWorks
+	}
 
 	var id, ownWorks int64
 	err := r.DB.QueryRowContext(ctx,
@@ -167,14 +171,18 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 		inList = append(inList, "?")
 		hoodArgs = append(hoodArgs, n.id)
 	}
-	// The same id list appears twice in the query (the neighbourhood, and the
-	// exclusion of the neighbourhood), so it is appended twice, deliberately and
-	// explicitly -- the first version sliced this out of one slice by index and was one
-	// off, which put the seed's own id where a neighbour belonged.
+	// The id list appears TWICE in the query, and the arguments must be in PLACEHOLDER
+	// order, not in the order they were convenient to build: IN(...), NOT EXISTS(seed),
+	// NOT IN(...), HAVING(min), LIMIT. Building them as "hood, seed, min, limit, hood"
+	// put the minimum (50) where the exclusion list starts and a tag id where the HAVING
+	// threshold belongs -- which reads as "no candidates found", the wrong answer every
+	// other test in this file was written to distinguish from a right one. It was found
+	// by printing the query's arguments rather than by reading them.
 	args := make([]any, 0, 2*len(hood)+3)
-	args = append(args, hoodArgs...)
-	args = append(args, id, tagGapMinCorpusWorks, tagGapCandidates)
-	args = append(args, hoodArgs...)
+	args = append(args, hoodArgs...)                 // IN (neighbourhood)
+	args = append(args, id)                          // NOT EXISTS (the seed)
+	args = append(args, hoodArgs...)                 // NOT IN (neighbourhood)
+	args = append(args, minCorpus, tagGapCandidates) // HAVING, LIMIT
 	crow, err := r.DB.QueryContext(ctx, `
 		SELECT c.tag_id, t.name, COUNT(*) AS support
 		FROM work_tags w
@@ -217,6 +225,25 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 			"no tag outside the neighbourhood is carried by the works around %q often "+
 				"enough to rank (support >= %d)", tag, opts.MinCoWorks))
 		return res, nil
+	}
+
+	// The neighbourhood's own work count: the denominator for "does the genre around
+	// this tag carry this candidate MORE than the archive does".
+	//
+	// WITHOUT THIS the ranking is a popularity list. The first live run ranked
+	// hurt/comfort's gaps as underage sex, vaginal sex, oral sex -- true statements
+	// about the neighbourhood (M/M works carry them heavily) and useless ones, because
+	// they lead every seed's list identically. support is dominated by how MANY works
+	// carry a tag; the question is whether the neighbourhood carries it more often than
+	// the archive, which is a rate.
+	var neighWorks int64
+	if err := r.DB.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT w.work_id) FROM work_tags w
+		WHERE w.tag_id IN (`+strings.Join(inList, ",")+`)
+		  AND NOT EXISTS (
+			SELECT 1 FROM work_tags x WHERE x.work_id = w.work_id AND x.tag_id = ?
+		  )`, append(append([]any{}, hoodArgs...), id)...).Scan(&neighWorks); err != nil {
+		return res, fmt.Errorf("tag-gap: neighbourhood size: %w", err)
 	}
 
 	// The two rates each candidate needs: how often the SEED carries it, and how often
@@ -270,7 +297,7 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 			continue
 		}
 		cw := corpus[c.id]
-		if cw < tagGapMinCorpusWorks {
+		if cw < minCorpus {
 			continue
 		}
 		share := corpusShare(cw)
@@ -279,13 +306,27 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 		if share > 0 {
 			lift = ownRate / share
 		}
+		// How much the neighbourhood over-carries the candidate, relative to the
+		// archive, shrunk toward 1.0 by its own evidence. A candidate the neighbourhood
+		// carries at exactly the archive's rate has enrichment 1 and no gap, whatever
+		// its raw support.
+		enrichment := 0.0
+		if share > 0 && neighWorks > 0 {
+			enrichment = (float64(c.support) / float64(neighWorks)) / share
+		}
+		enrichShrunk := 1 + (enrichment-1)*float64(c.support)/(float64(c.support)+ShrinkK)
+		// NOTE: there is no explicit `enrichShrunk <= 1` guard here. It was written, and a
+		// mutation showed it was dead: shrinking pulls toward 1 without crossing it, so
+		// enrichment <= 1 implies enrichShrunk <= 1 implies a non-positive gap, which the
+		// `gap <= 0` test below already refuses. Both factors of the score are required to
+		// be positive, and ONE comparison enforces it.
 		// A tag the seed carries at or above the corpus rate has NO gap: 1-lift is zero
 		// at parity and negative above it, so the row is dropped below rather than
 		// ranked low. There was an explicit math.Min(lift, 1) here, and a mutation run
 		// proved it redundant -- deleting it changed no test outcome, because a lift
 		// above 1 already produces a non-positive gap. The exclusion is the `gap <= 0`,
 		// which is what a mutant does break.
-		gap := float64(c.support) * (1 - lift)
+		gap := float64(c.support) * (enrichShrunk - 1) * (1 - lift)
 		if gap <= 0 {
 			continue
 		}
@@ -296,8 +337,9 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 			Works:   cw,
 			CoWorks: own[c.id],
 			Lift:    lift,
-			Note: fmt.Sprintf("%d of %d of this tag's works carry it, %.1fx the corpus rate",
-				own[c.id], ownWorks, lift),
+			Note: fmt.Sprintf("%d of %d of this tag's works carry it (%.2fx the corpus "+
+				"rate); the neighbourhood carries it %.1fx the corpus rate",
+				own[c.id], ownWorks, lift, enrichShrunk),
 		})
 	}
 
@@ -319,8 +361,13 @@ func (r *Runner) TagGap(ctx context.Context, tag string, opts Options) (Result, 
 		"neighbourhood of %d tags (%s, ...); support counts co-occurrences on works "+
 			"WITHOUT %q, so the evidence comes from outside the tag",
 		len(hood), strings.Join(names, ", "), tag))
-	res.Notes = append(res.Notes, "gap = support x (1 - lift), lift = this tag's rate "+
-		"over the corpus's rate; a tag this tag already carries at or above the corpus "+
-		"rate has no gap and is not listed")
+	res.Notes = append(res.Notes, fmt.Sprintf(
+		"gap = support x (enrichment-1) x (1-lift), where enrichment is how much more "+
+			"often the %d neighbourhood works carry the tag than the archive does and lift "+
+			"is how often this tag's own works carry it against the archive; shrunk by "+
+			"support/(support+%.0f)", neighWorks, ShrinkK))
+	res.Notes = append(res.Notes, "a tag this tag already carries at or above the corpus "+
+		"rate has no gap and is not listed, and neither does a tag the neighbourhood "+
+		"carries no more often than the archive")
 	return res, nil
 }
