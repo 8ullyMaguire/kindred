@@ -124,6 +124,11 @@ func (r *Runner) TagTrend(ctx context.Context, tag string, opts Options) (Result
 	// refused rather than guessed.
 	var startDay string
 	usedDays := 0
+	// The count at the ORIGINAL window, kept so the "we had to widen" note reports the
+	// number that justified widening rather than the number the widening produced. The
+	// first version printed the widened count beside the word "shorter", which made a
+	// sentence that could not be true.
+	firstRecent := -1
 	for _, days := range []int{tagTrendDays, 180, 365, 730, 1460, 3650} {
 		candidate := anchorDay.AddDate(0, 0, -days).Format("2006-01-02")
 		if err := r.DB.QueryRowContext(ctx, `SELECT
@@ -132,6 +137,9 @@ func (r *Runner) TagTrend(ctx context.Context, tag string, opts Options) (Result
 			return res, fmt.Errorf("tag-trend: corpus counts: %w", err)
 		}
 		startDay, usedDays = candidate, days
+		if firstRecent < 0 {
+			firstRecent = totalRecent
+		}
 		if totalRecent >= floor {
 			break
 		}
@@ -141,9 +149,9 @@ func (r *Runner) TagTrend(ctx context.Context, tag string, opts Options) (Result
 			"not today", startDay, anchor.String, usedDays, totalRecent, totalAll))
 	if usedDays != tagTrendDays {
 		res.Notes = append(res.Notes, fmt.Sprintf(
-			"the window was widened from %d to %d days: %d of %d works fall inside the "+
-				"shorter one, which cannot measure a trend", tagTrendDays, usedDays,
-			totalRecent, totalAll))
+			"the window was widened from %d to %d days: only %d of %d works fall inside "+
+				"the shorter one, which cannot measure a trend", tagTrendDays, usedDays,
+			firstRecent, totalAll))
 	}
 	if totalRecent < floor || totalAll == 0 {
 		// Naming this instead of returning zero lifts: a window with nothing in it is

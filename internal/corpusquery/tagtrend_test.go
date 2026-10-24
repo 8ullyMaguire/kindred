@@ -306,6 +306,16 @@ func TestAThinWindowWidensAndSaysSo(t *testing.T) {
 	if !widened {
 		t.Fatalf("the window was widened without saying so: %v", res.Notes)
 	}
+	// The note must report the count at the ORIGINAL window, not the widened one: the
+	// first version printed the widened figure beside the word "shorter", a sentence
+	// that cannot be true.
+	for _, n := range res.Notes {
+		if contains(n, "only 1 of 40 works") {
+			return
+		}
+	}
+	t.Fatalf("the widening note does not report the original window's count (expected "+
+		"\"only 1 of 40 works\"): %v", res.Notes)
 	if !anchored {
 		t.Fatalf("the anchor is no longer named: %v", res.Notes)
 	}
