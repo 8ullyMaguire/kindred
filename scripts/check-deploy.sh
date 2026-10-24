@@ -1058,6 +1058,20 @@ echo "new since your last visit"
 check "the list answers one way or the other" "$TARGET/new" 'first visit|Since your previous visit'
 check "and refuses to invent a boundary"      "$TARGET/new" 'no .before. to compare against|began on'
 
+echo
+echo "an author's neighbours are readers first, tags second (#35)"
+# The row's finding, checked against the live mirror: /authors/similar answered from the tag
+# profile alone, and for an author whose rarest tags were all singletons it answered NOTHING
+# (Masterweaver: 26 works, 61 readers, empty list -- 2 of 25 sampled authors). Two things
+# have to be true at once: the co-readership arm is loaded and ranks, and the tag arm still
+# answers when asked for it by name.
+checkall "similar authors rank by co-readership" \
+  "$TARGET/api/v1/authors/similar?name=Masterweaver&limit=5" \
+  '"ranked_by":"co_readers"' '"readers":[1-9]' 'also read this author'
+check "and the tag arm is still reachable"       "$TARGET/api/v1/authors/similar?name=Masterweaver&limit=5&by=tags" '"ranked_by":"tag_profile"'
+check "and an unknown arm is refused by name"    "$TARGET/api/v1/authors/similar?name=Masterweaver&by=popularity" 'by must be'
+
+
 # --- verdict ------------------------------------------------------------
 echo
 echo "-----------------------------------------------------------"
@@ -1077,16 +1091,3 @@ echo "This says the PRODUCT matches. It does NOT say the BUILD does."
 echo "Run scripts/check-provenance.sh for that -- behaviour alone is the false"
 echo "clean sheet that let a six-day-old binary survive."
 exit 0
-
-echo
-echo "an author's neighbours are readers first, tags second (#35)"
-# The row's finding, checked against the live mirror: /authors/similar answered from the tag
-# profile alone, and for an author whose rarest tags were all singletons it answered NOTHING
-# (Masterweaver: 26 works, 61 readers, empty list -- 2 of 25 sampled authors). Two things
-# have to be true at once: the co-readership arm is loaded and ranks, and the tag arm still
-# answers when asked for it by name.
-checkall "similar authors rank by co-readership" \
-  "$TARGET/api/v1/authors/similar?name=Masterweaver&limit=5" \
-  '"ranked_by":"co_readers"' '"readers":[1-9]' 'also read this author'
-check "and the tag arm is still reachable"       "$TARGET/api/v1/authors/similar?name=Masterweaver&limit=5&by=tags" '"ranked_by":"tag_profile"'
-check "and an unknown arm is refused by name"    "$TARGET/api/v1/authors/similar?name=Masterweaver&by=popularity" 'by must be'
