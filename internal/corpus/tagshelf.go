@@ -73,6 +73,16 @@ type TagShelf struct {
 	MeanWords   int64 `json:"mean_words"`
 	MedianKudos int64 `json:"median_kudos"`
 	MeanKudos   int64 `json:"mean_kudos"`
+	// ShrunkKudos is the tag's mean kudos pulled toward the corpus mean by
+	// priorPseudoWorks pseudo-works (#39). On a tag with three works it is a
+	// sentence about the corpus with a little of the tag in it; on a tag with
+	// thousands it is the tag's own mean. Both facts are useful and only one of
+	// them is `mean kudos`.
+	ShrunkKudos float64 `json:"shrunk_kudos"`
+	// PriorKudos and PriorWeight are the prior made visible: a shrunk number
+	// whose prior is hidden cannot be checked or argued with.
+	PriorKudos  float64 `json:"prior_kudos"`
+	PriorWeight int     `json:"prior_weight"`
 	// Undated is how many works carry no update date. A trend that silently
 	// drops them reads as a complete history when it is not.
 	Undated int     `json:"undated"`
@@ -154,6 +164,16 @@ func (a *AO3) TagShelf(ctx context.Context, tagID int64) (TagShelf, error) {
 	}
 	s.MeanKudos = sumKudos / int64(s.Works)
 	s.MedianKudos = medianOf(kudos)
+	// The shrunk mean. A failure to read the prior is NOT fatal: the shelf's
+	// other numbers are already computed and a page about a tag must not fail
+	// because the corpus mean could not be read. ShrunkKudos stays 0 and
+	// PriorWeight keeps its zero value, which the template reads as "not
+	// measured" rather than printing 0 as an estimate.
+	if prior, perr := a.CorpusMeanKudos(ctx); perr == nil && prior > 0 {
+		s.PriorKudos = prior
+		s.PriorWeight = priorPseudoWorks
+		s.ShrunkKudos = ShrinkKudos(float64(sumKudos), s.Works, prior)
+	}
 	if topBM >= 0 {
 		s.Top = top
 	}

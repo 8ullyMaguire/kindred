@@ -71,6 +71,19 @@
     <dt>mean length</dt><dd>{{commas .Shelf.MeanWords}} words</dd>
     <dt>median kudos</dt><dd data-testid="median-kudos">{{commas .Shelf.MedianKudos}}</dd>
     <dt>mean kudos</dt><dd>{{commas .Shelf.MeanKudos}}</dd>
+    {{/* The fourth number, and the only one that says how much the tag's own
+         evidence weighs. A mean over three works is not an estimate of quality;
+         a shrunk mean over three works is the corpus average with a little of the
+         tag in it, which is what three works can support. */}}
+    {{if .Shelf.PriorWeight}}
+    <dt>shrunk kudos</dt>
+    <dd data-testid="shrunk-kudos" data-prior="{{printf "%.1f" .Shelf.PriorKudos}}" data-weight="{{.Shelf.PriorWeight}}">
+      {{printf "%.1f" .Shelf.ShrunkKudos}}
+      <span class="count">&mdash; the mean pulled toward the mirror's average of
+      {{printf "%.1f" .Shelf.PriorKudos}} by {{.Shelf.PriorWeight}} fictional works, so a tag with
+      {{commas .Shelf.Works}} works cannot claim more than its evidence supports</span>
+    </dd>
+    {{end}}
     <dt>words in total</dt><dd>{{commas .Shelf.TotalWords}}</dd>
     {{if .Shelf.Top.ID}}
     <dt>most saved</dt>

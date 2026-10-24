@@ -36,6 +36,10 @@ const AO3Kind = string(arena.KindWork)
 //     can name.
 type AO3 struct {
 	DB *sql.DB
+	// prior caches the corpus mean kudos, which per-tag numbers are shrunk
+	// toward. Process-wide because it is a property of the mirror, not of a
+	// request (#39).
+	prior priorCache
 }
 
 func NewAO3(db *sql.DB) *AO3 { return &AO3{DB: db} }

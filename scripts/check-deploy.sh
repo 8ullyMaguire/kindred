@@ -860,6 +860,15 @@ check "or says why it is empty"          "$TARGET/skipped" 'data-testid="skipped
 check "and offers the action that demotes" "$TARGET/skipped" 'Not interested|data-empty'
 
 echo
+echo "a thin tag cannot brag (#39)"
+# The tag page printed a MEAN over as few as three works, which reads as a quality
+# claim. The shrunk number and its prior must both be on the page: a shrunk value with
+# a hidden prior cannot be checked or argued with.
+check "the tag shelf carries a shrunk kudos estimate"  "$TARGET/tag/1" 'data-testid="shrunk-kudos"'
+check "and names the prior it was shrunk toward"      "$TARGET/tag/1" 'data-prior='
+check "and the fictional works that prior is worth"   "$TARGET/tag/1" 'data-weight='
+
+echo
 echo "the walk reaches what one hop cannot (#74)"
 # A registered signal at weight zero is this project's most repeated bug: it runs
 # never, appears in no evidence, and names itself nowhere. The check is therefore
