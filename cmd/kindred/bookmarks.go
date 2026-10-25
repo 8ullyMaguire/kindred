@@ -75,6 +75,11 @@ func runBookmarks(ctx context.Context, args []string) error {
 	var all []crawl.Bookmark
 	totalInserted := 0
 	page := 1
+	// partial says the walk stopped because the archive stopped answering, not because the
+	// listing ended. The import is idempotent, so the caller SHOULD try again: an exit code of 0
+	// after one page of a thirty-page list would end a retry loop while most of the list is
+	// still unread.
+	partial := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -91,7 +96,8 @@ func runBookmarks(ctx context.Context, args []string) error {
 			if page == 1 {
 				return fmt.Errorf("bookmarks page 1: %w", err)
 			}
-			fmt.Printf("  stopped at page %d: %v (importing the %d bookmark(s) read so far)\n", page, err, len(all))
+			fmt.Printf("  stopped at page %d: %v (kept the %d bookmark(s) read so far)\n", page, err, len(all))
+			partial = true
 			break
 		}
 		got, err := crawl.ParseBookmarks(body)
@@ -135,6 +141,10 @@ func runBookmarks(ctx context.Context, args []string) error {
 			return err
 		}
 		fmt.Printf("taste: %d tag(s) written to %s\n", len(taste), *tasteOut)
+	}
+	if partial {
+		return fmt.Errorf("bookmarks: read %d of %s's bookmarks, then the archive stopped answering page %d; "+
+			"re-run to continue (imports are idempotent)", len(all), name, page)
 	}
 	return nil
 }

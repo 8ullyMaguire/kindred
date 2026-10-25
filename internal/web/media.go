@@ -180,10 +180,25 @@ func resolveMedia(cat *harvest.Catalogue, want string) (string, bool) {
 			}
 		}
 	}
+	// Then by display name, and then by a UNIQUE first word: AO3's own URL for Books carries the
+	// wildcards ("Books%20*a*%20Literature"), so /media/Books/ is not a URL the archive publishes
+	// -- but a reader who types it means that media, and there is exactly one media beginning with
+	// "Books". Uniqueness is the guard: with "Other Media" and nothing else starting "Other", the
+	// shortcut cannot pick the wrong one, and if it ever could, it refuses instead of guessing.
+	decoded := displayMedia(want)
 	for _, name := range cat.Media {
-		if strings.EqualFold(name, want) {
+		if strings.EqualFold(displayMedia(name), decoded) {
 			return name, true
 		}
+	}
+	var matches []string
+	for _, name := range cat.Media {
+		if strings.HasPrefix(strings.ToLower(displayMedia(name)), strings.ToLower(decoded)+" ") {
+			matches = append(matches, name)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], true
 	}
 	return "", false
 }
