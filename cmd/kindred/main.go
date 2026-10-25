@@ -40,8 +40,17 @@ commands:
   tune      inspect or set signal weights
   embed-check  fingerprint the embedding table and compare it with the previous build
   als       train implicit-feedback factors over the mirror's reader interactions
+  tagtree   cluster the tag embeddings into a family tree (#37)
+  worktree  cluster works into theme families (#47)
+  seasons   which tags belong to which calendar month (#80)
+  velocity  which tags are rising in a recent window
+  author-eval  score the author-similarity proxy against held-out readers
+  discover  list the mirror's instance-level crawl sources
+  autocrawl run the crawl over those sources
 
-run "kindred <command> -h" for command flags.
+A command that exists but is not listed here is invisible to the person who runs
+kindred to find out what it can do: keep this list in step with the switch
+below. Per-command flags are behind "kindred <command> -h".
 `
 
 func main() {
