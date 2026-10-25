@@ -59,11 +59,21 @@ func runBookmarks(ctx context.Context, args []string) error {
 	}
 	defer client.Close()
 	f := &patientFetch{
-		inner: crawlerFetch{crawl.New(client)}, limit: 6, pause: 5 * time.Minute,
+		// Six attempts over ~3 minutes: a reader's bookmark list is READ ONCE (the import is
+		// incremental and idempotent), so spending three minutes to get a page beats failing and
+		// having to be restarted by hand during an AO3 storm.
+		inner: crawlerFetch{crawl.New(client)}, limit: 6, pause: 5 * time.Minute, attempts: 6,
 		logf: func(format string, a ...any) { fmt.Printf(format+"\n", a...) },
 	}
 
+	corpus, err := sql.Open("sqlite", "file:"+c.CorpusDB+"?_pragma=busy_timeout(30000)")
+	if err != nil {
+		return fmt.Errorf("open corpus: %w", err)
+	}
+	defer corpus.Close()
+
 	var all []crawl.Bookmark
+	totalInserted := 0
 	page := 1
 	for {
 		if err := ctx.Err(); err != nil {
@@ -75,17 +85,37 @@ func runBookmarks(ctx context.Context, args []string) error {
 		rawURL := fmt.Sprintf("%s/users/%s/bookmarks?page=%d", base, url.PathEscape(name), page)
 		body, err := f.Fetch(ctx, rawURL)
 		if err != nil {
-			return fmt.Errorf("bookmarks page %d: %w", page, err)
+			// A page failing after the first is an outage, not an empty listing. What has been
+			// read is IMPORTED before returning: the first version collected every page and
+			// imported once at the end, so a 525 on page 2 threw away page 1 as well.
+			if page == 1 {
+				return fmt.Errorf("bookmarks page 1: %w", err)
+			}
+			fmt.Printf("  stopped at page %d: %v (importing the %d bookmark(s) read so far)\n", page, err, len(all))
+			break
 		}
 		got, err := crawl.ParseBookmarks(body)
 		if err != nil {
-			return fmt.Errorf("bookmarks page %d: %w", page, err)
+			if page == 1 {
+				return fmt.Errorf("bookmarks page 1: %w", err)
+			}
+			fmt.Printf("  stopped at page %d: %v\n", page, err)
+			break
 		}
 		if len(got) == 0 {
 			break
 		}
 		all = append(all, got...)
-		fmt.Printf("  page %-3d %3d bookmark(s)  (total %d)\n", page, len(got), len(all))
+		// Import page by page: a long import is a series of small steps that each survive an
+		// interruption, not one step at the end that does not.
+		if *doImport {
+			n, err := importBookmarks(ctx, corpus, base, name, got)
+			if err != nil {
+				return fmt.Errorf("import page %d: %w", page, err)
+			}
+			totalInserted += n
+		}
+		fmt.Printf("  page %-3d %3d bookmark(s)  (total %d, imported %d)\n", page, len(got), len(all), totalInserted)
 		page++
 	}
 	if len(all) == 0 {
@@ -96,16 +126,7 @@ func runBookmarks(ctx context.Context, args []string) error {
 	report(name, all)
 
 	if *doImport {
-		corpus, err := sql.Open("sqlite", "file:"+c.CorpusDB+"?_pragma=busy_timeout(30000)")
-		if err != nil {
-			return fmt.Errorf("open corpus: %w", err)
-		}
-		defer corpus.Close()
-		inserted, err := importBookmarks(ctx, corpus, base, name, all)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("imported: %d new interaction(s) for %s\n", inserted, name)
+		fmt.Printf("imported: %d new interaction(s) for %s\n", totalInserted, name)
 	}
 
 	if *tasteOut != "" {

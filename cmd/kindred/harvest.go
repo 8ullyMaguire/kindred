@@ -45,12 +45,16 @@ func (a crawlerFetch) Fetch(ctx context.Context, rawURL string) ([]byte, error) 
 // challenge indefinitely" that does not give up either -- it stops hammering, says so, and tries
 // again, and every URL gets two more attempts after a pause before the caller is told it failed.
 type patientFetch struct {
-	inner  harvest.Fetcher
-	limit  int
-	pause  time.Duration
-	logf   func(format string, args ...any)
-	fails  int
-	pauses int
+	inner harvest.Fetcher
+	limit int
+	pause time.Duration
+	// attempts caps the retries of ONE URL. AO3's storms last minutes, so a retry ladder that
+	// gives up after two three-second tries spends the storm on nothing; the ladder below walks
+	// 3s, 8s, 20s, 45s, and then the long pause.
+	attempts int
+	logf     func(format string, args ...any)
+	fails    int
+	pauses   int
 }
 
 func (p *patientFetch) Fetch(ctx context.Context, rawURL string) ([]byte, error) {
@@ -64,7 +68,11 @@ func (p *patientFetch) Fetch(ctx context.Context, rawURL string) ([]byte, error)
 			return nil, err
 		}
 		p.fails++
-		if attempt >= 2 {
+		maxAttempts := p.attempts
+		if maxAttempts <= 0 {
+			maxAttempts = 3
+		}
+		if attempt+1 >= maxAttempts {
 			return nil, err
 		}
 		if p.limit > 0 && p.fails >= p.limit {
@@ -77,7 +85,13 @@ func (p *patientFetch) Fetch(ctx context.Context, rawURL string) ([]byte, error)
 			p.fails = 0
 			continue
 		}
-		if err := sleepCtx(ctx, 3*time.Second); err != nil {
+		// Escalating, because the failures are one outage rather than three independent ones.
+		waits := []time.Duration{3 * time.Second, 8 * time.Second, 20 * time.Second, 45 * time.Second}
+		wait := waits[len(waits)-1]
+		if attempt < len(waits) {
+			wait = waits[attempt]
+		}
+		if err := sleepCtx(ctx, wait); err != nil {
 			return nil, err
 		}
 	}

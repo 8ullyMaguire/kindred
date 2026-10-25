@@ -62,9 +62,14 @@ func (r *QAResult) OK() bool { return len(r.Mismatch) == 0 && r.Compared > 0 }
 // QA compares each stored row against its work page.
 func QA(ctx context.Context, f Fetcher, base string, rows []StoredWork) (*QAResult, error) {
 	res := &QAResult{Mismatch: map[string]int{}, Drift: map[string]int{}}
-	for _, row := range rows {
+	for i, row := range rows {
 		if err := ctx.Err(); err != nil {
 			return res, err
+		}
+		// A sample of work pages takes minutes per work when AO3 is unwell, and a check that
+		// prints nothing until it finishes is indistinguishable from one that hung.
+		if i > 0 && i%5 == 0 {
+			fmt.Printf("  %d/%d compared (fetch failures %d)\n", i, len(rows), res.FetchFailed)
 		}
 		res.Sampled++
 		rawURL := fmt.Sprintf("%s/works/%d", base, row.ID)
