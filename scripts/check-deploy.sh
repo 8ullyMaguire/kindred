@@ -755,14 +755,18 @@ fi
 # The page must show BOTH sentences for every work it offers, or the honest note when nothing
 # qualifies. Asserting "200" alone would pass on a page whose columns are empty -- the two
 # data-kind markers are what the duel is made of.
+#
+# The seed is the mirror's MOST BOOKMARKED work (30788489, 69 readers), not the seed the other
+# checks use: the interaction graph is thin (180k rows; ONE neighbour of 17249318 shares 2
+# readers), so a thin seed honestly produces no duel at all and this block would assert nothing.
 echo
 echo "one work, two explanations"
-check      "the explain view renders"               "$TARGET/algo?mode=explain&seed=ao3_work:17249318&n=6" 'Compare explanations'
-check      "and names the tag explanation"          "$TARGET/algo?mode=explain&seed=ao3_work:17249318&n=6" 'class="algo-column" data-kind="tags"'
-check      "and names the readers explanation"      "$TARGET/algo?mode=explain&seed=ao3_work:17249318&n=6" 'class="algo-column" data-kind="readers"'
-check      "and says what the sample was"           "$TARGET/algo?mode=explain&seed=ao3_work:17249318&n=6" 'can be explained both ways'
-check      "and the standings refuse a leader early" "$TARGET/algo?mode=explain&seed=ao3_work:17249318&n=6" 'no leader'
-check_absent "and no sentence rests on one reader"  "$TARGET/algo?mode=explain&seed=ao3_work:17249318&n=6" 'readers &middot; 1<'
+check      "the explain view renders"               "$TARGET/algo?mode=explain&seed=ao3_work:30788489&n=10" 'Compare explanations'
+check      "and names the tag explanation"          "$TARGET/algo?mode=explain&seed=ao3_work:30788489&n=10" 'class="algo-column" data-kind="tags"'
+check      "and names the readers explanation"      "$TARGET/algo?mode=explain&seed=ao3_work:30788489&n=10" 'class="algo-column" data-kind="readers"'
+check      "and says what the sample was"           "$TARGET/algo?mode=explain&seed=ao3_work:30788489&n=10" 'can be explained both ways'
+check      "and the standings refuse a leader early" "$TARGET/algo?mode=explain&seed=ao3_work:30788489&n=10" 'no leader'
+check_not    "and no sentence rests on one reader"  "$TARGET/algo?mode=explain&seed=ao3_work:30788489&n=10" 'readers &middot; 1<'
 
 echo
 echo "the seasonal tag model is built"

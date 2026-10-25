@@ -272,3 +272,26 @@ func note(body string) string {
 	}
 	return "(no note)"
 }
+
+// The tag sentence shows the RAREST shared tags, because the point of the sentence is to name
+// what makes this work the one that was recommended. On the live mirror the shared tags between
+// two works of one fandom are dominated by archive-wide warning tags (measured: "underage sex"
+// 9,507 works, "rape/non-con" 9,835, "major character death" 11,205 against 112,937), so the
+// order is the only lever the sentence has.
+func TestSharedTagsAreOrderedRarestFirst(t *testing.T) {
+	seedTags := []corpus.TagPair{{ID: 1, Name: "fluff"}, {ID: 2, Name: "time loop"}, {ID: 3, Name: "angst"}}
+	candTags := []corpus.TagPair{{ID: 1, Name: "fluff"}, {ID: 2, Name: "time loop"}, {ID: 3, Name: "angst"}}
+	support := map[int64]int{1: 40000, 2: 40, 3: 9000}
+	got := sharedTagNames(seedTags, candTags, support)
+	if len(got) != 3 {
+		t.Fatalf("shared = %v, want all three", got)
+	}
+	if got[0] != "time loop" || got[1] != "angst" || got[2] != "fluff" {
+		t.Fatalf("order = %v, want rarest first (time loop 40, angst 9000, fluff 40000)", got)
+	}
+	// A candidate tag the seed does not carry is not shared, whatever its rarity.
+	got = sharedTagNames(seedTags, []corpus.TagPair{{ID: 99, Name: "crossover"}}, support)
+	if len(got) != 0 {
+		t.Fatalf("unshared tag appeared: %v", got)
+	}
+}
