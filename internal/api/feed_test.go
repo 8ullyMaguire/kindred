@@ -377,3 +377,30 @@ func readBody(t *testing.T, r io.Reader) string {
 	}
 	return string(b)
 }
+
+// A feed URL lives in someone ELSE'S software. The page layer redirecting /tag/{id} does nothing
+// for a reader whose aggregator still holds /feed/tag/{id}.xml, and an aggregator that gets a 404
+// does not tell anybody -- it silently stops updating, and the reader concludes nobody posts.
+func TestLegacyTagFeedRedirectsPermanently(t *testing.T) {
+	ts := newFeedServer(t)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse // read the 301, do not follow it
+	}}
+	for _, tc := range []struct{ from, want string }{
+		{"/feed/tag/1", "/feed/tags/1"},
+		{"/feed/tag/1.xml", "/feed/tags/1.xml"},
+	} {
+		res, err := client.Get(ts.URL + tc.from)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.from, err)
+		}
+		loc := res.Header.Get("Location")
+		res.Body.Close()
+		if res.StatusCode != http.StatusMovedPermanently {
+			t.Fatalf("%s -> %d, want 301 (a temporary redirect teaches the aggregator nothing)", tc.from, res.StatusCode)
+		}
+		if loc != tc.want {
+			t.Fatalf("%s -> Location %q, want %q", tc.from, loc, tc.want)
+		}
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/url"
 	"os"
 	"sort"
@@ -18,6 +19,8 @@ import (
 	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/crawl"
+	"git.polarisocial.xyz/kindred/kindred/internal/diversify"
+	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 )
 
 // RunOptions is one harvest run.
@@ -242,6 +245,39 @@ func Run(ctx context.Context, f Fetcher, o RunOptions) (*RunReport, error) {
 // the mirror already covers -- the fandom is retried under `revised_at`. That is not padding: the
 // mirror was built from popular works, so the recently-updated end of a fandom is the end it does
 // NOT have, and a quota left unfilled is a hole in the distribution the plan promised.
+// diversifyBlurbs orders candidates by maximal marginal relevance (lambda 0.75, the setting this
+// repo measured 0.1063 recall / 0.1888 NDCG against 0.0921 / 0.1697 for pure relevance).
+//
+// Without it a fandom's quota is its top-scoring blurbs, and in a big fandom the top-scoring
+// blurbs are the same AU tagged the same eight ways: the plan says "distributed across 1,130
+// fandoms" while each fandom's ten works are one trope. Tag overlap is a Jaccard over tag ids, so
+// names are hashed to int32 here -- the ids are only ever set members, never looked up.
+func diversifyBlurbs(pool []crawl.Blurb, want int, taste Taste) []crawl.Blurb {
+	if len(pool) <= 1 || want <= 0 {
+		return pool
+	}
+	byID := make(map[int64]crawl.Blurb, len(pool))
+	cands := make([]rank.Candidate, 0, len(pool))
+	for _, b := range pool {
+		byID[b.ID] = b
+		ids := make([]int32, 0, len(b.Tags))
+		for _, t := range b.Tags {
+			h := fnv.New32a()
+			_, _ = h.Write([]byte(strings.ToLower(strings.TrimSpace(t.Name))))
+			ids = append(ids, int32(h.Sum32()))
+		}
+		cands = append(cands, rank.Candidate{ID: b.ID, TagIDs: ids, Score: Score(b, taste)})
+	}
+	res := diversify.Apply(cands, diversify.Options{Requested: want, Lambda: 0.75, MMRK: 400})
+	out := make([]crawl.Blurb, 0, len(res.Items))
+	for _, c := range res.Items {
+		if b, ok := byID[c.ID]; ok {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
 // fillResult is what one fandom's fill did, in the units the report counts.
 type fillResult struct {
 	// Saved is the fandom's total after the fill (cumulative across runs).
@@ -297,10 +333,11 @@ func fillFandom(ctx context.Context, f Fetcher, o RunOptions, fan Fandom, quota 
 				}
 				return pool[i].ID < pool[j].ID
 			})
+			// What cannot be taken is removed BEFORE the diversity pass: an item already in the
+			// mirror would otherwise occupy one of the passage's slots and come back out again,
+			// leaving the quota short by however many it held.
+			live := make([]crawl.Blurb, 0, len(pool))
 			for _, b := range pool {
-				if saved >= quota {
-					break
-				}
 				if taken[b.ID] {
 					continue
 				}
@@ -317,6 +354,12 @@ func fillFandom(ctx context.Context, f Fetcher, o RunOptions, fan Fandom, quota 
 						taken[b.ID] = true
 						continue
 					}
+				}
+				live = append(live, b)
+			}
+			for _, b := range diversifyBlurbs(live, quota-saved, o.Taste) {
+				if saved >= quota || ctx.Err() != nil {
+					break
 				}
 				w, werr := workFor(ctx, f, o, b)
 				if werr != nil {

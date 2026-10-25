@@ -251,6 +251,19 @@ func allPages() []pageSpec {
 				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, _ string) { d.renderSurprise(w, r) },
 			},
 			{
+				// AO3's fandom index: /media lists the media, /media/<media>/fandoms lists that
+				// media's fandoms with their sizes. Reached from the nav and from every media in
+				// the index, so Nav is "fandoms" -- this IS that section, seen from the other side.
+				Template: "media.html",
+				Paths:    []string{"/media/"},
+				Prefix:   true,
+				Nav:      "fandoms",
+				List:     true,
+				Handler: func(d Deps, w http.ResponseWriter, r *http.Request, arg string) {
+					d.renderMedia(w, r, arg)
+				},
+			},
+			{
 				Template: "fandoms.html",
 				Paths:    []string{"/fandoms"},
 				List:     true,

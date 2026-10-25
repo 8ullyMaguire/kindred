@@ -95,6 +95,13 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 }
 
 func runHarvest(ctx context.Context, args []string) error {
+	// The backfill is a separate flag TABLE with its own names (-max-fandoms, -target-works), so
+	// it is dispatched before this command's flagset parses the same argv and rejects them.
+	for _, a := range args {
+		if a == "-backfill-types" || a == "--backfill-types" {
+			return backfillFromCLI(ctx, args)
+		}
+	}
 	fs := newFlagSet("harvest")
 	c := bindConfig(fs)
 	var (
@@ -115,11 +122,14 @@ func runHarvest(ctx context.Context, args []string) error {
 		delay       = fs.Duration("crawl-delay", 0, "delay between requests (0 = robots.txt, else 30s)")
 		quiet       = fs.Bool("quiet", false, "log only per-fandom summaries")
 		enrich      = fs.Bool("enrich", false, "fetch work pages for rows that have no summary (a blurb-only pass leaves these)")
+		qaSample    = fs.Int("qa", 0, "compare N stored works against their pages and report field agreement")
+		backfill    = fs.Bool("backfill-types", false, "retype the mirror's flattened tag categories (dispatched before parsing)")
 		enrichMax   = fs.Int("enrich-max", 0, "stop after N enrichments (0 = no limit)")
 		pauseAfter  = fs.Int("pause-after", 8, "consecutive fetch failures before a pause (0 = never)")
 		pauseFor    = fs.Duration("pause", 5*time.Minute, "how long to pause once -pause-after is reached")
 		abortAfter  = fs.Int("abort-after", 10, "stop after N fandoms in a row produce nothing (0 = never)")
 	)
+	_ = *backfill // dispatched above; the flag is declared so -h documents the mode
 	c, err := finishConfig(c, fs, args)
 	if err != nil {
 		return err
@@ -166,6 +176,15 @@ func runHarvest(ctx context.Context, args []string) error {
 	fandoms := filterMedia(cat.Fandoms, *media)
 	if len(fandoms) == 0 {
 		return fmt.Errorf("no fandoms in the catalogue match media %q", *media)
+	}
+
+	if *qaSample > 0 {
+		corpus, err := sql.Open("sqlite", "file:"+c.CorpusDB+"?_pragma=busy_timeout(30000)")
+		if err != nil {
+			return fmt.Errorf("open corpus: %w", err)
+		}
+		defer corpus.Close()
+		return qaSampleRows(ctx, fetcher, corpus, base, *qaSample)
 	}
 
 	if *enrich {
@@ -322,6 +341,77 @@ func enrichRows(ctx context.Context, f harvest.Fetcher, sink crawl.Sink, db *sql
 	}
 	fmt.Printf("enrich done in %s: %d enriched, %d failed, %d skipped\n",
 		time.Since(start).Round(time.Second), done, failed, already)
+	return nil
+}
+
+// qaSampleRows answers "did the harvest store what the page says" on a random sample of the rows a
+// blurb-only pass wrote, which is the population nothing else checks: the 112k rows from the
+// original crawl were parsed from work pages and cannot be wrong in this particular way.
+func qaSampleRows(ctx context.Context, f harvest.Fetcher, db *sql.DB, base string, n int) error {
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, title, authors, word_count, kudos, COALESCE(bookmarks,0), COALESCE(rating,''),
+		       complete, COALESCE(update_date,''), COALESCE(language,''), COALESCE(chapters,'')
+		FROM works
+		WHERE summary IS NULL OR summary = ''
+		ORDER BY RANDOM() LIMIT ?`, n)
+	if err != nil {
+		return err
+	}
+	var sample []harvest.StoredWork
+	for rows.Next() {
+		var w harvest.StoredWork
+		if err := rows.Scan(&w.ID, &w.Title, &w.Authors, &w.WordCount, &w.Kudos, &w.Bookmarks,
+			&w.Rating, &w.Complete, &w.UpdateDate, &w.Language, &w.Chapters); err != nil {
+			rows.Close()
+			return err
+		}
+		sample = append(sample, w)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(sample) == 0 {
+		fmt.Println("qa: no blurb-only rows to sample (run a -work-pages=false harvest first)")
+		return nil
+	}
+	fmt.Printf("qa: comparing %d work(s) against their pages ...\n", len(sample))
+	res, err := harvest.QA(ctx, f, base, sample)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("compared %d of %d (fetch failures %d, unparseable pages %d)\n",
+		res.Compared, res.Sampled, res.FetchFailed, res.ParseFailed)
+	if len(res.Mismatch) > 0 {
+		fmt.Println("field mismatches:")
+		names := make([]string, 0, len(res.Mismatch))
+		for k := range res.Mismatch {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, k := range names {
+			fmt.Printf("  %-14s %d\n", k, res.Mismatch[k])
+		}
+	}
+	if len(res.Drift) > 0 {
+		fmt.Println("counters that moved since the crawl (not defects):")
+		names := make([]string, 0, len(res.Drift))
+		for k := range res.Drift {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, k := range names {
+			fmt.Printf("  %-14s %d\n", k, res.Drift[k])
+		}
+	}
+	for _, ex := range res.Examples {
+		fmt.Printf("  - %s\n", ex)
+	}
+	if res.OK() {
+		fmt.Println("verdict: the stored rows agree with the pages")
+	} else {
+		fmt.Println("verdict: MISMATCHES — the blurb parser or the sink is losing a field")
+	}
 	return nil
 }
 

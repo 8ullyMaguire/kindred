@@ -1,0 +1,66 @@
+{{define "content"}}
+{{/* AO3's fandom index. The two halves are deliberate: the media strip is the
+     ARCHIVE's own structure (eleven media, 75k fandoms, read from the catalogue
+     the harvest wrote), and the table is the current media's fandoms with their
+     sizes. Nothing here is personalised -- /fandoms is where taste ranks them,
+     and borrowing that vocabulary would make an index read as a recommendation. */}}
+<p class="count">
+  {{if .Media}}
+    {{commas (int64 .TotalFandoms)}} fandoms in the archive catalogue;
+    {{len .Rows}} shown for this media.
+  {{else}}
+    {{commas (int64 .TotalFandoms)}} fandoms across {{len .MediaRows}} media.
+  {{end}}
+</p>
+
+{{if .MediaRows}}
+  <nav class="media-index" aria-label="Media">
+    {{range .MediaRows}}
+      <a href="/media/{{.Path}}/fandoms"{{if .Current}} aria-current="page"{{end}}>
+        {{.Name}} <span class="count">{{commas (int64 .Fandoms)}}</span>
+      </a>
+    {{end}}
+  </nav>
+{{end}}
+
+{{if .Rows}}
+  <table class="rows" data-testid="media-fandom-rows">
+    <thead>
+      <tr>
+        <th>Fandom</th><th>Works</th><th>Arena</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Rows}}
+        <tr>
+          {{/* A search link, not /tags/N: tag pages are keyed by numeric id and
+               resolving thousands of names to build one index buys the reader
+               nothing that a name search does not. */}}
+          <td><a href="{{.Search}}">{{.Name}}</a></td>
+          <td>{{commas (int64 .Works)}}</td>
+          <td><span class="bar" style="width:{{printf "%.1f" .Percent}}%"></span></td>
+        </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{if .Truncated}}
+    <p class="hint">
+      Showing the {{commas (int64 .Limit)}} largest of this media's fandoms. The
+      rest are in the catalogue the harvest wrote; this page caps its table so it
+      stays a page rather than a download.
+    </p>
+  {{end}}
+{{else}}
+  <p class="count" data-testid="empty" data-empty="true">
+    No fandom in this media was found in the catalogue. That means the catalogue
+    was read before this media existed, or the harvest has not written it &mdash;
+    not that the archive is empty.
+  </p>
+{{end}}
+
+<p class="hint">
+  Sizes are AO3's own counts from <code>/media/&lt;media&gt;/fandoms</code>, read
+  into <code>harvest-catalog.json</code>. A work counts once per fandom it is
+  tagged with, so these totals exceed the number of works in the mirror.
+</p>
+{{end}}

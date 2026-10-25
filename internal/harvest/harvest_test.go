@@ -313,3 +313,69 @@ func (f *sortFetcher) Fetch(_ context.Context, rawURL string) ([]byte, error) {
 	}
 	return nil, fmt.Errorf("no fixture for %s", rawURL)
 }
+
+// A fandom's quota must not be its ten most similar works. Without the MMR pass the three
+// near-identical chips are selected (they carry the same three tags and the highest kudos) and the
+// varied one is never reached -- a plan that says "1,130 fandoms" while every fandom contributes
+// one trope.
+func TestFillFandomPrefersVarietyOverTheThirdNearDuplicate(t *testing.T) {
+	ctx := context.Background()
+	fan := Fandom{Name: "F", Path: "F", Media: "Anime", Works: 5000}
+	page := listingWithTags([]blurbSpec{
+		{ID: 11, Kudos: 5000, Tags: []string{"angst", "hurt/comfort", "fluff"}},
+		{ID: 12, Kudos: 4900, Tags: []string{"angst", "hurt/comfort", "fluff"}},
+		{ID: 13, Kudos: 4800, Tags: []string{"angst", "hurt/comfort", "fluff"}},
+		{ID: 14, Kudos: 3000, Tags: []string{"time travel", "fix-it", "humour"}},
+	})
+	f := &sortFetcher{bySort: map[string]string{
+		"kudos_count": page, "revised_at": listingWithTags(nil),
+	}}
+	sink := &memSink{}
+	rep, err := Run(ctx, f, RunOptions{
+		Base:   "https://example.test",
+		Plan:   Plan{Target: 2, Floor: 2, Quota: map[string]int{"F": 2}, Total: 2},
+		ByName: map[string]Fandom{"F": fan}, Sink: sink, State: NewRunState(),
+		WorkPages: false, MaxPages: 1,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rep.Saved != 2 {
+		t.Fatalf("saved %d, want 2", rep.Saved)
+	}
+	got := map[int64]bool{}
+	for _, id := range sink.saved {
+		got[id] = true
+	}
+	if !got[11] || !got[14] {
+		t.Fatalf("saved %v, want {11, 14}: the second pick followed the near-duplicate instead of "+
+			"the varied work (diversification is not running)", sink.saved)
+	}
+	if got[12] || got[13] {
+		t.Fatalf("saved %v: both near-duplicates were taken", sink.saved)
+	}
+}
+
+// blurbSpec is one work in a synthetic listing.
+type blurbSpec struct {
+	ID    int
+	Kudos int
+	Tags  []string
+}
+
+func listingWithTags(specs []blurbSpec) string {
+	var b strings.Builder
+	b.WriteString(`<div id="main"><ol class="work index group">`)
+	for _, s := range specs {
+		fmt.Fprintf(&b, `<li id="work_%d" class="work blurb group"><h4 class="heading">`+
+			`<a href="/works/%d">W%d</a> by <a rel="author" href="/users/u">u</a></h4>`+
+			`<h5 class="fandoms heading"><a class="tag" href="/tags/F/works">F</a></h5>`+
+			`<ul class="tags commas">`, s.ID, s.ID, s.ID)
+		for _, tag := range s.Tags {
+			fmt.Fprintf(&b, `<li class='freeforms'><a class="tag" href="/tags/%s/works">%s</a></li>`, tag, tag)
+		}
+		fmt.Fprintf(&b, `</ul><dl class="stats"><dd class="words">1,000</dd><dd class="kudos">%d</dd></dl></li>`, s.Kudos)
+	}
+	b.WriteString(`</ol></div>`)
+	return b.String()
+}

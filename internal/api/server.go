@@ -30,6 +30,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
 	"git.polarisocial.xyz/kindred/kindred/internal/graph"
+	"git.polarisocial.xyz/kindred/kindred/internal/harvest"
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
 	"git.polarisocial.xyz/kindred/kindred/internal/tagfamily"
@@ -38,6 +39,10 @@ import (
 
 // Server holds the handler dependencies.
 type Server struct {
+	// Catalogue is AO3's fandom index, shared by the /media page. Nil means the deployment did
+	// not load it, and that page answers 503 with the reason rather than an empty index.
+	Catalogue *harvest.Catalogue
+
 	Engine  *engine.Engine
 	Store   *store.Store
 	Log     *slog.Logger
@@ -203,6 +208,14 @@ func (s *Server) Routes() http.Handler {
 	// this mux rather than with the pages because nothing here renders HTML, and
 	// guardAPI sends them here for the same reason.
 	mux.HandleFunc("GET /feed/tags/{id}", s.handleFeedTag)
+	// The page layer redirects /tag/{id} to /tags/{id}; the feeds did not, so a reader who had
+	// subscribed to the old URL got a 404 from an aggregator that never sees a page. A feed URL
+	// lives in someone else's software, where a 404 is silent for months.
+	mux.HandleFunc("GET /feed/tag/{id}", func(w http.ResponseWriter, r *http.Request) {
+		// The path value already carries the .xml suffix when there is one: the mux matches the
+		// whole segment, so "1.xml" arrives as the id. Appending it again produced /tags/1.xml.xml.
+		http.Redirect(w, r, "/feed/tags/"+r.PathValue("id"), http.StatusMovedPermanently)
+	})
 	mux.HandleFunc("GET /feed/seed/{kind}/{id}", s.handleFeedSeed)
 	mux.HandleFunc("GET /opensearch.xml", s.handleOpenSearch)
 
@@ -262,6 +275,7 @@ func (s *Server) Routes() http.Handler {
 		Lite:    s.Lite,
 		Log:     s.Log,
 
+		Catalogue:            s.Catalogue,
 		Standing:             s.Standing,
 		DefaultBlockedTagIDs: s.DefaultBlockedTagIDs,
 		OwnerCohort:          s.OwnerCohort,

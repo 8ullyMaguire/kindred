@@ -21,6 +21,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
 	"git.polarisocial.xyz/kindred/kindred/internal/crawl"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
+	"git.polarisocial.xyz/kindred/kindred/internal/harvest"
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
@@ -55,6 +56,11 @@ type Deps struct {
 	// error. Two handles, two jobs, stated here rather than discovered at the
 	// call site that breaks.
 	Profiles ProfileStore
+
+	// Catalogue is AO3's fandom index, read from the JSON the harvest writes. Optional: a
+	// deployment without it answers /media with a 503 that says so, rather than an empty index
+	// that reads as "the archive has no fandoms".
+	Catalogue *harvest.Catalogue
 
 	// Queue is the auto-crawler's backlog, for the /crawl page.
 	//

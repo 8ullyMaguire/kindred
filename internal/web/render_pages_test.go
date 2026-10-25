@@ -214,6 +214,36 @@ var pageRenderCases = []pageRenderCase{
 		wantNotContains: []string{"<tbody"},
 	},
 	{
+		tpl:  "media.html",
+		name: "media.html with a media's fandoms",
+		data: MediaPage{
+			Base:         sweepBase,
+			Media:        "Anime & Manga",
+			TotalFandoms: 1000,
+			Rows: []MediaFandom{
+				{Name: "Haikyuu!!", Works: 120000, Search: "/search?q=Haikyuu%21%21", Percent: 100},
+				{Name: "Naruto", Works: 60000, Search: "/search?q=Naruto", Percent: 50},
+			},
+			MediaRows: []MediaLink{{Name: "Anime & Manga", Path: "Anime%20*a*%20Manga", Fandoms: 5019, Works: 3669692, Current: true}},
+		},
+		wantContains: []string{"media-fandom-rows", "Haikyuu!!", "/media/Anime%20*a*%20Manga/fandoms", "120,000"},
+	},
+	{
+		tpl:  "media.html",
+		name: "media.html for a media with nothing in the catalogue",
+		data: MediaPage{
+			Base:         sweepBase,
+			Media:        "Theater",
+			TotalFandoms: 1000,
+			MediaRows:    []MediaLink{{Name: "Theater", Path: "Theater", Fandoms: 0}},
+		},
+		hasEmptyList: true,
+		// The page must say WHICH thing is empty: no rows here is a statement about the
+		// catalogue, not about the archive.
+		wantContains:    []string{"data-empty=\"true\"", "catalogue"},
+		wantNotContains: []string{"<tbody"},
+	},
+	{
 		tpl:          "rank.html",
 		name:         "rank.html for a work with no rating history",
 		data:         RankPage{Base: sweepBase, WorkID: 7, Title: "Unrated Work"},

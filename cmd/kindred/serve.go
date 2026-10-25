@@ -55,6 +55,8 @@ func runServe(ctx context.Context, args []string) error {
 	noCrawl := fs.Bool("no-crawl", false,
 		"disable the background auto-crawler (it fetches works readers request but the mirror lacks, "+
 			"and completes stored works missing metadata, at robots.txt's crawl delay)")
+	cataloguePath := fs.String("catalogue", "",
+		"AO3's fandom index (written by \"kindred harvest -catalog-fetch\"); enables /media")
 	c := bindConfig(fs)
 	c2, err := finishConfig(c, fs, args)
 	if err != nil {
@@ -264,6 +266,7 @@ func runServe(ctx context.Context, args []string) error {
 
 	srv := &api.Server{
 		Engine:               eng,
+		Catalogue:            loadCatalogueOrNil(logger, *cataloguePath),
 		Store:                s,
 		Log:                  logger,
 		Version:              c.Version,
