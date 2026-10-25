@@ -566,7 +566,12 @@ func split(fam Family, vecs []Vec, subK int, rng *rand.Rand, iters int) []Subfam
 		}
 		out[c].Members = append(out[c].Members, m)
 	}
-	// A subfamily needs at least two members to be a division of anything.
+	// A subfamily needs at least two members to be a division of anything. With the capacity
+	// constraint above this filter is UNREACHABLE -- the constraint keeps every bucket far above
+	// one member (measured: 11 tags into 2 gives 9 and 2, never 10 and 1) -- and the mutant that
+	// deletes it survives, which is the honest outcome for a guard on a path that does not
+	// occur. It stays because the constraint is a parameter: relax it and this is what stops a
+	// one-tag "division" from being written.
 	kept := out[:0]
 	for _, s := range out {
 		if len(s.Members) >= 2 {

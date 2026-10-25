@@ -67,6 +67,33 @@ Earlier versions of this report printed `0 of 0 universes` as if it were a resul
 
 Runtime: **20 s** for 14k tags including the second seed. Deterministic for a given `--seed`.
 
+## The mutation ledger, including the two that could not be killed
+
+Eight mutants, six killed, two survived — and the survivors are reported rather than papered over:
+
+| mutant | verdict |
+| --- | --- |
+| purity always 1.0 | killed |
+| adjusted Rand always 1.0 | killed |
+| label keeps water words | killed |
+| capacity check removed | killed (after moving the test to `assignBalanced`, where it lives) |
+| no centring in Build | killed (via the inertia ≤ 4n bound, not via a clustering claim) |
+| Build mutates its input | killed |
+| members not sorted by support | killed (after fixing a fixture whose support order already matched) |
+| subfamily `len >= 2` filter removed | **survived** — unreachable while the capacity constraint runs |
+
+Two test lessons from this pass:
+
+1. **A fixture cannot reproduce a property of 14k real vectors.** I tried three times to build a
+   synthetic family where unconstrained k-means collapses the way the live archive does
+   (2,711 of 3,560 in one bucket), and each attempt either split normally or produced the
+   OPPOSITE of the live result (centred 40% against uncentred 28%). The mechanism is tested
+   where it lives (`assignBalanced`, directly) and the phenomenon is reported as a measurement.
+   Fitting a fixture until the assertion passes would have been fitting the test to the answer.
+2. **A determinism test cannot see a sort.** Two builds with the same seed sort identically
+   whether or not the sort exists, so the ordering needed its own assertion — and the first
+   fixture's support order already matched the input order, making the sort a no-op.
+
 ## Not done
 
 No consumer. The obvious one is tag-gap (`internal/corpusquery/taggap.go`): its 30-neighbour
