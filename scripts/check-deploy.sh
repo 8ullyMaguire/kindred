@@ -700,6 +700,40 @@ check "search by a URL for a missing work says so" \
 # key is a secret), so inferring "no owner here" from the gate's env would
 # report drift on a correctly configured deployment -- the exact mistake this
 # gate exists to catch, inverted.
+# The tag hierarchy (#37).
+#
+# The tree is a BUILT ARTEFACT in the state database, not a route, so the gate reads the
+# database -- and asserts a SEMANTIC property rather than a row count: two Naruto tags that
+# nothing told the clustering about must share a family. A table with 1,574 rows and every tag
+# in family 0 would pass a count check and be worthless.
+echo
+echo "the tag hierarchy exists and groups a fandom"
+STATE_DB=${KINDRED_STATE_DB:-/var/lib/kindred/kindred.db}
+if [ -r "$STATE_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+  fams=$(sqlite3 -readonly "$STATE_DB" "SELECT COUNT(*) FROM tag_family;" 2>/dev/null || echo 0)
+  tags=$(sqlite3 -readonly "$STATE_DB" "SELECT COUNT(*) FROM tag_family_member;" 2>/dev/null || echo 0)
+  if [ "${fams:-0}" -ge 100 ] && [ "${tags:-0}" -ge 1000 ]; then
+    ok "the hierarchy has $fams families over $tags tags"
+  else
+    bad "the hierarchy is missing or empty (families=${fams:-0}, tags=${tags:-0}); run 'kindred tagtree --write'"
+  fi
+  # Two Naruto character tags, one query: they must share a family.
+  samen=$(sqlite3 -readonly "$STATE_DB" \
+    "ATTACH '$CORPUS_DB' AS c;
+     SELECT COUNT(DISTINCT COALESCE(f.parent, f.id))
+       FROM tag_family_member m
+       JOIN tag_family f ON f.id = m.family
+       JOIN c.tags t ON t.id = m.tag_id
+      WHERE t.name IN ('haruno sakura','hatake kakashi','uzumaki naruto');" 2>/dev/null || echo 99)
+  if [ "${samen:-99}" = "1" ]; then
+    ok "three Naruto character tags share one family"
+  else
+    bad "the Naruto character tags span ${samen:-?} families; the tree does not group a fandom"
+  fi
+else
+  unreachable=$((unreachable+1)); echo "  UNREACHABLE  the state database ($STATE_DB)"
+fi
+
 # The reader's own taste vector (#36).
 #
 # Both halves are session-scoped, and the thing that must never happen is an import landing on
