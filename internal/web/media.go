@@ -79,7 +79,23 @@ func (d Deps) renderMedia(w http.ResponseWriter, r *http.Request, arg string) {
 		return
 	}
 
-	mediaName, wantFandoms := splitMediaArg(arg)
+	mediaName, wantFandoms, bare := splitMediaArg(arg)
+	if bare && mediaName != "" {
+		// /media/Books is not a URL AO3 publishes (its own is /media/Books%20*a*%20Literature),
+		// so a bare media segment is a REDIRECT to the canonical path, not an index with a 200:
+		// answering 200 there would let every typo under /media look like a working page.
+		canon, ok := resolveMedia(cat, mediaName)
+		if !ok {
+			d.notFound(w, r)
+			return
+		}
+		path := canon
+		if cat.MediaPaths != nil && cat.MediaPaths[canon] != "" {
+			path = cat.MediaPaths[canon]
+		}
+		http.Redirect(w, r, "/media/"+strings.TrimPrefix(path, "/")+"/fandoms", http.StatusMovedPermanently)
+		return
+	}
 	page := MediaPage{
 		MediaRows:    mediaLinks(cat, mediaName),
 		TotalFandoms: len(cat.Fandoms),
@@ -88,6 +104,10 @@ func (d Deps) renderMedia(w http.ResponseWriter, r *http.Request, arg string) {
 		page.TotalWorks += f.Works
 	}
 
+	if !wantFandoms && arg != "" && !bare {
+		d.notFound(w, r)
+		return
+	}
 	if wantFandoms && mediaName != "" {
 		if canon, ok := resolveMedia(cat, mediaName); ok {
 			mediaName = canon
@@ -152,22 +172,34 @@ func displayMedia(name string) string {
 	return r.Replace(name)
 }
 
-// splitMediaArg reads the tail of the prefix pattern: "<media>/fandoms".
-func splitMediaArg(arg string) (string, bool) {
+// splitMediaArg reads the tail of the prefix pattern. Three shapes exist and each means something
+// different, so they are returned as such rather than collapsed into "a media name":
+//
+//	""              -> the index
+//	"<media>"       -> a bare media, which must redirect to its canonical /fandoms path
+//	"<media>/fandoms" -> the media's fandom list
+//
+// Anything else (a deeper path, a different last segment) is not one of these and is a 404.
+func splitMediaArg(arg string) (name string, wantFandoms, bare bool) {
 	arg = strings.Trim(arg, "/")
 	if arg == "" {
-		return "", false
+		return "", false, false
 	}
 	parts := strings.Split(arg, "/")
-	if len(parts) < 2 || parts[len(parts)-1] != "fandoms" {
-		return "", false
+	if len(parts) == 1 {
+		return unescapePath(parts[0]), false, true
 	}
-	name := strings.Join(parts[:len(parts)-1], "/")
-	decoded, err := url.PathUnescape(name)
-	if err != nil {
-		return name, true
+	if len(parts) != 2 || parts[1] != "fandoms" {
+		return "", false, false
 	}
-	return decoded, true
+	return unescapePath(parts[0]), true, false
+}
+
+func unescapePath(s string) string {
+	if decoded, err := url.PathUnescape(s); err == nil {
+		return decoded
+	}
+	return s
 }
 
 // resolveMedia matches a URL segment against the catalogue's media, by display name or by the
