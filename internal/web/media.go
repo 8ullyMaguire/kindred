@@ -136,10 +136,20 @@ func (d Deps) renderMedia(w http.ResponseWriter, r *http.Request, arg string) {
 
 	title := "Media"
 	if page.Media != "" {
-		title = page.Media
+		title = displayMedia(page.Media)
 	}
 	page.Base = d.baseOf(r, title, title)
 	d.page(w, "media.html", page, http.StatusOK)
+}
+
+// displayMedia turns AO3's URL spelling into the name a reader sees.
+//
+// The catalogue's media names come from the href, where AO3 encodes punctuation with its own
+// wildcards: *a* is "&", *s* is "/", *d* is ".". Rendering the segment verbatim puts
+// "Anime *a* Manga" at the top of the page, which reads as a bug rather than as a name.
+func displayMedia(name string) string {
+	r := strings.NewReplacer("*a*", "&", "*s*", "/", "*d*", ".")
+	return r.Replace(name)
 }
 
 // splitMediaArg reads the tail of the prefix pattern: "<media>/fandoms".
@@ -198,7 +208,7 @@ func mediaLinks(cat *harvest.Catalogue, current string) []MediaLink {
 			path = cat.MediaPaths[name]
 		}
 		out = append(out, MediaLink{
-			Name: name, Path: path, Fandoms: a.fandoms, Works: a.works,
+			Name: displayMedia(name), Path: path, Fandoms: a.fandoms, Works: a.works,
 			Current: strings.EqualFold(name, current),
 		})
 	}
