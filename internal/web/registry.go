@@ -127,6 +127,7 @@ var pageForms = []pageForm{
 	// what POST /api/v1/arena/compare records.
 	{Path: "/arena/judge", Handler: func(d Deps, w http.ResponseWriter, r *http.Request) { d.postJudge(w, r) }},
 	{Path: "/algo/judge", Handler: func(d Deps, w http.ResponseWriter, r *http.Request) { d.postAlgoJudge(w, r) }},
+	{Path: "/algo/explain", Handler: func(d Deps, w http.ResponseWriter, r *http.Request) { d.postAlgoExplain(w, r) }},
 	// Blocking is a one-button form the /block page renders.
 	{Path: "/block", Handler: func(d Deps, w http.ResponseWriter, r *http.Request) { d.postBlock(w, r) }},
 	// Marking a work read or unread, from the result list. Without it the

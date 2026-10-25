@@ -31,7 +31,7 @@ func (d Deps) renderAlgo(w http.ResponseWriter, r *http.Request) {
 		Judged: strings.TrimSpace(q.Get("judged")),
 		Mode:   strings.TrimSpace(q.Get("mode")),
 	}
-	if page.Mode != "interleave" {
+	if page.Mode != "interleave" && page.Mode != "explain" {
 		page.Mode = ""
 	}
 	if page.A == "" {
@@ -64,6 +64,13 @@ func (d Deps) renderAlgo(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		page.Err = err.Error()
 		d.page(w, "algo.html", page, http.StatusBadRequest)
+		return
+	}
+	if page.Mode == "explain" {
+		// #55: one work, two sentences. It needs no second algorithm -- the two explanations
+		// are facts about the work and the seed, not weight vectors -- so it is answered before
+		// the B-column checks.
+		d.renderAlgoExplain(w, r, page)
 		return
 	}
 	if page.B == "" {

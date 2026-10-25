@@ -166,6 +166,12 @@ type AlgoStore interface {
 	// would split one reader's votes across two owner keys and halve
 	// every standings count.
 	OwnerKey(ctx context.Context, sessionKey string) (string, error)
+	// RecordExplanationDuel and ExplanationStandings are #55's own table: which SENTENCE
+	// explains a recommendation, not which weight vector ranks better. They live on this
+	// interface because the page that asks is this one, and because *store.Store already
+	// satisfies it -- a second interface would be the same object under two names.
+	RecordExplanationDuel(ctx context.Context, ownerKey string, d store.ExplanationDuel) error
+	ExplanationStandings(ctx context.Context) ([]store.ExplanationStanding, error)
 }
 
 // CorpusQuerier is the corpus-analysis surface the pages need.

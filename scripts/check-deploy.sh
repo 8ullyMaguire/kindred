@@ -750,6 +750,20 @@ fi
 # The assertion is semantic, not a row count: a table with six rows where every month is 12 would
 # pass a count. "christmas" must be a December tag and "halloween" an October one -- if the date
 # parse or the lift arithmetic broke, those two swap or vanish.
+# The explanation duel (#55).
+#
+# The page must show BOTH sentences for every work it offers, or the honest note when nothing
+# qualifies. Asserting "200" alone would pass on a page whose columns are empty -- the two
+# data-kind markers are what the duel is made of.
+echo
+echo "one work, two explanations"
+check      "the explain view renders"               "$TARGET/algo?mode=explain&seed=ao3_work:17249318&n=6" 'Compare explanations'
+check      "and names the tag explanation"          "$TARGET/algo?mode=explain&seed=ao3_work:17249318&n=6" 'class="algo-column" data-kind="tags"'
+check      "and names the readers explanation"      "$TARGET/algo?mode=explain&seed=ao3_work:17249318&n=6" 'class="algo-column" data-kind="readers"'
+check      "and says what the sample was"           "$TARGET/algo?mode=explain&seed=ao3_work:17249318&n=6" 'can be explained both ways'
+check      "and the standings refuse a leader early" "$TARGET/algo?mode=explain&seed=ao3_work:17249318&n=6" 'no leader'
+check_absent "and no sentence rests on one reader"  "$TARGET/algo?mode=explain&seed=ao3_work:17249318&n=6" 'readers &middot; 1<'
+
 echo
 echo "the seasonal tag model is built"
 if command -v sqlite3 >/dev/null 2>&1 && [ -n "$(state_q 'SELECT 1;')" ]; then

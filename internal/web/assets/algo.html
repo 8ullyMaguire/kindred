@@ -42,6 +42,10 @@
        one merged list, where the reader's answer is what they read rather
        than what they say. Two forms would duplicate three fields and drift. */}}
   <button type="submit" name="mode" value="interleave">Interleave them</button>
+  {{/* A third question, about one work rather than a list (#55): of the two sentences this
+       deployment can back with a number, which explains why the work is here. Reached with
+       the same seed, hence a submit button in the same form. */}}
+  <button type="submit" name="mode" value="explain">Compare explanations</button>
   <p class="hint">
     Interleaving shows one list with both algorithms contributing. Marking a
     work read credits the algorithm that showed it, so the comparison costs no
@@ -140,6 +144,78 @@
       will appear here as a credit for the algorithm that showed it.
     </p>
   {{end}}
+{{else if eq .Mode "explain"}}
+  {{/* #55: one work, two sentences. Both are written from numbers -- tags shared with the
+       seed, readers who bookmarked both -- so the vote is between two kinds of evidence
+       rather than between two writing styles. */}}
+  {{if .ExplainNote}}
+    <p class="count" data-testid="explain-note">{{.ExplainNote}}</p>
+  {{end}}
+
+  {{if .ExplainStandings}}
+    <h3>Which sentence convinces</h3>
+    <table class="algo-standings" data-testid="explain-standings">
+      <thead>
+        <tr><th>explanation</th><th class="num">wins</th><th class="num">losses</th>
+            <th class="num">neither</th><th class="num">duels</th><th>evidence</th></tr>
+      </thead>
+      <tbody>
+        {{range .ExplainStandings}}
+          <tr data-kind="{{.Kind}}">
+            <td><code>{{.Kind}}</code></td>
+            <td class="num">{{.Wins}}</td>
+            <td class="num">{{.Losses}}</td>
+            <td class="num">{{.Ties}}</td>
+            <td class="num">{{.Judged}}</td>
+            <td>
+              {{if .Verdict.Leading}}<strong>leads</strong> (p = {{printf "%.4f" .P}})
+              {{else if .Verdict.Behind}}<strong>behind</strong> (p = {{printf "%.4f" .P}})
+              {{else}}<span class="muted">no leader — {{.Verdict.Reason}}</span>{{end}}
+            </td>
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
+  {{end}}
+
+  {{if .Duels}}
+    <p class="count" data-testid="explain-count">
+      {{len .Duels}} of {{.ExplainInspected}} ranked works can be explained both ways
+      ({{.ExplainSkipped}} have no shared tag, fewer than 2 shared readers, or both).
+    </p>
+    <ol class="duels">
+      {{range .Duels}}
+        <li data-testid="explain-duel" data-work="{{.WorkID}}">
+          <h3><a href="/work/{{.WorkID}}">{{.Title}}</a></h3>
+          <div class="algo-pair">
+            {{range .Sentence}}
+              <div class="algo-column" data-kind="{{.Kind}}">
+                <p class="hint">{{.Kind}} &middot; {{.Support}}</p>
+                <p>{{.Text}}</p>
+              </div>
+            {{end}}
+          </div>
+          <form method="post" action="/algo/explain">
+            <input type="hidden" name="seed" value="{{$.Seed}}">
+            <input type="hidden" name="algo_a" value="{{$.A}}">
+            <input type="hidden" name="work" value="{{.WorkID}}">
+            <p class="algo-actions">
+              <button type="submit" name="choice" value="tags">The tags explain it</button>
+              <button type="submit" name="choice" value="readers">The readers explain it</button>
+              <button type="submit" name="choice" value="neither">Neither</button>
+            </p>
+          </form>
+        </li>
+      {{end}}
+    </ol>
+    <p class="hint">
+      One vote per reader per work; changing your mind replaces your own row. Votes go to
+      their own table, because a preference between two sentences is not evidence about the
+      tags on any work.
+    </p>
+  {{end}}
+{{else if .Mode}}
+  <p class="count" data-empty="true">Unknown mode.</p>
 {{else if .Left}}
   {{/* What differs, stated before the lists. A reader is being asked to
        judge two rankings and is entitled to know which signals moved. */}}

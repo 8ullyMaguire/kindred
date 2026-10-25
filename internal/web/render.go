@@ -14,6 +14,7 @@ import (
 	"git.polarisocial.xyz/kindred/kindred/internal/corpus"
 	"git.polarisocial.xyz/kindred/kindred/internal/corpusquery"
 	"git.polarisocial.xyz/kindred/kindred/internal/engine"
+	"git.polarisocial.xyz/kindred/kindred/internal/explain"
 	"git.polarisocial.xyz/kindred/kindred/internal/profile"
 	"git.polarisocial.xyz/kindred/kindred/internal/rank"
 	"git.polarisocial.xyz/kindred/kindred/internal/store"
@@ -868,6 +869,20 @@ type AlgoPage struct {
 	// head-to-head differences.
 	Arms  []store.InterleaveArmStat
 	Pairs []store.InterleavePairStat
+
+	// Duels are the works with BOTH sentences (#55), each carrying the two explanations a
+	// reader is asked to choose between. Only duelable works appear: a sentence alone in a
+	// column is not a comparison.
+	Duels []explain.Duel
+	// ExplainInspected and ExplainSkipped say what the sample WAS: how many ranked works the
+	// page looked at, and how many could not be explained both ways. Without them an empty
+	// duel list reads as "nothing is related" rather than "nothing qualified".
+	ExplainInspected int
+	ExplainSkipped   int
+	// ExplainNote is the reason the duel list is empty, in the reader's words.
+	ExplainNote string
+	// ExplainStandings is the record for both kinds, with the power floor applied.
+	ExplainStandings []store.ExplanationStanding
 
 	// Err is a named failure (an unknown algorithm, a bad seed). Rendered
 	// in the page's own voice rather than as a 500, because every one of
