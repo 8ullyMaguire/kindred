@@ -31,6 +31,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/harvest"
 )
@@ -41,6 +42,10 @@ type Options struct {
 	Fandoms int
 	// PerFandom is how many works inside each fandom (200).
 	PerFandom int
+	// MinCatalogueWorks is the floor AO3's own catalogue must report for a fandom to be
+	// considered: a shelf asks for 200 works, so a fandom with 44 on the whole archive can never
+	// fill its page. Zero means PerFandom.
+	MinCatalogueWorks int
 	// MinFandomWorks is the floor of works a fandom needs IN THE MIRROR to be ranked at all: a
 	// fandom with one work in the mirror has no evidence, only an anecdote, and its score would
 	// be that single work's score with a confident-looking number beside it.
@@ -49,6 +54,9 @@ type Options struct {
 	TopWorks int
 	// Lambda blends relevance with diversity inside a fandom (0.75: measured on this corpus).
 	Lambda float64
+	// Logf, when set, reports each phase with its cost. A 100-fandom shelf touches every
+	// work_tag row twice; without per-phase timing "it is slow" is all anyone can say.
+	Logf func(format string, args ...any)
 	// PoolPerFandom is how many of a fandom's best-scoring works enter the diversity pass (400).
 	// Twice PerFandom is the practical minimum: MMR discards near-duplicates, so a pool exactly
 	// PerFandom long returns fewer than PerFandom picks.
@@ -73,6 +81,9 @@ func (o *Options) normalise() {
 	}
 	if o.PoolPerFandom <= 0 {
 		o.PoolPerFandom = o.PerFandom * 2
+	}
+	if o.MinCatalogueWorks <= 0 {
+		o.MinCatalogueWorks = o.PerFandom
 	}
 }
 
@@ -143,6 +154,13 @@ func Build(ctx context.Context, db *sql.DB, cat *harvest.Catalogue, reader []int
 		return nil, fmt.Errorf("shelf: no fandom catalogue")
 	}
 	res := &Result{Fandoms: []Fandom{}}
+	mark := time.Now()
+	phase := func(name string) {
+		if opt.Logf != nil {
+			opt.Logf("  %-14s %s", name, time.Since(mark).Round(100*time.Millisecond))
+		}
+		mark = time.Now()
+	}
 
 	bookmarks, err := readerWorks(ctx, db, reader)
 	if err != nil {
@@ -156,6 +174,7 @@ func Build(ctx context.Context, db *sql.DB, cat *harvest.Catalogue, reader []int
 	if err := buildTaste(ctx, db, bookmarks); err != nil {
 		return nil, err
 	}
+	phase("taste")
 	tags, err := tasteTags(ctx, db)
 	if err != nil {
 		return nil, err
@@ -165,17 +184,21 @@ func Build(ctx context.Context, db *sql.DB, cat *harvest.Catalogue, reader []int
 	if err := loadCatalogue(ctx, db, cat); err != nil {
 		return nil, err
 	}
+	phase("catalogue")
 	if err := scoreWorks(ctx, db); err != nil {
 		return nil, err
 	}
+	phase("work scores")
 	if err := linkFandoms(ctx, db, bookmarks); err != nil {
 		return nil, err
 	}
+	phase("fandom links")
 
 	fandoms, err := rankFandoms(ctx, db, opt)
 	if err != nil {
 		return nil, err
 	}
+	phase("rank fandoms")
 	if len(fandoms) == 0 {
 		res.Notes = append(res.Notes,
 			fmt.Sprintf("no fandom in the mirror holds %d works; lower -min-fandom-works", opt.MinFandomWorks))
@@ -190,8 +213,16 @@ func Build(ctx context.Context, db *sql.DB, cat *harvest.Catalogue, reader []int
 	if err != nil {
 		return nil, err
 	}
-	for _, d := range dropped {
-		res.Notes = append(res.Notes, d)
+	// A shelf that folds fifty spelling variants says so, but not fifty times in full: the count
+	// is the fact, the list is the evidence, and an unbounded notes array buries both.
+	const noteCap = 12
+	for i, d := range dropped {
+		if i < noteCap {
+			res.Notes = append(res.Notes, d)
+		}
+	}
+	if len(dropped) > noteCap {
+		res.Notes = append(res.Notes, fmt.Sprintf("... and %d more variant(s) dropped", len(dropped)-noteCap))
 	}
 	if len(fandoms) > opt.Fandoms {
 		fandoms = fandoms[:opt.Fandoms]
@@ -207,7 +238,11 @@ func Build(ctx context.Context, db *sql.DB, cat *harvest.Catalogue, reader []int
 			fandoms[i].ShortBy = opt.PerFandom - len(works)
 		}
 		res.TotalWorks += len(works)
+		if (i+1)%10 == 0 && opt.Logf != nil {
+			opt.Logf("  filled %d/%d fandoms (%d works)", i+1, len(fandoms), res.TotalWorks)
+		}
 	}
+	phase("fill fandoms")
 	res.Fandoms = fandoms
 	return res, nil
 }
@@ -346,8 +381,16 @@ func scoreWorks(ctx context.Context, db *sql.DB) error {
 		GROUP BY wt.work_id`); err != nil {
 		return fmt.Errorf("work scores: %w", err)
 	}
+	// BOTH indexes matter, and the second is the one that cost 3 minutes: without an index on
+	// work_id, every fandom query joined 19,796 fandom rows against a full scan of work_scores --
+	// 2.2 billion comparisons for one page of Harry Potter, and the same shape in the variant
+	// check and the explanations.
 	if _, err := db.ExecContext(ctx,
 		`CREATE INDEX temp.work_scores_s ON work_scores(s DESC, work_id)`); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx,
+		`CREATE INDEX temp.work_scores_w ON work_scores(work_id)`); err != nil {
 		return err
 	}
 	return nil
@@ -404,9 +447,9 @@ func rankFandoms(ctx context.Context, db *sql.DB, opt Options) ([]Fandom, error)
 		JOIN scored sc ON sc.fandom = s.fandom
 		JOIN cf c ON c.name = s.fandom
 		LEFT JOIN mine m ON m.fandom = s.fandom
-		WHERE s.n >= ?
+		WHERE s.n >= ? AND COALESCE(c.works, 0) >= ?
 		ORDER BY sc.score DESC, s.n DESC
-		LIMIT ?`, opt.TopWorks, opt.MinFandomWorks, opt.Fandoms*3)
+		LIMIT ?`, opt.TopWorks, opt.MinFandomWorks, opt.MinCatalogueWorks, opt.Fandoms*3)
 	if err != nil {
 		return nil, fmt.Errorf("rank fandoms: %w", err)
 	}
@@ -435,7 +478,11 @@ func dropVariants(ctx context.Context, db *sql.DB, fandoms []Fandom, opt Options
 	if len(fandoms) == 0 {
 		return fandoms, nil, nil
 	}
-	const sigCap = 300
+	// The full work set, not a sample: capping at 300 compared two fandoms by their
+	// top-scoring 300 works, and the two spellings of DxD kept 203 shared works spread
+	// differently through their rankings -- so the cap hid exactly the duplicate it exists to
+	// find. 5,000 bounds memory and still covers every fandom in this catalogue.
+	const sigCap = 5000
 	names := make([]string, len(fandoms))
 	for i, f := range fandoms {
 		names[i] = f.Name
@@ -478,7 +525,12 @@ func dropVariants(ctx context.Context, db *sql.DB, fandoms []Fandom, opt Options
 	for _, f := range fandoms {
 		dup := -1
 		for i, k := range kept {
-			if overlapRatio(sig[f.Name], sig[k.Name]) > 0.5 {
+			// Overlap alone called "elfen lied" a variant of "fate/stay night" and "space jam" a
+			// variant of "rwby": a small fandom whose works are all crossovers with a big one is a
+			// SUBSET of it, and containment is not identity. The size ratio is what separates the
+			// two shapes -- two spellings of one fandom are comparable in scale (DxD: 359 vs 735,
+			// 0.49), while a crossover-dependent fandom is an order of magnitude smaller.
+			if isVariant(f, k, sig[f.Name], sig[k.Name]) {
 				dup = i
 				break
 			}
@@ -508,6 +560,35 @@ func dropVariants(ctx context.Context, db *sql.DB, fandoms []Fandom, opt Options
 	return kept, notes, nil
 }
 
+// isVariant decides whether two fandoms are two spellings of one thing.
+//
+// Overlap alone called "elfen lied" a variant of "fate/stay night" and "space jam" a variant of
+// "rwby": a small fandom whose works are all crossovers with a big one is a SUBSET of it, and
+// containment is not identity. The size ratio is what separates the two shapes -- two spellings of
+// one fandom are comparable in scale (DxD: 359 vs 735, 0.49), while a crossover-dependent fandom
+// is an order of magnitude smaller.
+func isVariant(a, b Fandom, sigA, sigB map[int64]struct{}) bool {
+	return overlapRatio(sigA, sigB) > 0.5 && sizeRatio(a, b) >= 0.25
+}
+
+// sizeRatio is the smaller fandom's size over the larger's: how far apart two fandoms are in
+// scale, which is what tells a spelling variant from a crossover-dependent small fandom.
+//
+// A name test was tried first and does not work on this data: AO3's piped names ("ハイスクール dxd -
+// 石踏 一榮 | high school dxd - ishibumi ichiei") share almost no tokens with the English spelling
+// of the same fandom, and a token threshold that accepted that pair would also accept unrelated
+// ones. Sizes are language-independent.
+func sizeRatio(a, b Fandom) float64 {
+	hi, lo := a.MirrorWorks, b.MirrorWorks
+	if lo > hi {
+		hi, lo = lo, hi
+	}
+	if hi == 0 {
+		return 0
+	}
+	return float64(lo) / float64(hi)
+}
+
 // overlapRatio is |A and B| / min(|A|,|B|): half of the SMALLER set, because the question is
 // whether one fandom's works are contained in the other's, not whether they are the same size.
 func overlapRatio(a, b map[int64]struct{}) float64 {
@@ -529,6 +610,7 @@ func overlapRatio(a, b map[int64]struct{}) float64 {
 
 // fillFandom picks the works a reader would most likely read inside one fandom.
 func fillFandom(ctx context.Context, db *sql.DB, fandom string, opt Options) ([]Work, error) {
+	t0 := time.Now()
 	rows, err := db.QueryContext(ctx, `
 		SELECT w.id, w.title, w.authors, COALESCE(w.rating, ''), COALESCE(w.word_count, 0),
 		       COALESCE(w.kudos, 0), COALESCE(w.complete, 0), COALESCE(w.language, ''),
@@ -563,11 +645,19 @@ func fillFandom(ctx context.Context, db *sql.DB, fandom string, opt Options) ([]
 	if len(pool) == 0 {
 		return nil, nil
 	}
+	t1 := time.Now()
 	tagSets, err := workTags(ctx, db, pool)
 	if err != nil {
 		return nil, err
 	}
-	return mmr(pool, tagSets, opt.PerFandom, opt.Lambda), nil
+	t2 := time.Now()
+	out := mmr(pool, tagSets, opt.PerFandom, opt.Lambda)
+	if opt.Logf != nil {
+		opt.Logf("    %-40.40s pool %d: query %s, tags %s, mmr %s",
+			fandom, len(pool), t1.Sub(t0).Round(time.Millisecond),
+			t2.Sub(t1).Round(time.Millisecond), time.Since(t2).Round(time.Millisecond))
+	}
+	return out, nil
 }
 
 // workTags loads the tag names of the candidate works, for diversity and for display.
@@ -694,56 +784,119 @@ func jaccard(a, b []string) float64 {
 	return float64(inter) / float64(union)
 }
 
-// Why explains a fandom: the profile tags its works carry most above their archive rate.
+// Whys explains every chosen fandom in ONE pass.
+//
+// The first version answered per fandom, so a 100-fandom shelf ran 100 grouped joins over the
+// same 173k fandom-work rows and took over ten minutes at 99% CPU -- for a report section. The
+// cost was never the join, it was doing it 100 times.
 //
 // The rate is a LIFT, not a count: a tag on 40 works of a 2,000-work fandom is 2% of that fandom,
 // and if it is 0.2% of the archive it is ten times over-represented there. A count alone would
 // put the archive's own boilerplate ('m/m') at the top of every fandom's explanation.
-func Why(ctx context.Context, db *sql.DB, fandom string, limit int) ([]string, error) {
+func Whys(ctx context.Context, db *sql.DB, fandoms []string, limit int) (map[string][]string, error) {
 	if limit <= 0 {
 		limit = 3
 	}
-	var fandomWorks, corpusWorks int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT work_id) FROM fw WHERE fandom = ?`, fandom).
-		Scan(&fandomWorks); err != nil {
-		return nil, err
+	out := make(map[string][]string, len(fandoms))
+	if len(fandoms) == 0 {
+		return out, nil
 	}
+	sizes := make(map[string]int, len(fandoms))
+	{
+		args := make([]any, len(fandoms))
+		for i, f := range fandoms {
+			args[i] = f
+		}
+		rows, err := db.QueryContext(ctx,
+			`SELECT fandom, COUNT(DISTINCT work_id) FROM fw WHERE fandom IN (`+placeholders(len(fandoms))+`)
+			 GROUP BY fandom`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var f string
+			var n int
+			if err := rows.Scan(&f, &n); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			sizes[f] = n
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	var corpusWorks int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM works`).Scan(&corpusWorks); err != nil {
 		return nil, err
 	}
-	if fandomWorks == 0 || corpusWorks == 0 {
-		return nil, nil
+	if corpusWorks == 0 {
+		return out, nil
+	}
+
+	args := make([]any, len(fandoms))
+	for i, f := range fandoms {
+		args[i] = f
 	}
 	rows, err := db.QueryContext(ctx, `
-		SELECT t.name, COUNT(DISTINCT fw.work_id) AS here, MAX(df.df) AS df
-		FROM fw JOIN work_tags wt ON wt.work_id = fw.work_id
+		SELECT fw.fandom, t.name, COUNT(DISTINCT fw.work_id) AS here, MAX(df.df) AS df
+		FROM fw
+		JOIN work_tags wt ON wt.work_id = fw.work_id
 		JOIN tag_df df ON df.tag_id = wt.tag_id
 		JOIN tags t ON t.id = wt.tag_id
 		JOIN taste ta ON ta.tag_id = wt.tag_id
-		WHERE fw.fandom = ?
-		GROUP BY t.name
-		HAVING here >= 3
-		ORDER BY (here * 1.0 / MAX(df.df)) DESC
-		LIMIT ?`, fandom, limit)
+		WHERE fw.fandom IN (`+placeholders(len(fandoms))+`)
+		GROUP BY fw.fandom, t.name
+		HAVING here >= 3`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []string
+
+	type scored struct {
+		name string
+		lift float64
+	}
+	best := make(map[string][]scored, len(fandoms))
 	for rows.Next() {
-		var name string
+		var fandom, name string
 		var here, df int
-		if err := rows.Scan(&name, &here, &df); err != nil {
+		if err := rows.Scan(&fandom, &name, &here, &df); err != nil {
 			return nil, err
 		}
-		if df == 0 {
+		size := sizes[fandom]
+		if size == 0 || df == 0 {
 			continue
 		}
-		share := float64(here) / float64(fandomWorks)
-		archive := float64(df) / float64(corpusWorks)
-		out = append(out, fmt.Sprintf("%s (%.1fx the archive rate)", name, share/archive))
+		lift := (float64(here) / float64(size)) / (float64(df) / float64(corpusWorks))
+		list := append(best[fandom], scored{name, lift})
+		// Keep only the best few per fandom: a fandom with 400 overlapping tags must not grow a
+		// 400-element slice to select 3 of them.
+		if len(list) > limit*4 {
+			sort.Slice(list, func(i, j int) bool { return list[i].lift > list[j].lift })
+			list = list[:limit]
+		}
+		best[fandom] = list
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for fandom, list := range best {
+		sort.Slice(list, func(i, j int) bool {
+			if list[i].lift != list[j].lift {
+				return list[i].lift > list[j].lift
+			}
+			return list[i].name < list[j].name
+		})
+		if len(list) > limit {
+			list = list[:limit]
+		}
+		for _, s := range list {
+			out[fandom] = append(out[fandom], fmt.Sprintf("%s (%.1fx the archive rate)", s.name, s.lift))
+		}
+	}
+	return out, nil
 }
 
 // AuthorsFrom aggregates the shelf's authors, weighted by how many works they have on it and how

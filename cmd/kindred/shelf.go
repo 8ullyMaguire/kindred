@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/harvest"
 	"git.polarisocial.xyz/kindred/kindred/internal/shelf"
@@ -45,6 +46,7 @@ func runShelf(ctx context.Context, args []string) error {
 		dir       = fs.String("dir", "shelf", "directory for the markdown pages")
 		catOut    = fs.String("catalog-out", "", "write a catalogue of the chosen fandoms (for the harvest to fill shortfalls)")
 		authorTop = fs.Int("authors", 50, "how many authors the index lists")
+		trace     = fs.Bool("trace", false, "print the cost of each phase")
 	)
 	if _, err := finishConfig(c, fs, args); err != nil {
 		return err
@@ -66,18 +68,31 @@ func runShelf(ctx context.Context, args []string) error {
 
 	res, err := shelf.Build(ctx, db, cat, ids, shelf.Options{
 		Fandoms: *fandoms, PerFandom: *per, MinFandomWorks: *minWorks,
+		Logf: func(format string, a ...any) {
+			if *trace {
+				fmt.Printf(format+"\n", a...)
+			}
+		},
 	})
 	if err != nil {
 		return err
 	}
 	res.Reader = name
 
+	whyMark := time.Now()
+	names := make([]string, len(res.Fandoms))
+	for i, f := range res.Fandoms {
+		names[i] = f.Name
+	}
+	whys, err := shelf.Whys(ctx, db, names, 3)
+	if err != nil {
+		return fmt.Errorf("why: %w", err)
+	}
 	for i := range res.Fandoms {
-		why, err := shelf.Why(ctx, db, res.Fandoms[i].Name, 3)
-		if err != nil {
-			return fmt.Errorf("why %s: %w", res.Fandoms[i].Name, err)
-		}
-		res.Fandoms[i].Why = why
+		res.Fandoms[i].Why = whys[res.Fandoms[i].Name]
+	}
+	if *trace {
+		fmt.Printf("  %-14s %s\n", "why", time.Since(whyMark).Round(100*time.Millisecond))
 	}
 
 	if err := writeShelf(*out, res); err != nil {

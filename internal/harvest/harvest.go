@@ -202,6 +202,44 @@ type Plan struct {
 // Within those, the remainder is split by sqrt(size) rather than size: sqrt keeps the giants
 // ahead without letting a 400k-work fandom take a third of the budget, which is exactly the
 // failure this whole package exists to avoid.
+// QuotaPlan takes each fandom's Works field as the number of works to fetch, exactly.
+//
+// The allocation in Allocate answers "spread this target over a catalogue of AO3 sizes". A shelf
+// asks the other question: "these 28 fandoms need 21..137 more works each -- fetch those". Running
+// the sizes through the sqrt split answers the first question, which under-serves every fandom
+// that needs many works and over-serves every one that needs few.
+func QuotaPlan(fs []Fandom, cap int) Plan {
+	p := Plan{Quota: map[string]int{}}
+	merged := make(map[string]Fandom, len(fs))
+	for _, f := range fs {
+		if prev, ok := merged[f.Name]; ok {
+			if f.Works > prev.Works {
+				prev.Works = f.Works
+				merged[f.Name] = prev
+			}
+			continue
+		}
+		merged[f.Name] = f
+	}
+	for _, f := range merged {
+		q := f.Works
+		if q <= 0 {
+			p.Skipped++
+			continue
+		}
+		if cap > 0 && q > cap {
+			q = cap
+		}
+		p.Quota[f.Name] = q
+		p.Target += q
+		p.Total += q
+		p.Coverage.FandomsPlanned++
+		p.Coverage.WorksInCatalogue += f.Works
+	}
+	p.Coverage.FandomsInCatalogue = len(merged)
+	return p
+}
+
 func Allocate(fs []Fandom, target, floor, cap, breadth int) Plan {
 	p := Plan{Target: target, Floor: floor, Cap: cap, Quota: map[string]int{}}
 	// AO3 lists a fandom under every media it belongs to: "James Cameron's Avatar - All Media

@@ -137,8 +137,10 @@ func runHarvest(ctx context.Context, args []string) error {
 		quiet       = fs.Bool("quiet", false, "log only per-fandom summaries")
 		enrich      = fs.Bool("enrich", false, "fetch work pages for rows that have no summary (a blurb-only pass leaves these)")
 		qaSample    = fs.Int("qa", 0, "compare N stored works against their pages and report field agreement")
+		quotaMode   = fs.Bool("quota", false, "treat the catalogue's works counts as exact per-fandom quotas")
 		backfill    = fs.Bool("backfill-types", false, "retype the mirror's flattened tag categories (dispatched before parsing)")
 		enrichMax   = fs.Int("enrich-max", 0, "stop after N enrichments (0 = no limit)")
+		enrichIDs   = fs.String("enrich-ids", "", "shelf JSON: enrich only the works on that shelf")
 		pauseAfter  = fs.Int("pause-after", 8, "consecutive fetch failures before a pause (0 = never)")
 		pauseFor    = fs.Duration("pause", 5*time.Minute, "how long to pause once -pause-after is reached")
 		abortAfter  = fs.Int("abort-after", 10, "stop after N fandoms in a row produce nothing (0 = never)")
@@ -207,10 +209,27 @@ func runHarvest(ctx context.Context, args []string) error {
 			return fmt.Errorf("open corpus: %w", err)
 		}
 		defer corpus.Close()
-		return enrichRows(ctx, fetcher, crawl.NewSQLSink(corpus), corpus, base, *enrichMax)
+		var only []int64
+		if *enrichIDs != "" {
+			only, err = shelfWorkIDs(*enrichIDs)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("enrich: %d work(s) listed in %s\n", len(only), *enrichIDs)
+		}
+		return enrichRows(ctx, fetcher, crawl.NewSQLSink(corpus), corpus, base, *enrichMax, only)
 	}
 
-	plan := harvest.Allocate(fandoms, *target, *floor, *capPer, *breadth)
+	var plan harvest.Plan
+	if *quotaMode {
+		// The catalogue IS the quota: each fandom's Works field carries exactly how many works
+		// this run should add. Allocate would reshape those numbers by sqrt(size), which is
+		// right when allocating one target across a catalogue of AO3 sizes and wrong when the
+		// numbers are already the answer (a shelf filling its shortfall).
+		plan = harvest.QuotaPlan(fandoms, *capPer)
+	} else {
+		plan = harvest.Allocate(fandoms, *target, *floor, *capPer, *breadth)
+	}
 	printPlan(plan, cat, *media)
 
 	if *planOnly || !*run {
@@ -288,15 +307,66 @@ func runHarvest(ctx context.Context, args []string) error {
 	return runErr
 }
 
+// enrichQuery selects the rows to enrich: the whole mirror, or just the ids a shelf names.
+func enrichQuery(only []int64) string {
+	base := `SELECT id FROM works WHERE (summary IS NULL OR summary = '')`
+	if len(only) == 0 {
+		return base + ` ORDER BY id`
+	}
+	parts := make([]string, len(only))
+	for i, id := range only {
+		parts[i] = fmt.Sprintf("%d", id)
+	}
+	return base + ` AND id IN (` + strings.Join(parts, ",") + `) ORDER BY id`
+}
+
+// shelfWorkIDs reads the ids out of a shelf JSON.
+func shelfWorkIDs(path string) ([]int64, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("shelf %s: %w", path, err)
+	}
+	var sh struct {
+		Fandoms []struct {
+			Works []struct {
+				ID int64 `json:"id"`
+			} `json:"works"`
+		} `json:"fandoms"`
+	}
+	if err := json.Unmarshal(body, &sh); err != nil {
+		return nil, fmt.Errorf("shelf %s: %w", path, err)
+	}
+	seen := make(map[int64]struct{}, 4096)
+	var ids []int64
+	for _, f := range sh.Fandoms {
+		for _, w := range f.Works {
+			if w.ID == 0 {
+				continue
+			}
+			if _, dup := seen[w.ID]; dup {
+				continue
+			}
+			seen[w.ID] = struct{}{}
+			ids = append(ids, w.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("shelf %s lists no works", path)
+	}
+	return ids, nil
+}
+
 // enrichRows fills in what a blurb cannot carry: summary, language, chapter count.
 //
 // The breadth pass stores twenty works per request, which is what makes covering 1,100 fandoms
 // affordable; the price is that a blurb has no summary. Those rows are completed here, one work
 // page at a time, and the query IS the resume state: a row that has its summary is not selected,
 // so an interrupted run continues from wherever it stopped without a bookkeeping file to trust.
-func enrichRows(ctx context.Context, f harvest.Fetcher, sink crawl.Sink, db *sql.DB, base string, limit int) error {
-	const q = `SELECT id FROM works WHERE (summary IS NULL OR summary = '') ORDER BY id`
-	rows, err := db.QueryContext(ctx, q)
+func enrichRows(ctx context.Context, f harvest.Fetcher, sink crawl.Sink, db *sql.DB, base string, limit int, only []int64) error {
+	// A shelf asks for 20,000 works, and the mirror holds 113k rows without a summary. Enriching
+	// the mirror to serve one shelf is ten times the work for none of the benefit, so the query
+	// is narrowed to the shelf's own ids when one is given.
+	rows, err := db.QueryContext(ctx, enrichQuery(only))
 	if err != nil {
 		return err
 	}

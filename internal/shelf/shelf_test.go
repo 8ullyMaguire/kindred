@@ -271,6 +271,39 @@ func TestNearDuplicateWorksAreExcluded(t *testing.T) {
 	}
 }
 
+// TestIsVariantDistinguishesASpellingFromACrossover pins the two shapes the rule exists to tell
+// apart. It is a table rather than a corpus test because the interesting cases are arithmetic.
+func TestIsVariantDistinguishesASpellingFromACrossover(t *testing.T) {
+	set := func(ids ...int64) map[int64]struct{} {
+		m := map[int64]struct{}{}
+		for _, id := range ids {
+			m[id] = struct{}{}
+		}
+		return m
+	}
+	cases := []struct {
+		name     string
+		a, b     Fandom
+		sa, sb   map[int64]struct{}
+		isVarian bool
+	}{
+		// Two spellings of one fandom: comparable sizes, half the works shared.
+		{"dxd spelling", Fandom{Name: "a", MirrorWorks: 735}, Fandom{Name: "b", MirrorWorks: 359},
+			set(1, 2, 3, 4, 5, 6), set(1, 2, 3, 7), true},
+		// A small crossover-dependent fandom: fully contained, an order of magnitude smaller.
+		{"elfen lied is not fate", Fandom{Name: "a", MirrorWorks: 800}, Fandom{Name: "b", MirrorWorks: 30},
+			set(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), set(1, 2, 3), false},
+		// Unrelated: no shared works at all.
+		{"unrelated", Fandom{Name: "a", MirrorWorks: 500}, Fandom{Name: "b", MirrorWorks: 400},
+			set(1, 2, 3), set(4, 5, 6), false},
+	}
+	for _, c := range cases {
+		if got := isVariant(c.a, c.b, c.sa, c.sb); got != c.isVarian {
+			t.Errorf("%s: isVariant = %v, want %v", c.name, got, c.isVarian)
+		}
+	}
+}
+
 func contains(hay, needle string) bool {
 	return len(hay) >= len(needle) && (func() bool {
 		for i := 0; i+len(needle) <= len(hay); i++ {
