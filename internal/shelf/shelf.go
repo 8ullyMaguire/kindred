@@ -110,18 +110,20 @@ type Fandom struct {
 
 // Work is one fic on the shelf.
 type Work struct {
-	ID       int64    `json:"id"`
-	Title    string   `json:"title"`
-	Authors  string   `json:"authors"`
-	Rating   string   `json:"rating"`
-	Words    int      `json:"words"`
-	Kudos    int      `json:"kudos"`
-	Complete bool     `json:"complete"`
-	Language string   `json:"language,omitempty"`
-	Summary  string   `json:"summary,omitempty"`
-	URL      string   `json:"url"`
-	Score    float64  `json:"score"`
-	Tags     []string `json:"tags,omitempty"`
+	ID       int64   `json:"id"`
+	Title    string  `json:"title"`
+	Authors  string  `json:"authors"`
+	Rating   string  `json:"rating"`
+	Words    int     `json:"words"`
+	Kudos    int     `json:"kudos"`
+	Complete bool    `json:"complete"`
+	Language string  `json:"language,omitempty"`
+	Summary  string  `json:"summary,omitempty"`
+	URL      string  `json:"url"`
+	Score    float64 `json:"score"`
+	// Tags are NOT serialised: they are what the diversity pass needs, and in the JSON they
+	// tripled the file (33 MB for 17k works) without adding a field any reader of it uses.
+	Tags []string `json:"-"`
 }
 
 // Result is the whole shelf.

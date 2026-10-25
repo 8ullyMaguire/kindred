@@ -178,6 +178,16 @@ func writeShelfPages(dir string, res *shelf.Result, authorTop int) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	// Clear the previous generation: a rebuild after a harvest changes the ranking, so the old
+	// 001-... and 002-... pages stay behind as files nothing links to. A directory of 272 pages
+	// for a 100-fandom shelf is a directory whose index is the only thing telling the truth.
+	if stale, err := filepath.Glob(filepath.Join(dir, "*.md")); err == nil {
+		for _, f := range stale {
+			if err := os.Remove(f); err != nil {
+				return err
+			}
+		}
+	}
 	for i, f := range res.Fandoms {
 		name := fmt.Sprintf("%03d-%s.md", i+1, slug(f.Name))
 		if err := os.WriteFile(filepath.Join(dir, name), fandomPage(i+1, f), 0o644); err != nil {
