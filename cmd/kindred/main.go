@@ -27,6 +27,9 @@ commands:
   ingest    measure the corpus and build the index
   recommend recommend entities from seeds
   crawl     fetch AO3 work pages into the mirror (the only networked subcommand)
+  shelf     a reader's 100 fandoms and 200 works each, from their bookmarks
+  harvest   fill the mirror from AO3's catalogue of fandoms (breadth, enrich, backfill-types)
+  bookmarks read a reader's public AO3 bookmarks into the mirror and their taste map
   profile   build, list, show and rate taste profiles
   rate      fold one like/dislike into a profile (alias for 'profile rate')
   corpus-query  ask a question about the corpus (fandom-ranking, underrated, tag-neighbours,
@@ -95,6 +98,8 @@ func main() {
 		err = runCorpusQuery(ctx, config.Load().CorpusDB, args)
 	case "browse":
 		err = runBrowse(ctx, config.Load().CorpusDB, args)
+	case "shelf":
+		err = runShelf(ctx, args)
 	case "bookmarks":
 		err = runBookmarks(ctx, args)
 	case "harvest":
