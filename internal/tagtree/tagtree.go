@@ -28,8 +28,11 @@ import (
 
 // Vec is one tag's embedding.
 type Vec struct {
-	TagID int64
-	V     []float32
+	// ID is a TAG id when clustering tags and a WORK id when clustering works: the geometry is
+	// identical and the caller knows which space it asked for. Support means works-per-tag in
+	// the first case and kudos in the second, and both are only used to order a truncation.
+	ID int64
+	V  []float32
 	// Support is how many works carry the tag. Clustering every tag would put 600k mostly
 	// unused spellings in the way of the ones readers actually see; support is the filter.
 	Support int
@@ -79,7 +82,7 @@ type Subfamily struct {
 
 // Member is one tag in the tree.
 type Member struct {
-	TagID   int64
+	ID      int64
 	Name    string
 	Support int
 	// Dist is the cosine distance to the member's subfamily centroid (or family, when the
@@ -186,7 +189,7 @@ func Load(ctx context.Context, state, corpus *sql.DB, o Options) ([]Vec, error) 
 			bits := uint32(blob[i*4]) | uint32(blob[i*4+1])<<8 | uint32(blob[i*4+2])<<16 | uint32(blob[i*4+3])<<24
 			v[i] = math.Float32frombits(bits)
 		}
-		out = append(out, Vec{TagID: id, V: v, Support: n})
+		out = append(out, Vec{ID: id, V: v, Support: n})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("tagtree: embeddings: %w", err)
@@ -197,7 +200,7 @@ func Load(ctx context.Context, state, corpus *sql.DB, o Options) ([]Vec, error) 
 		if out[a].Support != out[b].Support {
 			return out[a].Support > out[b].Support
 		}
-		return out[a].TagID < out[b].TagID
+		return out[a].ID < out[b].ID
 	})
 	if o.MaxTags > 0 && len(out) > o.MaxTags {
 		out = out[:o.MaxTags]
@@ -230,7 +233,7 @@ func partition(t *Tree) map[int64]int {
 	out := make(map[int64]int, t.Tags)
 	for _, f := range t.Families {
 		for _, m := range f.Members {
-			out[m.TagID] = f.ID
+			out[m.ID] = f.ID
 		}
 	}
 	return out
@@ -309,7 +312,7 @@ func Build(vecs []Vec, o Options) (*Tree, error) {
 		// re-normalising unit vectors perturbs ties.
 		cp := make([]Vec, len(vecs))
 		for i, v := range vecs {
-			cp[i] = Vec{TagID: v.TagID, Support: v.Support, V: append([]float32(nil), v.V...)}
+			cp[i] = Vec{ID: v.ID, Support: v.Support, V: append([]float32(nil), v.V...)}
 		}
 		vecs = cp
 		centerNormalize(vecs, dim)
@@ -369,7 +372,7 @@ func Build(vecs []Vec, o Options) (*Tree, error) {
 		fam := Family{ID: c, Centroid: centroids[c]}
 		for _, i := range buckets[c] {
 			fam.Members = append(fam.Members, Member{
-				TagID:   vecs[i].TagID,
+				ID:      vecs[i].ID,
 				Support: vecs[i].Support,
 				Dist:    math.Sqrt(sqDist(vecs[i].V, centroids[c])),
 			})
@@ -523,11 +526,11 @@ func coherence(vecs []Vec, assign []int, centroids [][]float32, k int) (own, ran
 func split(fam Family, vecs []Vec, subK int, rng *rand.Rand, iters int) []Subfamily {
 	idx := map[int64][]float32{}
 	for _, v := range vecs {
-		idx[v.TagID] = v.V
+		idx[v.ID] = v.V
 	}
 	var sub []Vec
 	for _, m := range fam.Members {
-		sub = append(sub, Vec{TagID: m.TagID, V: idx[m.TagID], Support: m.Support})
+		sub = append(sub, Vec{ID: m.ID, V: idx[m.ID], Support: m.Support})
 	}
 	k := subK
 	if k > len(sub) {
@@ -560,7 +563,7 @@ func split(fam Family, vecs []Vec, subK int, rng *rand.Rand, iters int) []Subfam
 	}
 	for i, c := range assign {
 		m := Member{
-			TagID:   sub[i].TagID,
+			ID:      sub[i].ID,
 			Support: sub[i].Support,
 			Dist:    math.Sqrt(sqDist(sub[i].V, centroids[c])),
 		}
@@ -587,7 +590,7 @@ func sortMembers(ms []Member) {
 		if ms[a].Support != ms[b].Support {
 			return ms[a].Support > ms[b].Support
 		}
-		return ms[a].TagID < ms[b].TagID
+		return ms[a].ID < ms[b].ID
 	})
 }
 
@@ -712,7 +715,7 @@ func Labels(t *Tree, names map[int64]string) {
 	for _, f := range t.Families {
 		seen := map[string]bool{}
 		for _, m := range f.Members {
-			for _, w := range words(names[m.TagID]) {
+			for _, w := range words(names[m.ID]) {
 				seen[w] = true
 			}
 		}
@@ -745,7 +748,7 @@ func memberNames(members []Member, names map[int64]string, want int) string {
 		if len(out) == want {
 			break
 		}
-		n := names[m.TagID]
+		n := names[m.ID]
 		if len(n) > 40 {
 			n = n[:40] + "…"
 		}
@@ -757,7 +760,7 @@ func memberNames(members []Member, names map[int64]string, want int) string {
 func labelWords(members []Member, names map[int64]string, familiesWith map[string]int, totalFamilies, want int) string {
 	counts := map[string]int{}
 	for _, m := range members {
-		for _, w := range words(names[m.TagID]) {
+		for _, w := range words(names[m.ID]) {
 			counts[w]++
 		}
 	}
@@ -834,7 +837,7 @@ func Purity(t *Tree, universe []int64) (share float64, cluster int, mixed int) {
 	total := 0
 	for _, f := range t.Families {
 		for _, m := range f.Members {
-			if in[m.TagID] {
+			if in[m.ID] {
 				per[f.ID]++
 				total++
 			}

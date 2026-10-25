@@ -1,0 +1,24 @@
+{{define "content"}}
+<h1>{{.Label}}</h1>
+<p class="count">
+  {{commas (int64 .Size)}} works in this theme,
+  {{if .Truncated}}showing {{commas (int64 .Shown)}}{{else}}all of them{{end}}.
+</p>
+
+{{if .Works}}
+  <ul class="rows" data-testid="theme-works">
+    {{range .Works}}
+      <li><a href="/work/{{.ID}}">{{if .Title}}{{.Title}}{{else}}work {{.ID}}{{end}}</a></li>
+    {{end}}
+  </ul>
+  {{if .Truncated}}
+    <p class="hint"><a href="/themes/{{.ID}}?n=300">Show more</a></p>
+  {{end}}
+{{else}}
+  <p class="count" data-testid="empty" data-empty="true">
+    This theme holds no works.
+  </p>
+{{end}}
+
+<p class="hint"><a href="/themes">All themes</a></p>
+{{end}}

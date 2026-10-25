@@ -55,6 +55,8 @@ var routeTable = map[string]routeAudit{
 	// so they can see and move it, and the page that will render it is the arena's own
 	// "what I have learned" panel. Recorded here rather than given a route that would be a page
 	// with nothing on it.
+	"GET /api/v1/themes":      {Page: "/themes"},
+	"GET /api/v1/themes/{id}": {Page: "/themes/{id}"},
 	"GET /api/v1/taste": {Why: "the reader's own vector for export and for the arena panel; " +
 		"no standalone page, and inventing one would be a page about a table"},
 	"PUT /api/v1/taste": {Why: "an import surface: a caller posts a vector, and no page posts " +

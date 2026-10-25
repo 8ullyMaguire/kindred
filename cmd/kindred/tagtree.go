@@ -112,7 +112,7 @@ func runTagTree(ctx context.Context, args []string) error {
 			if i == 5 {
 				break
 			}
-			top = append(top, names[m.TagID])
+			top = append(top, names[m.ID])
 		}
 		fams = append(fams, famOut{ID: f.ID, Label: f.Label, Size: len(f.Members),
 			Subs: len(f.Subfamilies), TopTags: top})
@@ -222,7 +222,7 @@ func purityReport(ctx context.Context, corpus *sql.DB, tree *tagtree.Tree, names
 	inTree := map[int64]bool{}
 	for _, f := range tree.Families {
 		for _, m := range f.Members {
-			inTree[m.TagID] = true
+			inTree[m.ID] = true
 		}
 	}
 	var out []universePurity
@@ -281,7 +281,7 @@ func tagNames(ctx context.Context, corpus *sql.DB, tree *tagtree.Tree) (map[int6
 	var ids []int64
 	for _, f := range tree.Families {
 		for _, m := range f.Members {
-			ids = append(ids, m.TagID)
+			ids = append(ids, m.ID)
 		}
 	}
 	const chunk = 500
@@ -371,18 +371,18 @@ func writeTree(ctx context.Context, state *sql.DB, tree *tagtree.Tree) error {
 				return fmt.Errorf("tag tree write: %w", err)
 			}
 			for _, m := range s.Members {
-				subOf[m.TagID] = sid
+				subOf[m.ID] = sid
 			}
 		}
 		for _, m := range f.Members {
 			famID := f.ID
-			if sid, ok := subOf[m.TagID]; ok {
+			if sid, ok := subOf[m.ID]; ok {
 				famID = sid
 			}
 			if _, err := tx.ExecContext(ctx,
 				`INSERT INTO tag_family_member (tag_id, family, dist) VALUES (?, ?, ?)
 				 ON CONFLICT(tag_id) DO UPDATE SET family = excluded.family, dist = excluded.dist`,
-				m.TagID, famID, m.Dist); err != nil {
+				m.ID, famID, m.Dist); err != nil {
 				return fmt.Errorf("tag tree write: %w", err)
 			}
 		}

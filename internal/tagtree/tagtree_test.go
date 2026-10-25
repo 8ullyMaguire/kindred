@@ -35,7 +35,7 @@ func planted(nGroups, perGroup, dim int, jitter float64, seed int64) []Vec {
 			for d := range v {
 				v[d] = centres[g][d] + float32(rng.NormFloat64()*jitter)
 			}
-			out = append(out, Vec{TagID: id, V: v, Support: 100 - i})
+			out = append(out, Vec{ID: id, V: v, Support: 100 - i})
 			id++
 		}
 	}
@@ -78,7 +78,7 @@ func TestPuritySeesAPlantAndASplit(t *testing.T) {
 	// The first ten tags are one planted group.
 	var groupA []int64
 	for _, v := range tight[:10] {
-		groupA = append(groupA, v.TagID)
+		groupA = append(groupA, v.ID)
 	}
 	share, _, mixed := Purity(tree, groupA)
 	if share != 1.0 || mixed != 0 {
@@ -87,8 +87,8 @@ func TestPuritySeesAPlantAndASplit(t *testing.T) {
 
 	// Now a "family" that is HALF of one planted group and HALF of another: its modal cluster
 	// can hold at most six, so the purity must be 0.6 and five must be counted as mixed.
-	mixed50 := []int64{tight[0].TagID, tight[1].TagID, tight[2].TagID, tight[3].TagID, tight[4].TagID,
-		tight[10].TagID, tight[11].TagID, tight[12].TagID, tight[13].TagID, tight[14].TagID}
+	mixed50 := []int64{tight[0].ID, tight[1].ID, tight[2].ID, tight[3].ID, tight[4].ID,
+		tight[10].ID, tight[11].ID, tight[12].ID, tight[13].ID, tight[14].ID}
 	share, _, mixed = Purity(tree, mixed50)
 	if share > 0.6 {
 		t.Fatalf("a half-and-half set scored purity %.2f, which a split cannot produce", share)
@@ -117,9 +117,9 @@ func TestBuildIsDeterministic(t *testing.T) {
 			t.Fatalf("family %d differs between builds: %d vs %d members", i, len(fa.Members), len(fb.Members))
 		}
 		for j := range fa.Members {
-			if fa.Members[j].TagID != fb.Members[j].TagID {
+			if fa.Members[j].ID != fb.Members[j].ID {
 				t.Fatalf("family %d member %d is tag %d in one build and %d in the other",
-					i, j, fa.Members[j].TagID, fb.Members[j].TagID)
+					i, j, fa.Members[j].ID, fb.Members[j].ID)
 			}
 		}
 	}
@@ -141,9 +141,9 @@ func TestBuildIsDeterministic(t *testing.T) {
 func TestAssignBalancedSpillsOverWhenFull(t *testing.T) {
 	vecs := make([]Vec, 10)
 	for i := 0; i < 9; i++ {
-		vecs[i] = Vec{TagID: int64(i), V: []float32{float32(i) * 0.01, 0}}
+		vecs[i] = Vec{ID: int64(i), V: []float32{float32(i) * 0.01, 0}}
 	}
-	vecs[9] = Vec{TagID: 9, V: []float32{10, 10}}
+	vecs[9] = Vec{ID: 9, V: []float32{10, 10}}
 	centroids := [][]float32{{0, 0}, {10, 10}}
 	assign := make([]int, len(vecs))
 	for i := range assign {
@@ -186,12 +186,12 @@ func TestSubfamiliesPartitionTheirFamily(t *testing.T) {
 			t.Fatalf("subfamily %d has %d members; a division needs two", s.ID, len(s.Members))
 		}
 		for _, m := range s.Members {
-			seen[m.TagID]++
+			seen[m.ID]++
 		}
 	}
 	for _, m := range f.Members {
-		if seen[m.TagID] != 1 {
-			t.Fatalf("tag %d appears in %d subfamilies, want exactly 1", m.TagID, seen[m.TagID])
+		if seen[m.ID] != 1 {
+			t.Fatalf("tag %d appears in %d subfamilies, want exactly 1", m.ID, seen[m.ID])
 		}
 	}
 	// The subfamily level is CAPACITY-LIMITED: 24 tags into 3 with slack 1.5 caps a bucket at
@@ -221,7 +221,7 @@ func TestLabelsNameAClusterAndDropItsWater(t *testing.T) {
 			prefix = "harry"
 		}
 		for _, m := range f.Members {
-			names[m.TagID] = prefix + " the thing"
+			names[m.ID] = prefix + " the thing"
 		}
 	}
 	Labels(tree, names)
@@ -273,7 +273,7 @@ func TestCentringZeroesTheMeanAndNormalises(t *testing.T) {
 
 	cp := make([]Vec, len(before))
 	for i := range before {
-		cp[i] = Vec{TagID: int64(i), V: append([]float32(nil), before[i]...)}
+		cp[i] = Vec{ID: int64(i), V: append([]float32(nil), before[i]...)}
 	}
 	centerNormalize(cp, 5)
 	mean := make([]float64, 5)
@@ -284,7 +284,7 @@ func TestCentringZeroesTheMeanAndNormalises(t *testing.T) {
 			norm += float64(v.V[d]) * float64(v.V[d])
 		}
 		if math.Abs(math.Sqrt(norm)-1) > 1e-4 {
-			t.Fatalf("vector %d has length %.6f after centring, want 1", v.TagID, math.Sqrt(norm))
+			t.Fatalf("vector %d has length %.6f after centring, want 1", v.ID, math.Sqrt(norm))
 		}
 	}
 	// The mean is NOT exactly zero after both steps and cannot be: subtracting the mean gives a

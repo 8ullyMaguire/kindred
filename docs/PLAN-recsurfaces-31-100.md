@@ -49,7 +49,7 @@ Four statuses:
 | 44 | Seasonal/temporal context | OPEN | No tag→month mapping and no calendar term. |
 | 45 | Tag canonical form resolution | PARTIAL | `tagfamily` (embedded `families.json`) plus `fandom.base()` collapse variants; there is no alias table and the index is never merged. |
 | 46 | Per-fandom quality tracking | BUILT | `eval_slices` + `eval.ByGroup` from per-work `Placements`; `/eval` prints the newest run's weakest fandoms first (groups of ≥20 held-out works). |
-| 47 | Work cluster labels | OPEN | No work-level clustering; embeddings are `kind='tag'` only. |
+| 47 | Work cluster labels | BUILT | `internal/tagtree` (work side) + `kindred worktree --write` → `work_family` / `work_family_member`, and `/themes` + `/themes/{id}` with `GET /api/v1/themes[/{id}]`. A work vector is the **inverse-sqrt-weighted** mean of its tags (`w = 1/√support`) — a flat mean makes every fluff-tagged work identical — normalised to unit length, then the same k-means as #37 with centring OFF (the shared popularity direction IS a theme). 60,000 works → 200 themes: coherence 0.879 own vs 0.186 neighbouring (gap 0.693), stability 0.63, largest theme 2% of works. Labels are the tags **over-represented** inside a theme (lift ≥ 2, share ≥ 8%), not the biggest tags: without that filter every theme was named "fluff · angst". Measured themes read as fandoms — Marvel, MHA, Naruto/Sakura, Percy Jackson, Worm, DC — from tag vectors alone. |
 | 48 | Reader velocity signal | OPEN | **The gate is a command now** (`kindred velocity`), because the row's refusal had to be re-measured by hand every session. Threshold, written once in `store/velocity.go`: ≥20% of owners with ≥5 reader-days AND p90 ≥ 2× p50 marks/day (under a factor of two the weight would move every reader the same amount — a constant in disguise). Re-measured 2026-10-24: **8 owners, 11 marked works, 8 reader-days, max 3 in one day** — `GATE NOT MET: 0 of 8 owners have 5+ reader-days (need 2)`. The count half (`MarksSince`, `/new`) stays. Fit a weight when the command says the gate passes; 5 mutants killed, including one that makes the gate always true. |
 | 49 | Tag polarity detection | PARTIAL | **Remaining half declined 2026-10-24:** `arena_user_blocked_tags` holds 0 rows, so there is no corpus-wide polarity to infer. Blocking itself is built and honoured in ranking; the row is not completed. A reader can block a tag (`arena_user_blocked_tags`, `POST /block`) and blocks are honoured in ranking; nothing infers polarity corpus-wide from block/bookmark ratios. |
 | 50 | "Complete your collection" for an author | BUILT | `/author?q=` prints "you have read **2** of **4** — **2** to go" for a reader with a session, and `?unread=1` lists the rest ("Showing 2 of 2"). `store.ReadAmong` reads the read set for a bounded id list (400 per statement) because `works` (corpus) and `seen_works` (state) are different SQLite files with no possible join. Three exclusions: a work only SHOWN is not read; another reader's reads are not this one's; and no session means NO CLAIM — an anonymous reader gets no line at all rather than "0 of 4". The count is over the shelf (capped at 5,000 ids, and the page says "counted over the first 5,000" when it hits the cap), not the page: "2 of 20" where 20 is the page size is a number about pagination. `OwnerForSession` is not `TouchSession`: rendering a list must not look like activity. LIVE: signed in, two of Titus621's four works marked read → data-read="2" data-total="4", "2 to go", and ?unread=1 answered "Showing 2 of 2" with exactly the two unread ids. Mutants killed: shown counted as read, filter inert, filter unannounced, shelf counted as one page. |
@@ -108,9 +108,9 @@ Four statuses:
 
 | Status | Count | Ideas |
 |---|---|---|
-| BUILT | 34 | 31, 33, 34, 35, 36, 37, 52, 39, 40, 41, 42, 43, 46, 50, 53, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84, 89 |
+| BUILT | 35 | 31, 33, 34, 35, 36, 37, 47, 52, 39, 40, 41, 42, 43, 46, 50, 53, 54, 56, 57, 60, 61, 62, 63, 64, 65, 66, 67, 70, 71, 74, 76, 78, 79, 84, 89 |
 | PARTIAL | 5 | 32, 38, 45, 49, 72 |
-| OPEN | 8 | 44, 47, 48, 55, 75, 77, 80, 93 |
+| OPEN | 7 | 44, 48, 55, 75, 77, 80, 93 |
 | DECLINED | 19 | 58, 59, 68, 69, 73, 81, 82, 83, 85, 86, 87, 88, 90, 91, 92, 94, 95, 96, 99 |
 | NO PREMISE | 4 | 51, 97, 98, 100 |
 
@@ -146,7 +146,7 @@ number of results. `/tag/{id}` is 0.92 s warm (was 3.67 s). See
 corrected this file's totals. 2026-10-24b/c/d shipped #41 (length_fit), #84 (the significance test the interleave log
 was missing), #74 (personalised PageRank), #39 (the tag shelf's shrunk kudos) and #53
 (the Bradley-Terry cross-check) and #31 (tag trend). **The counts below are the table's,
-not a memory of them: 34 built, 5 partial, 8 open, 19 declined, 4 without a premise.**
+not a memory of them: 35 built, 5 partial, 7 open, 19 declined, 4 without a premise.**
 
 **Every remaining row was triaged on 2026-10-24 against the data actually in the mirror
 (`docs/HANDOFF-2026-10-24h-triage.md`), and the verdict is now a STATUS: `DECLINED` means

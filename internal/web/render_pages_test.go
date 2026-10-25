@@ -473,6 +473,28 @@ var pageRenderCases = []pageRenderCase{
 		wantContains: []string{"/work/1", "narrowed before scoring"},
 	},
 	{
+		tpl:  "themes.html",
+		name: "themes.html",
+		data: ThemesPage{
+			Base:  sweepBase,
+			Built: true,
+			Themes: []ThemeCard{{
+				ID: 24, Label: "draco malfoy/harry potter · hogwarts", Size: 1281,
+				Sample: []ThemeWork{{ID: 7, Title: "Someone Revoke Their Internet Access"}},
+			}},
+		},
+		wantContains: []string{"1,281 works", "draco malfoy/harry potter", "Someone Revoke"},
+	},
+	{
+		tpl:  "theme.html",
+		name: "theme.html",
+		data: ThemePage{
+			Base: sweepBase, ID: 24, Label: "draco malfoy/harry potter", Size: 1281,
+			Works: []ThemeWork{{ID: 7, Title: "A Title"}}, Shown: 60, Truncated: true,
+		},
+		wantContains: []string{"A Title", "showing 60"},
+	},
+	{
 		tpl:  "neighbours.html",
 		name: "neighbours.html",
 		data: NeighboursPage{
@@ -576,6 +598,18 @@ var pageRenderCases = []pageRenderCase{
 			Choices: []string{"default", "recency"},
 		},
 		wantContains: []string{"Name a work and pick two algorithms"},
+	},
+	{
+		tpl:          "themes.html",
+		name:         "themes.html before the tree is built",
+		hasEmptyList: true,
+		data:         ThemesPage{Base: sweepBase, Built: false},
+	},
+	{
+		tpl:          "theme.html",
+		name:         "theme.html with no works",
+		hasEmptyList: true,
+		data:         ThemePage{Base: sweepBase, ID: 3, Label: "a theme"},
 	},
 	{
 		tpl:          "neighbours.html",

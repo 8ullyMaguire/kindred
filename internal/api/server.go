@@ -117,6 +117,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/authors/similar", s.handleSimilarAuthors)
 	// The reader's own learned taste (#36): read it out, import it back. Both are scoped to
 	// the session cookie, and neither can address another reader.
+	// The work themes (#47): a read of work_family / work_family_member, which
+	// `kindred worktree --write` builds offline.
+	mux.HandleFunc("GET /api/v1/themes", s.handleThemes)
+	mux.HandleFunc("GET /api/v1/themes/{id}", s.handleThemeWorks)
 	mux.HandleFunc("GET /api/v1/taste", s.handleGetTaste)
 	mux.HandleFunc("PUT /api/v1/taste", s.handlePutTaste)
 

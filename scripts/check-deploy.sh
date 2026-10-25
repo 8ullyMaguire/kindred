@@ -745,6 +745,39 @@ else
   unreachable=$((unreachable+1)); echo "  UNREACHABLE  the state database ($STATE_DB)"
 fi
 
+# The work themes (#47).
+#
+# A route and a table: the API must answer with the themes the CLI built, and the page must
+# render them. An empty JSON list on a built deployment is the failure this catches, and a
+# built:false on a deployment whose tables are full is the same defect from the other side.
+echo
+echo "the work themes are built and served"
+theme_json=$(curl -sS --max-time 25 "$TARGET/api/v1/themes" 2>/dev/null) || true
+case "$theme_json" in
+  *'"built":true'*)
+    ok "the API serves the theme tree"
+    ;;
+  *'"built":false'*)
+    bad "the API says no theme tree is built; run 'kindred worktree --write'"
+    ;;
+  "")
+    unreachable=$((unreachable+1)); echo "  UNREACHABLE  /api/v1/themes"
+    ;;
+  *)
+    bad "the API answered neither built:true nor built:false: $(printf '%.80s' "$theme_json")"
+    ;;
+esac
+if command -v sqlite3 >/dev/null 2>&1; then
+  wfam=$(state_q "SELECT COUNT(*) FROM work_family;"); wfam=${wfam:-0}
+  wmem=$(state_q "SELECT COUNT(*) FROM work_family_member;"); wmem=${wmem:-0}
+  if [ "$wfam" -ge 50 ] && [ "$wmem" -ge 1000 ]; then
+    ok "the theme tree has $wfam families over $wmem works"
+  else
+    bad "the theme tree is missing or tiny (families=$wfam, works=$wmem)"
+  fi
+fi
+check "the themes page renders its heading" "$TARGET/themes" 'Themes'
+
 # The reader's own taste vector (#36).
 #
 # Both halves are session-scoped, and the thing that must never happen is an import landing on

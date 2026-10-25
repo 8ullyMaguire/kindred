@@ -268,6 +268,22 @@ func allPages() []pageSpec {
 				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, _ string) { d.renderNeighbours(w, r) },
 			},
 			{
+				Template: "themes.html",
+				Paths:    []string{"/themes"},
+				Nav:      "/themes",
+				List:     true,
+				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, _ string) { d.renderThemes(w, r) },
+			},
+			{
+				Template: "theme.html",
+				Paths:    []string{"/themes/"},
+				Prefix:   true,
+				List:     true,
+				Handler: func(d Deps, w http.ResponseWriter, r *http.Request, arg string) {
+					d.renderTheme(w, r, arg)
+				},
+			},
+			{
 				Template: "algo.html",
 				Paths:    []string{"/algo"},
 				Nav:      "/algo",

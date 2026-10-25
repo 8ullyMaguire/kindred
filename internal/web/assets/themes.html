@@ -1,0 +1,43 @@
+{{define "content"}}
+<h1>Themes</h1>
+
+{{/*
+  What this page IS, in the page's own words.
+
+  "Theme 24 · 1,281 works" reads like a category somebody defined. It is not: it is where 1,281
+  works landed when their tag vectors were averaged and clustered, and the difference matters to
+  a reader deciding whether to trust the list. So the page says so once, plainly.
+*/}}
+<p class="count">
+  The archive, grouped by what its works are tagged with &mdash; not by fandom. Each theme was
+  found by clustering the works themselves; the label is the tags that are
+  <em>over-represented</em> inside it, so a tag every theme shares never names one.
+</p>
+
+{{if not .Built}}
+  <p class="count" data-testid="empty" data-empty="true">
+    This deployment has not clustered its works yet, so there are no themes to show.
+    The tree is built by <code>kindred worktree --write</code>, not by this page.
+  </p>
+{{else if .Themes}}
+  <ul class="themes" data-testid="theme-list">
+    {{range .Themes}}
+      <li class="theme" data-testid="theme-card">
+        <h2><a href="/themes/{{.ID}}">{{.Label}}</a></h2>
+        <p class="count">{{commas (int64 .Size)}} works</p>
+        {{if .Sample}}
+          <ul class="samples">
+            {{range .Sample}}
+              <li><a href="/work/{{.ID}}">{{if .Title}}{{.Title}}{{else}}work {{.ID}}{{end}}</a></li>
+            {{end}}
+          </ul>
+        {{end}}
+      </li>
+    {{end}}
+  </ul>
+{{else}}
+  <p class="count" data-testid="empty" data-empty="true">
+    No theme holds any work.
+  </p>
+{{end}}
+{{end}}
