@@ -125,7 +125,9 @@ func (t themeStore) works(r *http.Request, family int, limit int) ([]int64, int,
 }
 
 func (d Deps) renderThemes(w http.ResponseWriter, r *http.Request) {
-	base := d.baseOf(r, "Themes", "Themes")
+	// Heading is empty: the template owns the h1, and a page with two h1s has a heading
+	// structure a reader (and a checker) cannot follow.
+	base := d.baseOf(r, "Themes", "")
 	if d.Engine == nil || d.Engine.Store == nil || d.Engine.Store.DB == nil {
 		d.fail(w, r, http.StatusServiceUnavailable, errors.New("no state database"))
 		return
@@ -169,7 +171,7 @@ func (d Deps) renderTheme(w http.ResponseWriter, r *http.Request, arg string) {
 		d.fail(w, r, http.StatusNotFound, fmt.Errorf("theme %q is not a number", arg))
 		return
 	}
-	base := d.baseOf(r, fmt.Sprintf("Theme %d", id), fmt.Sprintf("Theme %d", id))
+	base := d.baseOf(r, fmt.Sprintf("Theme %d", id), "")
 	if d.Engine == nil || d.Engine.Store == nil || d.Engine.Store.DB == nil {
 		d.fail(w, r, http.StatusServiceUnavailable, errors.New("no state database"))
 		return
