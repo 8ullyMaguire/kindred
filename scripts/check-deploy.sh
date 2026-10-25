@@ -745,6 +745,35 @@ else
   unreachable=$((unreachable+1)); echo "  UNREACHABLE  the state database ($STATE_DB)"
 fi
 
+# The seasonal model (#80).
+#
+# The assertion is semantic, not a row count: a table with six rows where every month is 12 would
+# pass a count. "christmas" must be a December tag and "halloween" an October one -- if the date
+# parse or the lift arithmetic broke, those two swap or vanish.
+echo
+echo "the seasonal tag model is built"
+if command -v sqlite3 >/dev/null 2>&1 && [ -n "$(state_q 'SELECT 1;')" ]; then
+  season_n=$(state_q "SELECT COUNT(*) FROM tag_season;"); season_n=${season_n:-0}
+  if [ "$season_n" -ge 3 ]; then
+    ok "tag_season holds $season_n seasonal tag(s)"
+  else
+    bad "no seasonal tags on this deployment; run 'kindred seasons --write'"
+  fi
+  dec=$(state_q "ATTACH '$CORPUS_DB' AS c;
+    SELECT COUNT(*) FROM tag_season s JOIN c.tags t ON t.id = s.tag_id
+     WHERE t.name = 'christmas' AND s.month = 12;")
+  oct=$(state_q "ATTACH '$CORPUS_DB' AS c;
+    SELECT COUNT(*) FROM tag_season s JOIN c.tags t ON t.id = s.tag_id
+     WHERE t.name = 'halloween' AND s.month = 10;")
+  if [ "${dec:-0}" = "1" ] && [ "${oct:-0}" = "1" ]; then
+    ok "christmas is a December tag and halloween an October one"
+  else
+    bad "the seasonal months are wrong (christmas-in-December=${dec:-?}, halloween-in-October=${oct:-?})"
+  fi
+else
+  unreachable=$((unreachable+1)); echo "  UNREACHABLE  the state database ($STATE_DB)"
+fi
+
 # The work themes (#47).
 #
 # A route and a table: the API must answer with the themes the CLI built, and the page must
