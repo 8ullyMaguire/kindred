@@ -37,7 +37,7 @@
           <td>{{add $i 1}}</td>
           {{/* A fandom is not a tag page: its tag id is unknown here and the
                corpus lookup by name is the only way there. So this is a search
-               link, not /tag/N -- a link built from a guessed id would 404. */}}
+               link, not /tags/N -- a link built from a guessed id would 404. */}}
           <td><a href="/search?q={{urlquery $row.Label}}">{{$row.Label}}</a></td>
           <td>{{printf "%.3f" $row.Score}}</td>
           <td>{{commas (int64 $row.Works)}}</td>

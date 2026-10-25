@@ -57,7 +57,7 @@ var headerRoutes = []string{
 	"/api/v1/recommend?seed=book:1",             // 400 unsupported kind
 	"/",                                         // HTML home page
 	"/search?q=dark",
-	"/work/1",
+	"/works/1",
 	"/arena",
 }
 

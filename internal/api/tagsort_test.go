@@ -157,7 +157,7 @@ func newSortServer(t *testing.T) *httptest.Server {
 // Scoped to the works list deliberately: the page also renders a neighbour
 // tag list, and a looser selector would pick up hrefs from both and return
 // an order that belongs to neither.
-var workLinkRe = regexp.MustCompile(`<div class="work">\s*<h3><a href="/work/(\d+)"`)
+var workLinkRe = regexp.MustCompile(`<div class="work">\s*<h3><a href="/works/(\d+)"`)
 
 func workOrder(t *testing.T, body string) []int {
 	t.Helper()
@@ -244,7 +244,7 @@ func TestTagSortActuallyChangesTheOrder(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run("?"+c.query, func(t *testing.T) {
-			body := getPage(t, ts, "/tag/1?"+c.query)
+			body := getPage(t, ts, "/tags/1?"+c.query)
 			got := joinIDs(workOrder(t, body))
 			if got != c.want {
 				t.Errorf("?%s listed [%s], want [%s]", c.query, got, c.want)
@@ -263,9 +263,9 @@ func TestTagSortActuallyChangesTheOrder(t *testing.T) {
 // asserts the discrimination property instead of assuming it.
 func TestSortKudosAndWordsMustDiffer(t *testing.T) {
 	ts := newSortServer(t)
-	kudos := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?sort=kudos")))
-	words := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?sort=words")))
-	recent := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?sort=recent")))
+	kudos := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?sort=kudos")))
+	words := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?sort=words")))
+	recent := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?sort=recent")))
 
 	if kudos == words {
 		t.Errorf("sort=kudos and sort=words both returned [%s]; the fixture "+
@@ -296,7 +296,7 @@ func TestTagLengthFilterExcludesRows(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run("?"+c.query, func(t *testing.T) {
-			got := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?"+c.query)))
+			got := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?"+c.query)))
 			if got != c.want {
 				t.Errorf("?%s listed [%s], want [%s] (unfiltered is [1,2,3])",
 					c.query, got, c.want)
@@ -317,7 +317,7 @@ func TestTagFilterAndSortCombine(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run("?"+c.query, func(t *testing.T) {
-			got := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?"+c.query)))
+			got := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?"+c.query)))
 			if got != c.want {
 				t.Errorf("?%s listed [%s], want [%s]", c.query, got, c.want)
 			}
@@ -332,7 +332,7 @@ func TestTagFilterAndSortCombine(t *testing.T) {
 // bounds are parsed in Go and the failure is rendered.
 func TestAnUnparseableLengthBoundSaysSo(t *testing.T) {
 	ts := newSortServer(t)
-	body := getPage(t, ts, "/tag/1?words=lots")
+	body := getPage(t, ts, "/tags/1?words=lots")
 
 	if !strings.Contains(body, "is not a word-count bound") {
 		t.Errorf("?words=lots did not explain itself; page head:\n%s",
@@ -354,7 +354,7 @@ func TestAnUnparseableLengthBoundSaysSo(t *testing.T) {
 // about the mirror.
 func TestTagFilterThatExcludedEverythingSaysWhy(t *testing.T) {
 	ts := newSortServer(t)
-	body := getPage(t, ts, "/tag/1?words=under:1")
+	body := getPage(t, ts, "/tags/1?words=under:1")
 
 	if !strings.Contains(body, `data-testid="no-matches"`) {
 		t.Errorf("a filter that excluded all 3 works did not say so:\n%s", head(body))
@@ -376,7 +376,7 @@ func TestTagFilterThatExcludedEverythingSaysWhy(t *testing.T) {
 func TestTagTotalCountsTheFilteredSet(t *testing.T) {
 	ts := newSortServer(t)
 
-	unfiltered := getPage(t, ts, "/tag/1")
+	unfiltered := getPage(t, ts, "/tags/1")
 	if !strings.Contains(unfiltered, "8</strong>") {
 		t.Errorf("unfiltered page does not report the total of 8:\n%s", head(unfiltered))
 	}
@@ -388,7 +388,7 @@ func TestTagTotalCountsTheFilteredSet(t *testing.T) {
 	// numbers and a substring check on "8" alone matches word counts, kudos
 	// and page furniture. On a 3-work fixture "3" happened to be the total and
 	// nothing else, which is why the weaker check passed for months.
-	filtered := getPage(t, ts, "/tag/1?words=under:2000")
+	filtered := getPage(t, ts, "/tags/1?words=under:2000")
 	if strings.Contains(filtered, "8</strong>") {
 		t.Errorf("with words=under:2000 (1 matching work) the page still "+
 			"reports the unfiltered total of 8:\n%s", head(filtered))
@@ -418,7 +418,7 @@ func TestTagTotalCountsTheFilteredSet(t *testing.T) {
 		{"lang=Spanish", "2</strong>"},
 	} {
 		t.Run("?"+c.query, func(t *testing.T) {
-			body := getPage(t, ts, "/tag/1?"+c.query)
+			body := getPage(t, ts, "/tags/1?"+c.query)
 			if strings.Contains(body, "8</strong>") {
 				t.Errorf("?%s still reports the unfiltered total of 8:\n%s",
 					c.query, head(body))
@@ -444,7 +444,7 @@ func TestTheSortControlRendersTheCurrentSelection(t *testing.T) {
 		{"sort=words", `value="words" selected`},
 	} {
 		t.Run("?"+c.query, func(t *testing.T) {
-			body := getPage(t, ts, "/tag/1?"+c.query)
+			body := getPage(t, ts, "/tags/1?"+c.query)
 			if !strings.Contains(body, c.selected) {
 				t.Errorf("?%s did not render %q as the selected option",
 					c.query, c.selected)
@@ -505,7 +505,7 @@ func TestSortIsAClosedSet(t *testing.T) {
 			// rejected by the client before the server sees it, which would
 			// make this arm a test of net/http rather than of tagSort.
 			q := url.Values{"sort": {c.in}}.Encode()
-			body := getPage(t, ts, "/tag/1?"+q)
+			body := getPage(t, ts, "/tags/1?"+q)
 			if got := joinIDs(workOrder(t, body)); got != c.want {
 				t.Errorf("?sort=%q listed [%s], want [%s]", c.in, got, c.want)
 			}
@@ -524,8 +524,8 @@ func TestTagOrderHasATiebreakOnID(t *testing.T) {
 	// Two works with identical kudos, so an unstable tiebreak shows up as a
 	// different order between two identical requests.
 	ts := newSortServerTied(t)
-	first := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?sort=kudos")))
-	second := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?sort=kudos")))
+	first := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?sort=kudos")))
+	second := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?sort=kudos")))
 	if first != second {
 		t.Errorf("two identical requests returned different orders: [%s] then [%s]",
 			first, second)
@@ -648,7 +648,7 @@ func TestALengthFilterExcludesUnknownLengthWorks(t *testing.T) {
 		{"", "4,1,2,3"},
 	} {
 		t.Run("?"+c.query, func(t *testing.T) {
-			got := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?"+c.query)))
+			got := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?"+c.query)))
 			if got != c.want {
 				t.Errorf("?%s listed [%s], want [%s]\n"+
 					"  work 4 has word_count=0 (AO3 published no length). It "+
@@ -787,7 +787,7 @@ func TestTheFixtureWritesEveryColumnAFilterReads(t *testing.T) {
 	ts := newSortServer(t)
 	// Unfiltered, every work is listed, so the ids of the first page are the
 	// ones the filters are applied to.
-	ids := workOrder(t, getPage(t, ts, "/tag/1?n=100"))
+	ids := workOrder(t, getPage(t, ts, "/tags/1?n=100"))
 	if len(ids) != 8 {
 		t.Fatalf("the fixture has %d works, not 8; the expectations in this "+
 			"file are computed against 8", len(ids))
@@ -805,7 +805,7 @@ func TestTheFixtureWritesEveryColumnAFilterReads(t *testing.T) {
 		{"lang=Spanish", "language column has no Spanish row"},
 	} {
 		t.Run("?"+c.query, func(t *testing.T) {
-			got := workOrder(t, getPage(t, ts, "/tag/1?"+c.query))
+			got := workOrder(t, getPage(t, ts, "/tags/1?"+c.query))
 			if len(got) == 0 {
 				t.Errorf("?%s selects nothing, so %s. A filter test on this "+
 					"fixture would only be able to assert emptiness.", c.query, c.note)
@@ -815,8 +815,8 @@ func TestTheFixtureWritesEveryColumnAFilterReads(t *testing.T) {
 
 	// And the two states must not partition the fixture the same way, or
 	// "complete" and "language" would be the same filter twice.
-	comp := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?complete=true&n=100")))
-	lang := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?lang=English&n=100")))
+	comp := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?complete=true&n=100")))
+	lang := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?lang=English&n=100")))
 	if comp == lang {
 		t.Errorf("complete=true and lang=English select the same rows [%s]; "+
 			"two filters that agree cannot tell which column is wired", comp)

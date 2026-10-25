@@ -38,7 +38,7 @@
     <ol class="new-works">
       {{range .Works}}
       <li>
-        <a href="/work/{{.ID}}">{{.Title}}</a>
+        <a href="/works/{{.ID}}">{{.Title}}</a>
         {{if .Authors}}<span class="count">by {{.Authors}}</span>{{end}}
         <span class="count">first seen {{.FirstSeen}}</span>
       </li>

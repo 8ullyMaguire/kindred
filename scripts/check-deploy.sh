@@ -6,7 +6,7 @@
 # On 2026-10-04 the instance on thinkcentre had been serving a binary from
 # 2026-09-29 while the repository carried fourteen commits on top of it. The
 # live wire had no X-Kindred-Index-Age header (SPEC §3.2.2 requires one on
-# EVERY response), no Server: kindred, no sort controls on /tag/{id}, and no
+# EVERY response), no Server: kindred, no sort controls on /tags/{id}, and no
 # dark mode in the served stylesheet.
 #
 # Nothing noticed, because every gate in this project runs against the
@@ -200,13 +200,13 @@ esac
 
 # --- 0. pick a tag that actually exists ---------------------------------
 #
-# Hardcoding /tag/1 is wrong for a real deployment: tag id 1 exists only in
+# Hardcoding /tags/1 is wrong for a real deployment: tag id 1 exists only in
 # the test fixture, so every tag-page check came back UNREACHABLE against the
 # live corpus and the gate refused to give a verdict. A gate that cannot run
 # against production is a gate that never runs.
 #
 # Discovered from /search, which is the same thing a reader does. If that
-# fails, fall back to /tag/1 so a fixture-backed instance still works.
+# fails, fall back to /tags/1 so a fixture-backed instance still works.
 echo
 echo "discovering a tag to test against..."
 # A tag with one work cannot prove a filter works: every filter would return
@@ -255,16 +255,16 @@ count_works () {
 # failures on working code.
 discriminates () {
   local t=$1 base ct cf rg re
-  base=$(count_works "$TARGET/tag/$t?n=100")
+  base=$(count_works "$TARGET/tags/$t?n=100")
   [ "${base:-0}" -lt 10 ] && return 1
-  ct=$(count_works "$TARGET/tag/$t?n=100&complete=true")
-  cf=$(count_works "$TARGET/tag/$t?n=100&complete=false")
+  ct=$(count_works "$TARGET/tags/$t?n=100&complete=true")
+  cf=$(count_works "$TARGET/tags/$t?n=100&complete=false")
   # Both completion states present and different.
   [ "${ct:-0}" -ge 1 ] && [ "${cf:-0}" -ge 1 ] || return 1
   [ "$ct" = "$cf" ] && return 1
   # At least two distinct ratings present, none of which is everything.
-  rg=$(count_works "$TARGET/tag/$t?n=100&rating=G")
-  re=$(count_works "$TARGET/tag/$t?n=100&rating=E")
+  rg=$(count_works "$TARGET/tags/$t?n=100&rating=G")
+  re=$(count_works "$TARGET/tags/$t?n=100&rating=E")
   [ "${rg:-0}" -ge 1 ] && [ "${re:-0}" -ge 1 ] || return 1
   [ "$re" = "$base" ] && return 1   # every work is E: cannot discriminate
   return 0
@@ -303,7 +303,7 @@ if [ -z "$TAG" ] && [ -r "$CORPUS_DB" ] && command -v sqlite3 >/dev/null 2>&1; t
         AND SUM(w.complete = 1) > 5 AND SUM(w.complete = 0) > 5
      ORDER BY COUNT(*) DESC LIMIT 1;" 2>/dev/null || true)
   if [ -n "$TAG" ]; then
-    TAG_WORKS=$(count_works "$TARGET/tag/$TAG?n=100")
+    TAG_WORKS=$(count_works "$TARGET/tags/$TAG?n=100")
     echo "  corpus names tag/$TAG ($TAG_WORKS works, several ratings, both completion states)"
   else
     echo "  corpus has no tag that discriminates; falling back to the search walk"
@@ -316,8 +316,8 @@ if [ -z "$TAG" ]; then
   # terminate; the message names it so a reader knows the walk was truncated.
   for q in general explicit angst relationship; do
     for cand in $(curl -fsS --max-time 20 "$TARGET/search?q=$q&n=100" 2>/dev/null \
-                   | grep -oE '/tag/[0-9]+' | grep -oE '[0-9]+' | sort -un | head -8); do
-      n=$(count_works "$TARGET/tag/$cand?n=100")
+                   | grep -oE '/tags/[0-9]+' | grep -oE '[0-9]+' | sort -un | head -8); do
+      n=$(count_works "$TARGET/tags/$cand?n=100")
       if [ "${n:-0}" -gt "$TAG_WORKS" ]; then
         TAG=$cand
         TAG_WORKS=$n
@@ -331,10 +331,10 @@ if [ -z "$TAG" ]; then
 fi
 if [ -z "$TAG" ]; then
   TAG=1
-  TAG_WORKS=$(count_works "$TARGET/tag/1?n=100")
-  note "found no tag with works; falling back to /tag/1 (fine for a fixture instance)"
+  TAG_WORKS=$(count_works "$TARGET/tags/1?n=100")
+  note "found no tag with works; falling back to /tags/1 (fine for a fixture instance)"
 fi
-echo "  using /tag/$TAG ($TAG_WORKS works)"
+echo "  using /tags/$TAG ($TAG_WORKS works)"
 
 # --- filters: the controls must be there AND must work --------------------
 #
@@ -360,7 +360,7 @@ echo "filters:"
 # 503 read as "complete control is MISSING from the tag page", which is a claim
 # about the product made by a measurement of the network.
 CTL_BODY=$(mktemp)
-ctl_code=$(curl -sS --max-time 90 -o "$CTL_BODY" -w '%{http_code}' "$TARGET/tag/$TAG" 2>/dev/null || echo 000)
+ctl_code=$(curl -sS --max-time 90 -o "$CTL_BODY" -w '%{http_code}' "$TARGET/tags/$TAG" 2>/dev/null || echo 000)
 if [ "$ctl_code" != "200" ]; then
   bad "the tag page answered HTTP $ctl_code, so its filter controls cannot be checked at all"
 else
@@ -375,13 +375,13 @@ fi
 rm -f "$CTL_BODY"
 
 base_count=$TAG_WORKS
-[ "${base_count:-0}" -eq 0 ] && base_count=$(count_works "$TARGET/tag/$TAG?n=100")
+[ "${base_count:-0}" -eq 0 ] && base_count=$(count_works "$TARGET/tags/$TAG?n=100")
 if [ "${base_count:-0}" -gt 0 ]; then
   ok "tag has $base_count works to filter"
 
   # complete: both states must be non-empty and different.
-  ct=$(count_works "$TARGET/tag/$TAG?n=100&complete=true")
-  cf=$(count_works "$TARGET/tag/$TAG?n=100&complete=false")
+  ct=$(count_works "$TARGET/tags/$TAG?n=100&complete=true")
+  cf=$(count_works "$TARGET/tags/$TAG?n=100&complete=false")
   if [ "${ct:-0}" -gt 0 ] && [ "${cf:-0}" -gt 0 ] && [ "$ct" != "$cf" ]; then
     ok "complete filter works ($ct complete, $cf in progress)"
   else
@@ -398,8 +398,8 @@ if [ "${base_count:-0}" -gt 0 ]; then
   fi
 
   # rating: at least one letter must select a different, non-empty set.
-  rG=$(count_works "$TARGET/tag/$TAG?n=100&rating=G")
-  rE=$(count_works "$TARGET/tag/$TAG?n=100&rating=E")
+  rG=$(count_works "$TARGET/tags/$TAG?n=100&rating=G")
+  rE=$(count_works "$TARGET/tags/$TAG?n=100&rating=E")
   if [ "${rG:-0}" -gt 0 ] && [ "${rE:-0}" -gt 0 ] && [ "$rG" != "$rE" ]; then
     ok "rating filter works (G: $rG, E: $rE)"
   else
@@ -411,7 +411,7 @@ if [ "${base_count:-0}" -gt 0 ]; then
   # A rating letter the mirror does not contain must match NOTHING, never
   # something nearby. Z is explicit in some storefronts; mapping it to Mature
   # would be confidently wrong.
-  rZ=$(count_works "$TARGET/tag/$TAG?n=100&rating=Z")
+  rZ=$(count_works "$TARGET/tags/$TAG?n=100&rating=Z")
   if [ "${rZ:-1}" -eq 0 ]; then
     ok "?rating=Z matches nothing, as it must"
   else
@@ -421,8 +421,8 @@ if [ "${base_count:-0}" -gt 0 ]; then
 
   # lang: English vs a language the tag may not have. Only asserted when the
   # mirror has more than one language at all, or the check is theatre.
-  lE=$(count_works "$TARGET/tag/$TAG?n=100&lang=English")
-  lK=$(count_works "$TARGET/tag/$TAG?n=100&lang=Klingon")
+  lE=$(count_works "$TARGET/tags/$TAG?n=100&lang=English")
+  lK=$(count_works "$TARGET/tags/$TAG?n=100&lang=Klingon")
   if [ "${lE:-0}" -gt 0 ] && [ "${lK:-1}" -eq 0 ]; then
     ok "language filter works (English: $lE, Klingon: 0)"
   elif [ "${lE:-0}" -le "$base_count" ] && [ "${lK:-1}" -eq 0 ]; then
@@ -432,8 +432,8 @@ if [ "${base_count:-0}" -gt 0 ]; then
   fi
 
   # No work may be listed twice.
-  dupes=$(curl -fsS --max-time 20 "$TARGET/tag/$TAG?n=100" \
-    | grep -oE '<div class="work">\s*<h3><a href="/work/[0-9]+"' \
+  dupes=$(curl -fsS --max-time 20 "$TARGET/tags/$TAG?n=100" \
+    | grep -oE '<div class="work">\s*<h3><a href="/works/[0-9]+"' \
     | grep -oE '[0-9]+' | sort | uniq -d | wc -l)
   if [ "${dupes:-0}" -eq 0 ]; then
     ok "no work is listed twice (work_tags is keyed on work_id, tag_id, tag_type)"
@@ -464,7 +464,7 @@ fi
 # /api/ and absent on HTML. One route cannot see that; three can.
 echo
 echo "SPEC 3.2.2 — staleness headers on every response"
-for route in /healthz /api/v1/stats / /tag/1 /search; do
+for route in /healthz /api/v1/stats / /tags/1 /search; do
   header "X-Kindred-Index-Age on $route" "$TARGET$route" '^X-Kindred-Index-Age:'
   header "X-Kindred-Index-Version on $route" "$TARGET$route" '^X-Kindred-Index-Version:'
 done
@@ -499,18 +499,18 @@ fi
 # --- 4. the tag page's sort and length controls -------------------------
 echo
 echo "tag page — sort and length controls"
-check "sort control present"      "$TARGET/tag/$TAG" 'name="sort"'
-check "length control present"    "$TARGET/tag/$TAG" 'name="words"'
-check "heading names the order"   "$TARGET/tag/$TAG" 'data-testid="works-heading"'
+check "sort control present"      "$TARGET/tags/$TAG" 'name="sort"'
+check "length control present"    "$TARGET/tags/$TAG" 'name="words"'
+check "heading names the order"   "$TARGET/tags/$TAG" 'data-testid="works-heading"'
 
 # Sort must REORDER, not merely render a dropdown. The dropdown can render
 # while the query ignores the parameter — that is exactly the defect the
 # controls shipped with, and a presence check cannot see it.
-k=$(curl -fsS --max-time 20 "$TARGET/tag/1?sort=kudos&n=10" 2>/dev/null | grep -o 'href="/work/[0-9]*"' | md5sum | cut -c1-8)
-r=$(curl -fsS --max-time 20 "$TARGET/tag/1?sort=recent&n=10" 2>/dev/null | grep -o 'href="/work/[0-9]*"' | md5sum | cut -c1-8)
+k=$(curl -fsS --max-time 20 "$TARGET/tags/1?sort=kudos&n=10" 2>/dev/null | grep -o 'href="/works/[0-9]*"' | md5sum | cut -c1-8)
+r=$(curl -fsS --max-time 20 "$TARGET/tags/1?sort=recent&n=10" 2>/dev/null | grep -o 'href="/works/[0-9]*"' | md5sum | cut -c1-8)
 if [ -z "$k" ] || [ "$k" = "${k//[0-9a-f]/}" ]; then
   unreachable=$((unreachable+1))
-  echo "  UNREACHABLE  cannot read the works list from $TARGET/tag/1"
+  echo "  UNREACHABLE  cannot read the works list from $TARGET/tags/1"
 elif [ "$k" = "$r" ]; then
   bad "?sort=kudos and ?sort=recent return the same list ($k) — the sort is inert"
 else
@@ -519,11 +519,11 @@ fi
 
 # The length filter must EXCLUDE. Same reason: a control can render while the
 # bound is ignored, which is indistinguishable from "no short works here".
-all=$(curl -fsS --max-time 20 "$TARGET/tag/1?n=50" 2>/dev/null | grep -c '<div class="work">')
-short=$(curl -fsS --max-time 20 "$TARGET/tag/1?words=under:1&n=50" 2>/dev/null | grep -c '<div class="work">')
+all=$(curl -fsS --max-time 20 "$TARGET/tags/1?n=50" 2>/dev/null | grep -c '<div class="work">')
+short=$(curl -fsS --max-time 20 "$TARGET/tags/1?words=under:1&n=50" 2>/dev/null | grep -c '<div class="work">')
 if [ -z "$all" ]; then
   unreachable=$((unreachable+1))
-  echo "  UNREACHABLE  cannot count works on $TARGET/tag/1"
+  echo "  UNREACHABLE  cannot count works on $TARGET/tags/1"
 elif [ "$short" -ge "$all" ]; then
   bad "?words=under:1 returned $short of $all works — a length bound below the minimum should return none"
 else
@@ -654,17 +654,17 @@ echo
 echo "taste blend, author pages, search by AO3 URL/id"
 # The default view is the blend, it says which view it is, and silence
 # (neither note) is the failure the Go test also pins down.
-check "tag default names the taste blend" "$TARGET/tag/$TAG" 'Taste match'
-check "blend explains itself (note or error)" "$TARGET/tag/$TAG" 'data-testid="taste-(note|error)"'
-check "taste is one of the order choices"  "$TARGET/tag/$TAG" 'value="taste"'
+check "tag default names the taste blend" "$TARGET/tags/$TAG" 'Taste match'
+check "blend explains itself (note or error)" "$TARGET/tags/$TAG" 'data-testid="taste-(note|error)"'
+check "taste is one of the order choices"  "$TARGET/tags/$TAG" 'value="taste"'
 if [ "${TAG_WORKS:-0}" -gt 2 ]; then
-  check "truncated list links the raise"   "$TARGET/tag/$TAG?n=2" 'data-testid="raise-n"'
+  check "truncated list links the raise"   "$TARGET/tags/$TAG?n=2" 'data-testid="raise-n"'
 fi
 
 # Author pages: a byline on a real card links to a page that lists that
 # author's works. The href is taken FROM the page, so this cannot pass on
 # a hand-constructed URL the server would answer differently.
-author_href=$(curl -fsS --max-time 20 "$TARGET/tag/$TAG?sort=kudos&n=3" 2>/dev/null \
+author_href=$(curl -fsS --max-time 20 "$TARGET/tags/$TAG?sort=kudos&n=3" 2>/dev/null \
   | grep -oE '/author\?q=[^"]+' | head -1)
 if [ -n "$author_href" ]; then
   ok "byline links to an author page ($author_href)"
@@ -675,8 +675,8 @@ fi
 
 # Search by address. The id is one the mirror actually holds, taken from
 # the same card row; the missing-id case must be said out loud.
-wid=$(curl -fsS --max-time 20 "$TARGET/tag/$TAG?sort=kudos&n=1" 2>/dev/null \
-  | grep -oE '/work/[0-9]+' | head -1 | grep -oE '[0-9]+')
+wid=$(curl -fsS --max-time 20 "$TARGET/tags/$TAG?sort=kudos&n=1" 2>/dev/null \
+  | grep -oE '/works/[0-9]+' | head -1 | grep -oE '[0-9]+')
 if [ -n "$wid" ]; then
   check "search by AO3 work URL is an exact match" \
     "$TARGET/search?q=https%3A%2F%2Farchiveofourown.org%2Fworks%2F$wid" \
@@ -956,13 +956,13 @@ check_absent () {
 echo
 echo "feeds and the search descriptor"
 
-header "tag feed says it is a feed" "$TARGET/feed/tag/$TAG" 'content-type: *application/rss\+xml'
-check  "tag feed is RSS 2.0"       "$TARGET/feed/tag/$TAG" '<rss version="2.0"'
-check  "tag feed carries items"    "$TARGET/feed/tag/$TAG" '<item>'
+header "tag feed says it is a feed" "$TARGET/feed/tags/$TAG" 'content-type: *application/rss\+xml'
+check  "tag feed is RSS 2.0"       "$TARGET/feed/tags/$TAG" '<rss version="2.0"'
+check  "tag feed carries items"    "$TARGET/feed/tags/$TAG" '<item>'
 # An absolute guid is what makes a subscriber's client keep entry identity
 # across polls. A relative one is invalid RSS and clients mint their own.
-check  "tag feed guids are absolute" "$TARGET/feed/tag/$TAG" '<guid isPermaLink="true">https?://'
-status "an unknown tag is 404, not an empty feed" "$TARGET/feed/tag/999999" 404
+check  "tag feed guids are absolute" "$TARGET/feed/tags/$TAG" '<guid isPermaLink="true">https?://'
+status "an unknown tag is 404, not an empty feed" "$TARGET/feed/tags/999999" 404
 
 check  "opensearch names the site"  "$TARGET/opensearch.xml" '<ShortName>kindred</ShortName>'
 check  "opensearch points at /search" "$TARGET/opensearch.xml" '/search\?q=\{searchTerms\}'
@@ -981,14 +981,14 @@ if [ -r "$CORPUS_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
   WORK_B=$(sed -n '2p' <<<"$ids")
 fi
 if [ -z "${WORK_A:-}" ] || [ -z "${WORK_B:-}" ]; then
-  ids=$(curl -fsS --max-time 20 "$TARGET/tag/$TAG?n=5" 2>/dev/null \
-        | grep -oE '/work/[0-9]+' | grep -oE '[0-9]+' | head -2 || true)
+  ids=$(curl -fsS --max-time 20 "$TARGET/tags/$TAG?n=5" 2>/dev/null \
+        | grep -oE '/works/[0-9]+' | grep -oE '[0-9]+' | head -2 || true)
   WORK_A=$(sed -n '1p' <<<"$ids")
   WORK_B=$(sed -n '2p' <<<"$ids")
 fi
 
 if [ -n "${WORK_A:-}" ] && [ -n "${WORK_B:-}" ]; then
-  echo "  pair and path against /work/$WORK_A and /work/$WORK_B"
+  echo "  pair and path against /works/$WORK_A and /works/$WORK_B"
   check  "pair report scores"        "$TARGET/api/v1/works/$WORK_A/similarity/$WORK_B" '"score"'
   check  "pair report says why"      "$TARGET/api/v1/works/$WORK_A/similarity/$WORK_B" '"shared_tags"'
   status "a work is not a pair with itself" "$TARGET/api/v1/works/$WORK_A/similarity/$WORK_A" 400
@@ -1084,9 +1084,9 @@ echo "a thin tag cannot brag (#39)"
 # The tag page printed a MEAN over as few as three works, which reads as a quality
 # claim. The shrunk number and its prior must both be on the page: a shrunk value with
 # a hidden prior cannot be checked or argued with.
-check "the tag shelf carries a shrunk kudos estimate"  "$TARGET/tag/1" 'data-testid="shrunk-kudos"'
-check "and names the prior it was shrunk toward"      "$TARGET/tag/1" 'data-prior='
-check "and the fictional works that prior is worth"   "$TARGET/tag/1" 'data-weight='
+check "the tag shelf carries a shrunk kudos estimate"  "$TARGET/tags/1" 'data-testid="shrunk-kudos"'
+check "and names the prior it was shrunk toward"      "$TARGET/tags/1" 'data-prior='
+check "and the fictional works that prior is worth"   "$TARGET/tags/1" 'data-weight='
 
 echo
 echo "the walk reaches what one hop cannot (#74)"
@@ -1172,30 +1172,30 @@ echo
 echo "the tag shelf in numbers (#54)"
 # Medians, not means: a mean on a skewed tag describes a work nobody wrote. The
 # page must print both, so a reader can see the skew rather than a single number.
-check "the tag page summarises its shelf"  "$TARGET/tag/$TAG" 'data-testid="tag-shelf"'
-check "and prints a median length"         "$TARGET/tag/$TAG" 'data-testid="median-words"'
-check "and a median kudos"                 "$TARGET/tag/$TAG" 'data-testid="median-kudos"'
-check "and the trend is dated as updates"  "$TARGET/tag/$TAG" 'Counted by <strong>update</strong> year'
-status "and a tag with no works is still a 404" "$TARGET/tag/999999" 404
+check "the tag page summarises its shelf"  "$TARGET/tags/$TAG" 'data-testid="tag-shelf"'
+check "and prints a median length"         "$TARGET/tags/$TAG" 'data-testid="median-words"'
+check "and a median kudos"                 "$TARGET/tags/$TAG" 'data-testid="median-kudos"'
+check "and the trend is dated as updates"  "$TARGET/tags/$TAG" 'Counted by <strong>update</strong> year'
+status "and a tag with no works is still a 404" "$TARGET/tags/999999" 404
 
 echo
 echo "the byline, and the shelf (#66/#50)"
 if [ -n "${WORK_A:-}" ]; then
-  check "the work page names its author"   "$TARGET/work/$WORK_A" 'data-testid="work-byline"'
+  check "the work page names its author"   "$TARGET/works/$WORK_A" 'data-testid="work-byline"'
   # A byline that renders but does not link is the defect the row names: the
   # author-similarity endpoint needs a way IN from a work.
   # Pattern has no regex metacharacter on purpose: `?` in an ERE makes the
   # preceding character optional, so a check written as /author?q= can never
   # match — it reported a working link as missing on the first deploy.
-  check "and links it to the shelf"        "$TARGET/work/$WORK_A" 'href="/author'
-  check "and names authors who write alike" "$TARGET/work/$WORK_A" 'data-testid="work-authors"|work-authors-error'
+  check "and links it to the shelf"        "$TARGET/works/$WORK_A" 'href="/author'
+  check "and names authors who write alike" "$TARGET/works/$WORK_A" 'data-testid="work-authors"|work-authors-error'
   AUTHOR=""
   if [ -r "$CORPUS_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
     AUTHOR=$(sqlite3 -readonly "$CORPUS_DB" "SELECT authors FROM works WHERE id = $WORK_A;" 2>/dev/null \
              | cut -d, -f1 | sed 's/^ *//; s/ *$//' | sed 's/ /%20/g')
   fi
   if [ -n "$AUTHOR" ]; then
-    echo "  author of /work/$WORK_A: $AUTHOR"
+    echo "  author of /works/$WORK_A: $AUTHOR"
     check  "the shelf page lists the works" "$TARGET/author?q=$AUTHOR" 'data-testid="author-count"'
     # An anonymous reader must be promised nothing about their reading: the
     # progress line is a claim about a person and needs a session to be about
@@ -1203,7 +1203,7 @@ if [ -n "${WORK_A:-}" ]; then
     check_absent "and claims no reading progress for a stranger" \
       "$TARGET/author?q=$AUTHOR" 'data-testid="collection-progress"'
   else
-    note "could not resolve a byline for /work/$WORK_A; shelf checks skipped"
+    note "could not resolve a byline for /works/$WORK_A; shelf checks skipped"
   fi
 fi
 

@@ -28,7 +28,7 @@
     “A path from here”, or add a work id to this address: <code>/path/17249318</code>.
   </p>
 {{else}}
-  <h2>From <a href="/work/{{.Path.Seed.ID}}">{{.Path.Seed.Title}}</a></h2>
+  <h2>From <a href="/works/{{.Path.Seed.ID}}">{{.Path.Seed.Title}}</a></h2>
 
   {{if .Path.Note}}
     <p class="note" data-testid="path-note">{{.Path.Note}}</p>
@@ -38,7 +38,7 @@
     <ol class="path">
       {{range .Path.Steps}}
       <li>
-        <a href="/work/{{.ID}}">{{.Title}}</a>
+        <a href="/works/{{.ID}}">{{.Title}}</a>
         <span class="count">step {{.Step}} · {{printf "%.2f" .SimToPrev}} from the step before</span>
         {{if .SharedWithPrev}}
           <span class="count">shares {{range $i, $t := .SharedWithPrev}}{{if $i}}, {{end}}{{$t}}{{end}}</span>

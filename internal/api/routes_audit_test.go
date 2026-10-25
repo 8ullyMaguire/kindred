@@ -40,9 +40,9 @@ var routeTable = map[string]routeAudit{
 	// settings. The page half exists and is tested where it lives — the tag page
 	// discovers its feed with rel=alternate and links it in words
 	// (TestTagPageOffersItsFeed).
-	"GET /feed/tag/{id}": {Why: "read by a subscriber's client; /tag/{id} carries " +
+	"GET /feed/tags/{id}": {Why: "read by a subscriber's client; /tags/{id} carries " +
 		"the discovery link and the words"},
-	"GET /feed/seed/{kind}/{id}": {Why: "read by a subscriber's client; /work/{id} " +
+	"GET /feed/seed/{kind}/{id}": {Why: "read by a subscriber's client; /works/{id} " +
 		"is the page it ranks from"},
 	"GET /opensearch.xml": {Why: "read by a browser's search-engine settings, " +
 		"not by a reader"},
@@ -62,13 +62,13 @@ var routeTable = map[string]routeAudit{
 	"PUT /api/v1/taste": {Why: "an import surface: a caller posts a vector, and no page posts " +
 		"one on the reader's behalf today"},
 	"GET /api/v1/ao3/works":                {Page: "/search"},
-	"GET /api/v1/ao3/works/{id}":           {Page: "/work/{id}"},
-	"GET /api/v1/ao3/works/{id}/recommend": {Page: "/work/{id}"},
-	"GET /api/v1/works/{id}/co-bookmarked": {Page: "/work/{id}"},
-	"GET /api/v1/works/{id}/bridges":       {Page: "/work/{id}"},
+	"GET /api/v1/ao3/works/{id}":           {Page: "/works/{id}"},
+	"GET /api/v1/ao3/works/{id}/recommend": {Page: "/works/{id}"},
+	"GET /api/v1/works/{id}/co-bookmarked": {Page: "/works/{id}"},
+	"GET /api/v1/works/{id}/bridges":       {Page: "/works/{id}"},
 	// Work-pair similarity (#78). The page is the work page's compare form,
 	// which renders the report in place under ?compare={other}.
-	"GET /api/v1/works/{id}/similarity/{other}": {Page: "/work/{id}?compare={other}"},
+	"GET /api/v1/works/{id}/similarity/{other}": {Page: "/works/{id}?compare={other}"},
 	// A reading path (#40) has its own page: a walk is ten embedding queries and
 	// the work page must not pay for it.
 	"GET /api/v1/works/{id}/path": {Page: "/path/{id}"},
@@ -98,8 +98,8 @@ var routeTable = map[string]routeAudit{
 	"GET /api/v1/interleave":             {Page: "/algo?mode=interleave"},
 	"GET /api/v1/interleave/standings":   {Page: "/algo?mode=interleave"},
 	"GET /api/v1/ao3/tags":               {Page: "/search"},
-	"GET /api/v1/ao3/tags/{id}":          {Page: "/tag/{id}"},
-	"GET /api/v1/ao3/tags/{id}/works":    {Page: "/tag/{id}"},
+	"GET /api/v1/ao3/tags/{id}":          {Page: "/tags/{id}"},
+	"GET /api/v1/ao3/tags/{id}/works":    {Page: "/tags/{id}"},
 	"GET /api/v1/corpus-query/{mode}":    {Page: "/fandoms | /underrated | /neighbours | /surprise"},
 	"GET /api/v1/arena/pair":             {Page: "/arena"},
 	"POST /api/v1/arena/compare":         {Page: "/arena"},

@@ -118,7 +118,7 @@ type Row struct {
 	// WorkID is set only by modes whose rows ARE works, and it is separate
 	// from Key for a concrete reason: Key carries the "ao3_work:" prefix
 	// because it identifies the row unambiguously across modes, while a link
-	// to the work page is keyed by the bare id. Rendering /work/ao3_work:1234
+	// to the work page is keyed by the bare id. Rendering /works/ao3_work:1234
 	// is a 404 that looks like a broken link rather than a wrong join.
 	WorkID int64 `json:"work_id,omitempty"`
 

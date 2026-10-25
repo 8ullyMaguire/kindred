@@ -101,7 +101,7 @@ func TestAuthorPageAndBylineLinks(t *testing.T) {
 	defer ts.Close()
 
 	// The byline on a work card links to the author page.
-	body := getPage(t, ts, "/tag/1?sort=kudos")
+	body := getPage(t, ts, "/tags/1?sort=kudos")
 	if !strings.Contains(body, `href="/author?q=A"`) {
 		t.Error("work card byline has no /author link")
 	}
@@ -133,7 +133,7 @@ func TestTagPageTasteDefault(t *testing.T) {
 	ts := newSortServer(t)
 	defer ts.Close()
 
-	body := getPage(t, ts, "/tag/1")
+	body := getPage(t, ts, "/tags/1")
 	if !strings.Contains(body, "Taste match") {
 		t.Error("default tag page heading is not the taste blend")
 	}
@@ -146,7 +146,7 @@ func TestTagPageTasteDefault(t *testing.T) {
 	}
 
 	// An explicit exact sort opts out of the blend: no notes, no scores.
-	body = getPage(t, ts, "/tag/1?sort=kudos")
+	body = getPage(t, ts, "/tags/1?sort=kudos")
 	if strings.Contains(body, `data-testid="taste-note"`) ||
 		strings.Contains(body, `data-testid="taste-error"`) {
 		t.Error("explicit sort still rendered blend notes")
@@ -163,7 +163,7 @@ func TestWorkPageNRaisesRecommendations(t *testing.T) {
 	ts := newSortServer(t)
 	defer ts.Close()
 
-	one := getPage(t, ts, "/work/1?n=1")
+	one := getPage(t, ts, "/works/1?n=1")
 	// Whatever the engine returned, n= must not break the page, and a
 	// filled list must offer the doubled count.
 	if !strings.Contains(one, "Work 1") {
@@ -174,7 +174,7 @@ func TestWorkPageNRaisesRecommendations(t *testing.T) {
 		t.Error("raise-n link does not ask for 2 (double n=1)")
 	}
 	// The default page renders identically well at n=10.
-	full := getPage(t, ts, "/work/1?n=10")
+	full := getPage(t, ts, "/works/1?n=10")
 	if !strings.Contains(full, "Work 1") {
 		t.Error("n=10 lost the work itself")
 	}

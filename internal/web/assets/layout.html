@@ -137,13 +137,13 @@
 
 {{define "taglist"}}
 <ul class="tags">
-  {{range .}}<li><a class="tag" href="/tag/{{.ID}}">{{.Name}}</a></li>{{end}}
+  {{range .}}<li><a class="tag" href="/tags/{{.ID}}">{{.Name}}</a></li>{{end}}
 </ul>
 {{end}}
 
 {{define "workrow"}}
 <div class="work">
-  <h3><a href="/work/{{.ID}}">{{.Title}}</a></h3>
+  <h3><a href="/works/{{.ID}}">{{.Title}}</a></h3>
   <p class="byline">
     {{range authorlinks .Author}}<a class="author" href="{{.URL}}">{{.Name}}</a>{{else}}{{.Author}}{{end}} &middot;
     {{commas .Kudos}} kudos &middot;

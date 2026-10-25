@@ -19,7 +19,7 @@ import (
 func TestTheWorkPageNamesItsAuthorAndLinksTheByline(t *testing.T) {
 	d, _ := collectionDeps(t)
 	rr := httptest.NewRecorder()
-	d.renderWork(rr, httptest.NewRequest(http.MethodGet, "/work/1", nil), "1")
+	d.renderWork(rr, httptest.NewRequest(http.MethodGet, "/works/1", nil), "1")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d; body: %s", rr.Code, headOf(rr.Body.String(), 400))
 	}
@@ -48,7 +48,7 @@ func TestTheWorkPageShowsAuthorsWhenTheEngineFindsThem(t *testing.T) {
 	}
 
 	rr := httptest.NewRecorder()
-	d.renderWork(rr, httptest.NewRequest(http.MethodGet, "/work/1", nil), "1")
+	d.renderWork(rr, httptest.NewRequest(http.MethodGet, "/works/1", nil), "1")
 	body := rr.Body.String()
 
 	if len(want) == 0 {

@@ -470,7 +470,7 @@ var pageRenderCases = []pageRenderCase{
 			MinWords:  1000,
 			Complete:  true,
 		},
-		wantContains: []string{"/work/1", "narrowed before scoring"},
+		wantContains: []string{"/works/1", "narrowed before scoring"},
 	},
 	{
 		tpl:  "themes.html",
@@ -521,7 +521,7 @@ var pageRenderCases = []pageRenderCase{
 		},
 		// The seed link is the page's whole point -- without it the reader
 		// has a title and no way to use it.
-		wantContains: []string{"A Work &amp; Its Title", "/work/42",
+		wantContains: []string{"A Work &amp; Its Title", "/works/42",
 			"58 tags", "/recommend?seed=ao3_work%3a42"},
 	},
 	{
@@ -565,7 +565,7 @@ var pageRenderCases = []pageRenderCase{
 				}},
 			}},
 		},
-		wantContains: []string{"Deydralinne", "501", "/work/7",
+		wantContains: []string{"Deydralinne", "501", "/works/7",
 			"Ask for 1000 instead", "Authors who write like this",
 			"someone-else", "epistolary"},
 	},
@@ -798,10 +798,10 @@ var pageRenderCases = []pageRenderCase{
 			WorkTotal:   2,
 			WorkLimited: true,
 		},
-		wantContains: []string{"/tag/7", "dark &amp; light", "angst", "2 tags match",
+		wantContains: []string{"/tags/7", "dark &amp; light", "angst", "2 tags match",
 			// The work half, and the link that makes a search result
 			// actionable: one click to a ranking seeded by that work.
-			`href="/work/100"`, "rank from this",
+			`href="/works/100"`, "rank from this",
 			// Word count is rendered (idea: data present, not displayed).
 			"words",
 		},
@@ -836,7 +836,7 @@ var pageRenderCases = []pageRenderCase{
 		wantContains: []string{
 			"The work search failed", "no such table: works",
 			"Tag results below are unaffected",
-			"/tag/7",
+			"/tags/7",
 		},
 	},
 	{
@@ -852,7 +852,7 @@ var pageRenderCases = []pageRenderCase{
 		wantContains: []string{
 			"The tag search failed", "no such table: tags",
 			"Work results above are unaffected",
-			`href="/work/100"`,
+			`href="/works/100"`,
 		},
 	},
 	{
@@ -868,7 +868,7 @@ var pageRenderCases = []pageRenderCase{
 			Works:     []WorkHit{{ID: 5, Title: "Untitled Fic"}},
 			WorkTotal: 1,
 		},
-		wantContains: []string{`href="/work/5"`, "Untitled Fic"},
+		wantContains: []string{`href="/works/5"`, "Untitled Fic"},
 		// Nothing that would be a fabricated claim.
 		wantNotContains: []string{"0 words", "on AO3"},
 	},
@@ -939,7 +939,7 @@ var pageRenderCases = []pageRenderCase{
 			},
 		},
 		// 98,765: commas over a plain int64 struct field.
-		wantContains: []string{"98,765", "1,234", "/work/1", "angst",
+		wantContains: []string{"98,765", "1,234", "/works/1", "angst",
 			// The controls exist and the heading names the order.
 			`name="sort"`, "most kudos", "most recently updated",
 			`name="words"`, "under 5,000 words",
@@ -1088,15 +1088,15 @@ var pageRenderCases = []pageRenderCase{
 		data: MyRankingPage{
 			Base: sweepBase,
 			Liked: []TagLink{
-				{Name: "dark", URL: "/tag/1"},
-				{Name: "angst", URL: "/tag/2"},
+				{Name: "dark", URL: "/tags/1"},
+				{Name: "angst", URL: "/tags/2"},
 			},
-			Disliked:       []TagLink{{Name: "humour", URL: "/tag/3"}},
+			Disliked:       []TagLink{{Name: "humour", URL: "/tags/3"}},
 			Judged:         12,
 			MinimumForView: 5,
 			RatedWorks:     30,
 		},
-		wantContains: []string{"dark", "angst", "humour", "/tag/1"},
+		wantContains: []string{"dark", "angst", "humour", "/tags/1"},
 	},
 	{
 		name: "rank.html",
@@ -1105,7 +1105,7 @@ var pageRenderCases = []pageRenderCase{
 			Base: sweepBase, WorkID: 42, Title: "Rated Work", Author: "A",
 			Rating: 1620, RD: 85, Sigma: 0.05,
 			Comparisons: 20, Wins: 14, Losses: 5, Draws: 1,
-			WorkURL: "/work/42",
+			WorkURL: "/works/42",
 			History: []RankPoint{
 				{Period: 202601, Rating: 1500, RD: 200},
 				{Period: 202602, Rating: 1620, RD: 85},
@@ -1114,7 +1114,7 @@ var pageRenderCases = []pageRenderCase{
 		},
 		// The title and the link are the assertion that mattered: the
 		// template printed neither, while RankPage carried both fields.
-		wantContains: []string{"Rated Work", `href="/work/42"`, "1620", "85",
+		wantContains: []string{"Rated Work", `href="/works/42"`, "1620", "85",
 			"starting rating", "How it got here"},
 	},
 	{
@@ -1123,11 +1123,11 @@ var pageRenderCases = []pageRenderCase{
 		data: BlockPage{
 			Base: sweepBase,
 			Candidates: []BlockRow{
-				{TagID: 1, Name: "dark", URL: "/tag/1",
+				{TagID: 1, Name: "dark", URL: "/tags/1",
 					Reason: "you keep passing these over", Weight: 0.8, N: 9},
 			},
 			Blocked: []BlockRow{
-				{TagID: 2, Name: "humour", URL: "/tag/2", Blocked: true},
+				{TagID: 2, Name: "humour", URL: "/tags/2", Blocked: true},
 			},
 			Judged: 12, MinimumForView: 5,
 		},
@@ -1440,7 +1440,7 @@ var pageRenderCases = []pageRenderCase{
 			// exists -- so the result is still a shareable URL.
 			`action="/search"`, `name="universe"`, `name="concept"`,
 			// And the row is the SHARED row template.
-			"/work/1", "5,000 words",
+			"/works/1", "5,000 words",
 		},
 		// A populated render must NOT carry the empty marker.
 		wantNotContains: []string{"data-empty"},
@@ -1588,7 +1588,7 @@ func sampleCard(label string, id int64) WorkCard {
 		ID: id, Title: "Card " + label, Author: "Author " + label,
 		Summary: "A summary. With two sentences.",
 		Rating:  0.75, RD: 0.12,
-		TagURL: []TagLink{{Name: "dark", URL: "/tag/1"}},
+		TagURL: []TagLink{{Name: "dark", URL: "/tags/1"}},
 		URL:    "https://example.invalid/works/" + label,
 	}
 }
@@ -1650,11 +1650,11 @@ func TestTagPageShowsTheEmbeddingNeighbourhood(t *testing.T) {
 	// Count the links before asserting anything about their content: a
 	// section that renders its heading and no rows would satisfy a bare
 	// "contains the heading" check.
-	if n := strings.Count(body, `href="/tag/`); n < 2 {
+	if n := strings.Count(body, `href="/tags/`); n < 2 {
 		t.Fatalf("the embedding section rendered %d tag links, want 2: "+
 			"the heading renders without its rows", n)
 	}
-	for _, want := range []string{`href="/tag/840"`, "barista", "0.81", "slow burn"} {
+	for _, want := range []string{`href="/tags/840"`, "barista", "0.81", "slow burn"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the neighbourhood is missing %q", want)
 		}
@@ -1741,7 +1741,7 @@ func TestTheWorkPageKeepsTheTypedIDOnError(t *testing.T) {
 // the scheme can find.
 func TestTagPageOffersItsFeed(t *testing.T) {
 	page := TagPage{
-		Base: Base{Title: "coffee shop", FeedPath: "/feed/tag/1"},
+		Base: Base{Title: "coffee shop", FeedPath: "/feed/tags/1"},
 		Tag:  TagInfo{ID: 1, Name: "coffee shop", WorkCount: 40},
 	}
 	body := renderLayout(t, "tag.html", page)
@@ -1750,7 +1750,7 @@ func TestTagPageOffersItsFeed(t *testing.T) {
 		t.Fatal("the page head carries no rel=alternate link, so a browser cannot " +
 			"offer the feed")
 	}
-	if !strings.Contains(body, `href="/feed/tag/1"`) {
+	if !strings.Contains(body, `href="/feed/tags/1"`) {
 		t.Fatalf("the feed path is missing from the page; got:\n%s", body)
 	}
 	if !strings.Contains(body, "Follow this tag") {

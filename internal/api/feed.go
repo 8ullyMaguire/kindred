@@ -126,7 +126,7 @@ func feedRequestedItems(r *http.Request) int {
 // "recent" in the wrong order is worse than no feed, because a subscriber
 // unsubscribes over it and never learns why.
 func (s *Server) handleFeedTag(w http.ResponseWriter, r *http.Request) {
-	raw := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/feed/tag/"), ".xml")
+	raw := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/feed/tags/"), ".xml")
 	id, err := strconv.ParseInt(strings.TrimSuffix(raw, "/"), 10, 64)
 	if err != nil {
 		writeTextErr(w, http.StatusNotFound, "that is not a tag id")
@@ -181,7 +181,7 @@ func (s *Server) handleFeedTag(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if url == "" {
-			url = fmt.Sprintf("%s/work/%d", base, workID)
+			url = fmt.Sprintf("%s/works/%d", base, workID)
 		}
 		pub := ""
 		if t, ok := corpus.ParseDate(upd); ok {
@@ -210,7 +210,7 @@ func (s *Server) handleFeedTag(w http.ResponseWriter, r *http.Request) {
 	}
 	doc := rssDoc{Version: "2.0", Channel: rssChannel{
 		Title:         "kindred — " + name,
-		Link:          base + "/tag/" + strconv.FormatInt(id, 10),
+		Link:          base + "/tags/" + strconv.FormatInt(id, 10),
 		Description:   fmt.Sprintf("Works carrying the tag %q, most recently updated first.", name),
 		Language:      "en",
 		LastBuildDate: lastBuild.Format(time.RFC1123Z),
@@ -275,7 +275,7 @@ func (s *Server) handleFeedSeed(w http.ResponseWriter, r *http.Request) {
 	for _, it := range res.Items {
 		link := it.URL
 		if link == "" {
-			link = fmt.Sprintf("%s/work/%d", base, it.ID)
+			link = fmt.Sprintf("%s/works/%d", base, it.ID)
 		}
 		m := meta[it.ID]
 		pub := ""
@@ -301,7 +301,7 @@ func (s *Server) handleFeedSeed(w http.ResponseWriter, r *http.Request) {
 	}
 	doc := rssDoc{Version: "2.0", Channel: rssChannel{
 		Title: "kindred — like " + title,
-		Link:  base + "/work/" + strconv.FormatInt(kind, 10),
+		Link:  base + "/works/" + strconv.FormatInt(kind, 10),
 		Description: "Works ranked from this seed. The list is computed when it is " +
 			"requested, so its entries carry the works' own dates; a different " +
 			"request can rank a different set.",

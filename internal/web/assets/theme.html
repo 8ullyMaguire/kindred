@@ -8,7 +8,7 @@
 {{if .Works}}
   <ul class="rows" data-testid="theme-works">
     {{range .Works}}
-      <li><a href="/work/{{.ID}}">{{if .Title}}{{.Title}}{{else}}work {{.ID}}{{end}}</a></li>
+      <li><a href="/works/{{.ID}}">{{if .Title}}{{.Title}}{{else}}work {{.ID}}{{end}}</a></li>
     {{end}}
   </ul>
   {{if .Truncated}}

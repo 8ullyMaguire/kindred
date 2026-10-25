@@ -30,7 +30,7 @@
 {{end}}
 
 <p class="note">
-  <a href="/feed/tag/{{.Tag.ID}}">Follow this tag</a> — the newest works under
+  <a href="/feed/tags/{{.Tag.ID}}">Follow this tag</a> — the newest works under
   it, as an RSS feed your reader can subscribe to.
 </p>
 
@@ -50,7 +50,7 @@
 {{end}}
 <ul class="tags">
   {{range .VectorNeighbours}}
-  <li><a class="tag" href="/tag/{{.ID}}">{{.Name}}</a>
+  <li><a class="tag" href="/tags/{{.ID}}">{{.Name}}</a>
       <span class="note">{{printf "%.2f" .Sim}}</span></li>
   {{end}}
 </ul>
@@ -87,7 +87,7 @@
     <dt>words in total</dt><dd>{{commas .Shelf.TotalWords}}</dd>
     {{if .Shelf.Top.ID}}
     <dt>most saved</dt>
-    <dd data-testid="top-work"><a href="/work/{{.Shelf.Top.ID}}">{{.Shelf.Top.Title}}</a>
+    <dd data-testid="top-work"><a href="/works/{{.Shelf.Top.ID}}">{{.Shelf.Top.Title}}</a>
       &mdash; {{commas .Shelf.Top.Bookmarks}} bookmarks</dd>
     {{end}}
   </dl>
@@ -122,7 +122,7 @@
      hardcoded, because the heading below claims an order: a page that says
      "most recently updated" while listing by kudos is the kind of thing a
      reader believes for ten seconds. */}}
-<form class="controls" method="get" action="/tag/{{.Tag.ID}}" role="search"
+<form class="controls" method="get" action="/tags/{{.Tag.ID}}" role="search"
       aria-label="Sort and filter works">
   {{/* The reader's ?n= rides along, or every sort change would snap the
        list back to 20 while the heading kept claiming 100. */}}

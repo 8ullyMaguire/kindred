@@ -161,7 +161,7 @@ func TestEveryRoutedPageDispatches(t *testing.T) {
 			// Each path is its own subtest with a recover, so one page that
 			// cannot answer does not hide the state of the pages behind it in
 			// declaration order. Asking for one page at a time found the
-			// missing-corpus panic in /tag/{slug} after two runs; the recover
+			// missing-corpus panic in /tags/{slug} after two runs; the recover
 			// finds every one of them in a single run and names the page.
 			t.Run(path, func(t *testing.T) {
 				defer func() {

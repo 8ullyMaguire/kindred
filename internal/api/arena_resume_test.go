@@ -148,7 +148,7 @@ func TestJudgeStillWorksWithAnUnjudgedRowPresent(t *testing.T) {
 // side first, and what matters is that it is the SAME pair.
 func pairWorks(body string) string {
 	var out []string
-	for _, part := range strings.Split(body, `href="/work/`) {
+	for _, part := range strings.Split(body, `href="/works/`) {
 		if i := strings.IndexByte(part, '"'); i > 0 {
 			out = append(out, part[:i])
 		}

@@ -23,7 +23,7 @@
       {{range $i, $row := .Rows}}
         <tr>
           <td>{{add $i 1}}</td>
-          {{/* Again a search link, not /tag/N: this layer has names, not
+          {{/* Again a search link, not /tags/N: this layer has names, not
                ids, and a lookup by name is the honest way there. */}}
           <td><a href="/search?q={{urlquery $row.Label}}">{{$row.Label}}</a></td>
           <td>{{printf "%.3f" $row.Score}}</td>

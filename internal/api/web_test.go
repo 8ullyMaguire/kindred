@@ -83,9 +83,9 @@ func TestAPIRoutesUnaffected(t *testing.T) {
 
 func TestWorkPageRenders(t *testing.T) {
 	ts := newTestServer(t)
-	status, ct, body := getText(t, ts, "/work/1")
+	status, ct, body := getText(t, ts, "/works/1")
 	if status != http.StatusOK {
-		t.Fatalf("GET /work/1 -> %d, want 200", status)
+		t.Fatalf("GET /works/1 -> %d, want 200", status)
 	}
 	if !strings.Contains(ct, "text/html") {
 		t.Errorf("Content-Type %q, want text/html", ct)
@@ -106,9 +106,9 @@ func TestWorkPageRenders(t *testing.T) {
 
 func TestTagPageRenders(t *testing.T) {
 	ts := newTestServer(t)
-	status, ct, body := getText(t, ts, "/tag/1")
+	status, ct, body := getText(t, ts, "/tags/1")
 	if status != http.StatusOK {
-		t.Fatalf("GET /tag/1 -> %d, want 200", status)
+		t.Fatalf("GET /tags/1 -> %d, want 200", status)
 	}
 	if !strings.Contains(ct, "text/html") {
 		t.Errorf("Content-Type %q, want text/html", ct)
@@ -116,7 +116,7 @@ func TestTagPageRenders(t *testing.T) {
 	if !strings.Contains(body, "tag1") {
 		t.Errorf("the tag page does not name the tag:\n%.400s", body)
 	}
-	if !strings.Contains(body, "/work/") {
+	if !strings.Contains(body, "/works/") {
 		t.Error("the tag page lists no works, but the fixture has some")
 	}
 }
@@ -189,7 +189,7 @@ func TestSeedLinksWorkWithoutJavaScript(t *testing.T) {
 	// and all ten buttons were inert. The page looked right and did
 	// nothing. A real link cannot have that failure.
 	ts := newTestServer(t)
-	_, _, body := getText(t, ts, "/work/1")
+	_, _, body := getText(t, ts, "/works/1")
 	if strings.Contains(body, "data-seed=") {
 		t.Error("the page still uses a JS-driven seed button")
 	}
@@ -248,13 +248,13 @@ func TestWorkPageEscapesHostileText(t *testing.T) {
 
 func TestPagesRejectNonGET(t *testing.T) {
 	ts := newTestServer(t)
-	resp, err := http.Post(ts.URL+"/work/1", "text/plain", strings.NewReader("x"))
+	resp, err := http.Post(ts.URL+"/works/1", "text/plain", strings.NewReader("x"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("POST /work/1 -> %d, want 405; pages must not accept writes", resp.StatusCode)
+		t.Errorf("POST /works/1 -> %d, want 405; pages must not accept writes", resp.StatusCode)
 	}
 }
 

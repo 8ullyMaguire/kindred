@@ -197,7 +197,7 @@ func TestAnEntityArenaRendersTwoNamedEntities(t *testing.T) {
 	if n := strings.Count(body, "arena-card"); n != 2 {
 		t.Fatalf("rendered %d entity cards, want 2: %s", n, body)
 	}
-	if !strings.Contains(body, "/tag/") {
+	if !strings.Contains(body, "/tags/") {
 		t.Error("an entity card does not link to the entity's own page")
 	}
 	for _, msg := range []string{"too few", "No tag pair"} {

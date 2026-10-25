@@ -71,7 +71,7 @@ func getFeed(t *testing.T, url string) (*feedDoc, string, int) {
 // workURL is the corpus url for a fixture work, empty for the one that tests
 // the minted-link fallback.
 // linkWorkID is the work id a feed link names, in either shape the mirror and
-// kindred emit ("/works/11" and "/work/11").
+// kindred emit ("/works/11" and "/works/11").
 func linkWorkID(link string) (int64, bool) {
 	trimmed := strings.TrimRight(link, "/")
 	i := strings.LastIndex(trimmed, "/")
@@ -138,7 +138,7 @@ func newFeedServer(t *testing.T) *httptest.Server {
 		// No url column: the mirror has works like this, and the feed then has
 		// to MINT one. Without a row like it, the fallback is untested and a
 		// relative link in it survives every assertion (measured: the mutation
-		// to "/work/%d" survived until this row existed).
+		// to "/works/%d" survived until this row existed).
 		{15, "No url in the mirror", "01 Jan 2020"},
 	}
 	for _, r := range rows {
@@ -182,9 +182,9 @@ func newFeedServer(t *testing.T) *httptest.Server {
 func TestFeedTagIsAWellFormedFeedInChronologicalOrder(t *testing.T) {
 	ts := newFeedServer(t)
 
-	doc, raw, code := getFeed(t, ts.URL+"/feed/tag/1")
+	doc, raw, code := getFeed(t, ts.URL+"/feed/tags/1")
 	if code != http.StatusOK {
-		t.Fatalf("GET /feed/tag/1 -> %d\n%s", code, raw)
+		t.Fatalf("GET /feed/tags/1 -> %d\n%s", code, raw)
 	}
 	if doc.Version != "2.0" {
 		t.Fatalf("rss version = %q, want 2.0", doc.Version)
@@ -216,7 +216,7 @@ func TestFeedTagIsAWellFormedFeedInChronologicalOrder(t *testing.T) {
 
 func TestFeedTagItemsCarryAbsoluteResolvableLinks(t *testing.T) {
 	ts := newFeedServer(t)
-	doc, raw, _ := getFeed(t, ts.URL+"/feed/tag/1")
+	doc, raw, _ := getFeed(t, ts.URL+"/feed/tags/1")
 	if len(doc.Channel.Items) == 0 {
 		t.Fatalf("no items; link assertions would be vacuous\n%s", raw)
 	}
@@ -235,7 +235,7 @@ func TestFeedTagItemsCarryAbsoluteResolvableLinks(t *testing.T) {
 		if it.GUID.IsPermaLink != "true" {
 			t.Fatalf("guid isPermaLink = %q, want true", it.GUID.IsPermaLink)
 		}
-		if strings.HasSuffix(it.Link, "/work/15") {
+		if strings.HasSuffix(it.Link, "/works/15") {
 			minted++
 		}
 	}
@@ -247,7 +247,7 @@ func TestFeedTagItemsCarryAbsoluteResolvableLinks(t *testing.T) {
 
 func TestFeedTagUnknownTagIs404NotAnEmptyFeed(t *testing.T) {
 	ts := newTestServer(t)
-	_, raw, code := getFeed(t, ts.URL+"/feed/tag/999999")
+	_, raw, code := getFeed(t, ts.URL+"/feed/tags/999999")
 	if code != http.StatusNotFound {
 		t.Fatalf("an unknown tag -> %d, want 404. An empty 200 reads as \"nothing "+
 			"new\", which is a claim about the corpus rather than about the URL", code)
@@ -259,7 +259,7 @@ func TestFeedTagUnknownTagIs404NotAnEmptyFeed(t *testing.T) {
 
 func TestFeedTagContentTypeAndXmlSuffix(t *testing.T) {
 	ts := newFeedServer(t)
-	res, err := http.Get(ts.URL + "/feed/tag/1.xml")
+	res, err := http.Get(ts.URL + "/feed/tags/1.xml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestFeedTagRespectsTheItemBound(t *testing.T) {
 		{"?n=0", 1},
 		{"?n=99999", 5}, // capped: only five works exist
 	} {
-		doc, raw, _ := getFeed(t, ts.URL+"/feed/tag/1"+tc.query)
+		doc, raw, _ := getFeed(t, ts.URL+"/feed/tags/1"+tc.query)
 		if len(doc.Channel.Items) != tc.want {
 			t.Fatalf("%s -> %d items, want %d\n%s", tc.query, len(doc.Channel.Items), tc.want, raw)
 		}
@@ -302,7 +302,7 @@ func TestFeedSeedRanksFromTheSeed(t *testing.T) {
 	// The seed itself is never in its own recommendations.
 	//
 	// Compare the trailing ID, not a suffix: the corpus stores
-	// "…/works/{id}" (plural) while kindred mints "…/work/{id}", so a suffix
+	// "…/works/{id}" (plural) while kindred mints "…/works/{id}", so a suffix
 	// check for one shape silently matches NEITHER and passes whatever the feed
 	// contains. Measured: the Exclude=false mutation survived this assertion
 	// until it read the id.

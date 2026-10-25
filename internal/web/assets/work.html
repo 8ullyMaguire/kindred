@@ -59,7 +59,7 @@
     {{range .Similar}}
       <div class="work">
         <h3>
-          <a href="/work/{{.ID}}">{{.Title}}</a>
+          <a href="/works/{{.ID}}">{{.Title}}</a>
           <span class="score">{{printf "%.2f" .Score}}</span>
         </h3>
         <p class="byline">
@@ -134,7 +134,7 @@
   <ul class="cobookmarks">
     {{range .CoBookmarked}}
     <li>
-      <a href="/work/{{.ID}}">{{.Title}}</a>
+      <a href="/works/{{.ID}}">{{.Title}}</a>
       {{if .Evidence}}<span class="count">{{(index .Evidence 0).Reason}}</span>{{end}}
     </li>
     {{end}}
@@ -165,7 +165,7 @@
      half of the pair is a number the reader has to supply -- and the report is
      rendered IN PLACE, so the reader keeps the work they were reading. */}}
 <h2>How alike is another work?</h2>
-<form method="get" action="/work/{{.Work.ID}}" class="compare">
+<form method="get" action="/works/{{.Work.ID}}" class="compare">
   <label for="compare">Compare with work id</label>
   <input type="text" id="compare" name="compare" inputmode="numeric"
          value="{{.CompareID}}" placeholder="e.g. 17249318">
@@ -176,8 +176,8 @@
 {{else if .Compare}}
   <div data-testid="compare-report">
     <p>
-      <a href="/work/{{.Compare.A.ID}}">{{.Compare.A.Title}}</a> and
-      <a href="/work/{{.Compare.B.ID}}">{{.Compare.B.Title}}</a>:
+      <a href="/works/{{.Compare.A.ID}}">{{.Compare.A.Title}}</a> and
+      <a href="/works/{{.Compare.B.ID}}">{{.Compare.B.Title}}</a>:
       <strong>{{printf "%.2f" .Compare.Score}}</strong> alike overall —
       tag overlap {{printf "%.2f" .Compare.TagOverlap}}{{if not .Compare.Missing}},
       embedding cosine {{printf "%.2f" .Compare.EmbedCosine}}{{end}}.
@@ -187,7 +187,7 @@
         the score is what it is:</p>
       <ul class="shared-tags">
         {{range .Compare.SharedTags}}
-        <li><a href="/tag/{{.ID}}">{{.Name}}</a>
+        <li><a href="/tags/{{.ID}}">{{.Name}}</a>
           <span class="count">{{printf "%.2f" .IDF}}</span></li>
         {{end}}
       </ul>
@@ -217,7 +217,7 @@
   <ul class="bridges">
     {{range .Bridges}}
     <li>
-      <a href="/work/{{.ID}}">{{.Title}}</a>
+      <a href="/works/{{.ID}}">{{.Title}}</a>
       <span class="count">also in {{range $i, $f := .OtherFandoms}}{{if $i}}, {{end}}{{$f}}{{end}}</span>
     </li>
     {{end}}

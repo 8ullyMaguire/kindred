@@ -267,7 +267,7 @@ func (d Deps) renderBlock(w http.ResponseWriter, r *http.Request) {
 		page.Blocked = append(page.Blocked, BlockRow{
 			TagID:   bt.TagID,
 			Name:    tagName(d, ctx, bt.TagID),
-			URL:     fmt.Sprintf("/tag/%d", bt.TagID),
+			URL:     fmt.Sprintf("/tags/%d", bt.TagID),
 			Blocked: true,
 		})
 	}
@@ -296,7 +296,7 @@ func (d Deps) renderBlock(w http.ResponseWriter, r *http.Request) {
 		candidates = append(candidates, BlockRow{
 			TagID:  tw.TagID,
 			Name:   tagName(d, ctx, tw.TagID),
-			URL:    fmt.Sprintf("/tag/%d", tw.TagID),
+			URL:    fmt.Sprintf("/tags/%d", tw.TagID),
 			Weight: tw.Weight,
 			N:      tw.N,
 			Reason: fmt.Sprintf("you have chosen against %d works carrying it", tw.N),
@@ -434,7 +434,7 @@ func (d Deps) passedOverTags(ctx context.Context, ownerKey string, minLost int) 
 		out = append(out, BlockRow{
 			TagID:  id,
 			Name:   tagName(d, ctx, id),
-			URL:    fmt.Sprintf("/tag/%d", id),
+			URL:    fmt.Sprintf("/tags/%d", id),
 			Weight: 0,
 			N:      int(count),
 			Reason: fmt.Sprintf("on all %d works you have passed over", count),
@@ -896,7 +896,7 @@ func (d Deps) cards(ctx context.Context, ids ...int64) (*WorkCard, *WorkCard) {
 		c := &WorkCard{
 			ID: id, Title: t[0], Author: t[1], Summary: trim(t[2], 260),
 			Rating: arena.MU_INIT, RD: arena.PHI_INIT,
-			URL: fmt.Sprintf("/work/%d", id),
+			URL: fmt.Sprintf("/works/%d", id),
 		}
 		if row, ok := ratings[id]; ok {
 			c.Rating = round1(row.Rating.Mu)
@@ -993,7 +993,7 @@ func (d Deps) tagLinksForWork(ctx context.Context, workIDs ...int64) map[int64][
 			if !ok {
 				continue
 			}
-			links = append(links, TagLink{Name: name, URL: fmt.Sprintf("/tag/%d", t)})
+			links = append(links, TagLink{Name: name, URL: fmt.Sprintf("/tags/%d", t)})
 		}
 		out[work] = links
 	}
@@ -1052,7 +1052,7 @@ func (d Deps) renderLeaderboard(w http.ResponseWriter, r *http.Request) {
 			Rating: round1(e.Rating.Mu), Effective: round1(e.Effective),
 			RD: round1(e.Rating.Phi), Comparisons: e.Comparisons,
 			Wins: e.Wins, Losses: e.Losses, Draws: e.Draws,
-			URL: fmt.Sprintf("/work/%d", e.WorkID),
+			URL: fmt.Sprintf("/works/%d", e.WorkID),
 		}
 	}
 	q := `SELECT id, COALESCE(title,''), COALESCE(authors,'') FROM works WHERE id IN (?` +
@@ -1299,7 +1299,7 @@ func (d Deps) renderRank(w http.ResponseWriter, r *http.Request, idStr string) {
 		return
 	}
 	if !d.hasStore() {
-		// After the parse, like /work/{id} and /tag/{slug}: a non-numeric id
+		// After the parse, like /works/{id} and /tags/{slug}: a non-numeric id
 		// is a 404 on a healthy server and a broken one alike, and this guard
 		// is about the server.
 		d.fail(w, r, http.StatusServiceUnavailable, errNoStore)
@@ -1309,7 +1309,7 @@ func (d Deps) renderRank(w http.ResponseWriter, r *http.Request, idStr string) {
 	page := RankPage{
 		Base:    d.baseOf(r, "Rank", "Arena rating"),
 		WorkID:  id,
-		WorkURL: fmt.Sprintf("/work/%d", id),
+		WorkURL: fmt.Sprintf("/works/%d", id),
 	}
 
 	row, err := d.Engine.Store.Rating(ctx, id)
@@ -1390,14 +1390,14 @@ func (d Deps) renderMyRanking(w http.ResponseWriter, r *http.Request) {
 	for _, id := range likedIDs {
 		likedLinks = append(likedLinks, TagLink{
 			Name: tagName(d, ctx, id),
-			URL:  fmt.Sprintf("/tag/%d", id),
+			URL:  fmt.Sprintf("/tags/%d", id),
 		})
 	}
 	var dislikedLinks []TagLink
 	for _, id := range dislikedIDs {
 		dislikedLinks = append(dislikedLinks, TagLink{
 			Name: tagName(d, ctx, id),
-			URL:  fmt.Sprintf("/tag/%d", id),
+			URL:  fmt.Sprintf("/tags/%d", id),
 		})
 	}
 	page.Liked = likedLinks
@@ -1614,7 +1614,7 @@ func entityURL(kind arena.EntityKind, id int64, name string) string {
 	if kind == arena.KindAuthor {
 		return "/author/" + url.PathEscape(name)
 	}
-	return "/tag/" + strconv.FormatInt(id, 10)
+	return "/tags/" + strconv.FormatInt(id, 10)
 }
 
 // renderArenaKind serves the arena for every kind that is not a work.

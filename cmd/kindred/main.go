@@ -95,6 +95,8 @@ func main() {
 		err = runCorpusQuery(ctx, config.Load().CorpusDB, args)
 	case "browse":
 		err = runBrowse(ctx, config.Load().CorpusDB, args)
+	case "harvest":
+		err = runHarvest(ctx, args)
 	case "seasons":
 		err = runSeasons(ctx, args)
 	case "worktree":

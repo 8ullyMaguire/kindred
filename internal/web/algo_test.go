@@ -74,7 +74,7 @@ func TestTheAlgoPageRanksOneSeedThroughTwoAlgorithms(t *testing.T) {
 	if !strings.Contains(body, "quality") {
 		t.Fatalf("the differing signal is not named")
 	}
-	if n := strings.Count(body, "/work/"); n == 0 {
+	if n := strings.Count(body, "/works/"); n == 0 {
 		t.Fatalf("neither column links a work")
 	}
 }

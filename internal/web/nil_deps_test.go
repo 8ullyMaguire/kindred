@@ -4,7 +4,7 @@ package web
 //
 // Every page must answer with a status and a reason when a dependency is
 // missing -- never take the process down. Three corpus pages already did this;
-// /search and /work/{id} panicked. These tests pin the whole set, and the
+// /search and /works/{id} panicked. These tests pin the whole set, and the
 // mutation gate is what makes them worth having: `hasCorpus() { return true }`
 // must fail them.
 
@@ -94,7 +94,7 @@ func TestPagesDegradeInsteadOfPanickingWhenTheCorpusIsMissing(t *testing.T) {
 		{"/crawl", http.StatusOK, "a deployment with no queue must explain itself, not 503"},
 		// These four cannot work without the corpus, and each must say so.
 		{"/search?q=x", http.StatusServiceUnavailable, "a search that cannot search must not read as 'nothing matched'"},
-		{"/work/1", http.StatusServiceUnavailable, "must not 404: that claims the work does not exist"},
+		{"/works/1", http.StatusServiceUnavailable, "must not 404: that claims the work does not exist"},
 		// The family half answers from the corpus too, and an empty result on a
 		// corpus-less deployment would read as "no work matched", which is a
 		// claim about data nobody has.
@@ -137,7 +137,7 @@ func TestAnEngineWithoutACorpusAlsoDegrades(t *testing.T) {
 	// so it is the half a test is most likely to leave unverified.
 	d := Deps{Version: "test", Engine: &engine.Engine{}}
 
-	for _, path := range []string{"/search?q=x", "/work/1"} {
+	for _, path := range []string{"/search?q=x", "/works/1"} {
 		t.Run(path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			func() {

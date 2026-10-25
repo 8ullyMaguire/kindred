@@ -22,7 +22,7 @@
     {{range .Rows}}
       <div class="work">
         <h3>
-          <a href="/work/{{.WorkID}}">{{.Label}}</a>
+          <a href="/works/{{.WorkID}}">{{.Label}}</a>
           <span class="score">{{printf "%.4f" .Score}}</span>
         </h3>
         {{if .Note}}<p class="summary">{{.Note}}</p>{{end}}

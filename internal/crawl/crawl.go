@@ -118,6 +118,31 @@ func NewHTTPClient(base string) *HTTPClient {
 	}
 }
 
+// WithTimeout overrides the per-request timeout.
+//
+// 60s is right for a work page (~90KB) and too short for a media fandom list (1.3MB, measured
+// 2026-10-25: one request came back as "context deadline exceeded" and took the whole catalogue
+// read with it). A caller fetching a handful of very large pages says so here.
+func (c *HTTPClient) WithTimeout(d time.Duration) *HTTPClient {
+	if d > 0 {
+		c.http.Timeout = d
+	}
+	return c
+}
+
+// WithDelay overrides the delay between requests.
+//
+// The default is 30s, taken from robots.txt when it states one and used as a conservative
+// fallback when it does not (AO3's file states a delay only for Slurp). A caller that has decided
+// a different pace -- a harvest that knows it will make 20,000 requests and would rather make
+// them at 4s than at 30s -- says so here rather than reaching into the field.
+func (c *HTTPClient) WithDelay(d time.Duration) *HTTPClient {
+	if d > 0 {
+		c.delay = d
+	}
+	return c
+}
+
 // resolve turns a crawl target into an absolute URL.
 //
 // The subtlety that cost a measured 2m37s: an absolute URL used to be used

@@ -116,7 +116,7 @@ func TestTagTasteBlendBringsUntaggedWorks(t *testing.T) {
 	ts := newTasteServer(t)
 	defer ts.Close()
 
-	body := getPage(t, ts, "/tag/1")
+	body := getPage(t, ts, "/tags/1")
 
 	// 1. The blend ran and says it did.
 	if !strings.Contains(body, `data-testid="taste-note"`) {
@@ -154,7 +154,7 @@ func TestTagTasteBlendBringsUntaggedWorks(t *testing.T) {
 
 	// 6. Work 9 is absent from the exact list: sort=kudos must not contain
 	//    it, proving the two views are really different queries.
-	exact := getPage(t, ts, "/tag/1?sort=kudos")
+	exact := getPage(t, ts, "/tags/1?sort=kudos")
 	if strings.Contains(exact, ">Frost only<") {
 		t.Error("exact list contains a work that does not carry the tag")
 	}
@@ -169,7 +169,7 @@ func TestTagTasteBlendHonoursFilters(t *testing.T) {
 
 	// work 9 is 9,000 words: under:5000 must remove it from the blend
 	// exactly as it removes it from the exact list.
-	body := getPage(t, ts, "/tag/1?words=under:5000")
+	body := getPage(t, ts, "/tags/1?words=under:5000")
 	if strings.Contains(body, ">Frost only<") {
 		t.Error("blend returned a 9,000-word work under a 5,000-word bound")
 	}

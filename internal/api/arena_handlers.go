@@ -41,7 +41,7 @@ func (b WorkBrief) toJSON() arenaJSON {
 		Summary: trimSummary(b.Summary),
 		Rating:  round1(b.Rating.Mu), RD: round1(b.Rating.Phi),
 		Rated: b.Rating.Phi < arena.PHI_INIT, Tags: len(b.Tags),
-		WorkURL: fmt.Sprintf("/work/%d", b.ID),
+		WorkURL: fmt.Sprintf("/works/%d", b.ID),
 	}
 }
 
@@ -341,7 +341,7 @@ func (s *Server) handleArenaRank(w http.ResponseWriter, r *http.Request) {
 		"sigma": row.Rating.Sigma, "comparisons": row.Comparisons,
 		"wins": row.Wins, "losses": row.Losses, "draws": row.Draws,
 		"rated":    row.Comparisons > 0,
-		"work_url": fmt.Sprintf("/work/%d", id),
+		"work_url": fmt.Sprintf("/works/%d", id),
 	}
 	if row.Comparisons == 0 {
 		// Say so, rather than reporting 1500.0 as if it were a
@@ -395,7 +395,7 @@ func (s *Server) handleArenaMyRanking(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				continue // a tag the corpus no longer has
 			}
-			out = append(out, map[string]any{"tag_id": id, "name": n, "url": "/tag/" + strconv.FormatInt(id, 10)})
+			out = append(out, map[string]any{"tag_id": id, "name": n, "url": "/tags/" + strconv.FormatInt(id, 10)})
 		}
 		return out
 	}
@@ -507,7 +507,7 @@ func (s *Server) titlesFor(r *http.Request, entries []store.LeaderboardEntry) ([
 			Rating: round1(e.Rating.Mu), Effective: round1(e.Effective),
 			RD: round1(e.Rating.Phi), Comparisons: e.Comparisons,
 			Wins: e.Wins, Losses: e.Losses, Draws: e.Draws,
-			WorkURL: fmt.Sprintf("/work/%d", e.WorkID),
+			WorkURL: fmt.Sprintf("/works/%d", e.WorkID),
 		}
 		if t, ok := byID[e.WorkID]; ok {
 			row.Title, row.Author = t[0], t[1]

@@ -42,7 +42,7 @@ func TestSafeReturnToAcceptsLocalPaths(t *testing.T) {
 	for _, v := range []string{
 		"/recommend",
 		"/recommend?seed=ao3_work:26523892&n=20",
-		"/tag/1",
+		"/tags/1",
 		"/arena",
 		"/",
 		"/path/with%20encoding",

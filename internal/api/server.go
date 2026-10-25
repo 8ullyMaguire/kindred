@@ -202,7 +202,7 @@ func (s *Server) Routes() http.Handler {
 	// reader's subscription list, a browser's search-engine list. They live on
 	// this mux rather than with the pages because nothing here renders HTML, and
 	// guardAPI sends them here for the same reason.
-	mux.HandleFunc("GET /feed/tag/{id}", s.handleFeedTag)
+	mux.HandleFunc("GET /feed/tags/{id}", s.handleFeedTag)
 	mux.HandleFunc("GET /feed/seed/{kind}/{id}", s.handleFeedSeed)
 	mux.HandleFunc("GET /opensearch.xml", s.handleOpenSearch)
 

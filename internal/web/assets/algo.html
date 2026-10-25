@@ -81,7 +81,7 @@
     {{range .Merged}}
       <li data-arm="{{.Arm}}" data-testid="interleaved-item">
         <span class="arm">{{.Arm}}</span>
-        <a href="/work/{{.ID}}">{{.Title}}</a>
+        <a href="/works/{{.ID}}">{{.Title}}</a>
         <span class="score">{{printf "%.2f" .Score}}</span>
       </li>
     {{end}}
@@ -186,7 +186,7 @@
     <ol class="duels">
       {{range .Duels}}
         <li data-testid="explain-duel" data-work="{{.WorkID}}">
-          <h3><a href="/work/{{.WorkID}}">{{.Title}}</a></h3>
+          <h3><a href="/works/{{.WorkID}}">{{.Title}}</a></h3>
           <div class="algo-pair">
             {{range .Sentence}}
               <div class="algo-column" data-kind="{{.Kind}}">
@@ -241,7 +241,7 @@
         <ol class="algo-items">
           {{range .Left}}
             <li>
-              <a href="/work/{{.ID}}">{{.Title}}</a>
+              <a href="/works/{{.ID}}">{{.Title}}</a>
               <span class="score">{{printf "%.2f" .Score}}</span>
             </li>
           {{end}}
@@ -253,7 +253,7 @@
         <ol class="algo-items">
           {{range .Right}}
             <li>
-              <a href="/work/{{.ID}}">{{.Title}}</a>
+              <a href="/works/{{.ID}}">{{.Title}}</a>
               <span class="score">{{printf "%.2f" .Score}}</span>
             </li>
           {{end}}

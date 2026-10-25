@@ -118,7 +118,7 @@ func TestTheAuthorPageSaysHowMuchOfTheShelfIsRead(t *testing.T) {
 	// The read works must still be IN the unfiltered list: the page reports
 	// progress, it does not silently hide what you have read.
 	for _, id := range ids[:4] {
-		if !strings.Contains(body, "/work/"+itoaInt(id)+`"`) {
+		if !strings.Contains(body, "/works/"+itoaInt(id)+`"`) {
 			t.Errorf("work %d is missing from the unfiltered list: reporting progress must not "+
 				"be a filter in disguise", id)
 		}
@@ -144,11 +144,11 @@ func TestTheUnreadFilterShowsOnlyWhatIsLeft(t *testing.T) {
 		t.Fatalf("the list is filtered but does not say so:\n%s", headOf(body, 700))
 	}
 	for _, id := range ids[:4] {
-		if strings.Contains(body, "/work/"+itoaInt(id)+`"`) {
+		if strings.Contains(body, "/works/"+itoaInt(id)+`"`) {
 			t.Errorf("work %d is marked read and still listed under ?unread=1", id)
 		}
 	}
-	if !strings.Contains(body, "/work/"+itoaInt(ids[4])+`"`) {
+	if !strings.Contains(body, "/works/"+itoaInt(ids[4])+`"`) {
 		t.Errorf("an unread work %d is missing from the filtered list", ids[4])
 	}
 	// Two numbers, two meanings, and confusing them is the defect:

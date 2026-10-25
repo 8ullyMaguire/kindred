@@ -73,7 +73,7 @@ func TestFamilySearchAnswersOnTheSearchPage(t *testing.T) {
 	if !strings.Contains(body, `data-testid="family-works"`) {
 		t.Error("no family rows rendered")
 	}
-	if !strings.Contains(body, `href="/work/`) {
+	if !strings.Contains(body, `href="/works/`) {
 		t.Error("the family rows do not link to work pages")
 	}
 	if !strings.Contains(body, "730 days") {

@@ -39,7 +39,7 @@ func TestGuardAPISendsTheAPIPathsToTheAPIHandler(t *testing.T) {
 		// Feeds and the search descriptor are XML served by the API mux. Sent to
 		// the page router they fall through to an HTML 404, so a working feed
 		// reads as a missing one.
-		"/feed/tag/29", "/feed/tag/29.xml", "/feed/seed/ao3_work/17249318",
+		"/feed/tags/29", "/feed/tags/29.xml", "/feed/seed/ao3_work/17249318",
 		"/opensearch.xml",
 		"/healthz", "/stats",
 	} {
@@ -57,7 +57,7 @@ func TestGuardAPISendsTheAPIPathsToTheAPIHandler(t *testing.T) {
 }
 
 func TestGuardAPISendsEverythingElseToThePages(t *testing.T) {
-	for _, path := range []string{"/", "/search", "/work/1", "/arena/judge", "/static/style.css"} {
+	for _, path := range []string{"/", "/search", "/works/1", "/arena/judge", "/static/style.css"} {
 		api, pages := &markerHandler{}, &markerHandler{}
 		d := Deps{}
 		h := d.guardAPI(api, pages)
@@ -161,7 +161,7 @@ func TestRouteRejectsAPostToAReadOnlyPage(t *testing.T) {
 	// Only /profiles and /profile accept a POST, plus the three one-button
 	// forms handled before this gate. Everything else must be a 405 that names
 	// the allowed methods.
-	for _, path := range []string{"/search", "/arena", "/fandoms", "/leaderboard", "/work/1"} {
+	for _, path := range []string{"/search", "/arena", "/fandoms", "/leaderboard", "/works/1"} {
 		rec := httptest.NewRecorder()
 		Deps{}.route(rec, httptest.NewRequest(http.MethodPost, path, nil))
 		if rec.Code != http.StatusMethodNotAllowed {

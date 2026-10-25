@@ -11,14 +11,14 @@ import (
 	"testing"
 )
 
-// TestUnknownWorkQueuesBackgroundCrawl: /work/<missing> 404s AND queues the
+// TestUnknownWorkQueuesBackgroundCrawl: /works/<missing> 404s AND queues the
 // work for the background crawler. The 404 is the honest answer today; the
 // queue is why it stops being one.
 func TestUnknownWorkQueuesBackgroundCrawl(t *testing.T) {
 	ts, s := newTestServerWithStore(t)
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/work/999999")
+	resp, err := http.Get(ts.URL + "/works/999999")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestUnknownWorkQueuesBackgroundCrawl(t *testing.T) {
 	}
 
 	// A second hit on the same 404 must not duplicate the row.
-	resp2, err := http.Get(ts.URL + "/work/999999")
+	resp2, err := http.Get(ts.URL + "/works/999999")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -230,7 +230,7 @@ var errNoStore = errors.New("the store is not available on this server")
 //
 // renderFandoms, renderUnderrated and renderSurprise already answer 503 when
 // their corpus dependency is missing (see the `d.CorpusQuery == nil` branch in
-// each). /search and /work/{id} dereferenced d.Engine unconditionally and
+// each). /search and /works/{id} dereferenced d.Engine unconditionally and
 // PANICKED instead -- measured, not inferred: a zero Deps answered 503 on the
 // three corpus pages and took the process down on those two.
 //
@@ -274,7 +274,7 @@ func (d Deps) Pages(api http.Handler) http.Handler {
 	// everything else to `pages`, so middleware inside either branch covers
 	// only part of the surface. An earlier version put this in the API
 	// package instead, and a test asserting the header on /, /search,
-	// /work/1 and /arena failed on all four while every /api/ route passed
+	// /works/1 and /arena failed on all four while every /api/ route passed
 	// -- the signature of middleware wired to the wrong layer. It was then
 	// mutation-checked as redundant here and deleted.
 	return withFreshnessHeaders(d, d.guardAPI(api, pages))
@@ -391,6 +391,31 @@ func (d Deps) guardAPI(api http.Handler, pages http.Handler) http.Handler {
 	})
 }
 
+// oldPagePrefix maps a page address this site used to publish onto the AO3-shaped one.
+//
+// Only the two that changed shape are listed. /works/<id> and /tags/<name> are what
+// archiveofourown.org publishes, so a reader who knows the archive already knows how to
+// address anything here -- which is the whole point of copying the shape rather than
+// inventing a nicer one.
+var oldPagePrefixes = [...]struct{ from, to string }{
+	{"/work/", "/works/"},
+	{"/tag/", "/tags/"},
+	{"/work", "/works"}, // bare, no id: the index a reader might type
+	{"/tag", "/tags"},
+}
+
+func oldPagePrefix(path string) (string, bool) {
+	for _, p := range oldPagePrefixes {
+		if path == p.from {
+			return p.to, true
+		}
+		if strings.HasPrefix(path, p.from) && strings.HasSuffix(p.from, "/") {
+			return p.to + strings.TrimPrefix(path, p.from), true
+		}
+	}
+	return "", false
+}
+
 func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 	// The page POSTs first: each is a one-button form a page rendered, and a
 	// form cannot POST to a JSON API and land the reader back on a page. They
@@ -407,6 +432,18 @@ func (d Deps) route(w http.ResponseWriter, r *http.Request) {
 	// dispatch, because the destination is a page and this is not: see
 	// foldedPages.
 	if to, ok := foldedPages[r.URL.Path]; ok {
+		if r.URL.RawQuery != "" {
+			to += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, to, http.StatusMovedPermanently)
+		return
+	}
+
+	// The AO3-shaped address is canonical, and the old one still answers: a link
+	// in someone's notes, a browser history entry or an old deploy gate must not
+	// 404 because the paths changed. A permanent redirect also teaches search
+	// engines which address is the real one.
+	if to, ok := oldPagePrefix(r.URL.Path); ok {
 		if r.URL.RawQuery != "" {
 			to += "?" + r.URL.RawQuery
 		}
@@ -1683,8 +1720,8 @@ func (d Deps) renderWork(w http.ResponseWriter, r *http.Request, idStr string) {
 		// BOTH sentinels mean "not found", from two layers: the corpus has
 		// its own vocabulary and returns corpus.ErrNotFound. Checking only
 		// store.ErrNotFound sent every missing work to the 500 branch --
-		// measured by the browser suite, which found /work/999999999
-		// answering 500 while /work/1 answered 200. A reader following a
+		// measured by the browser suite, which found /works/999999999
+		// answering 500 while /works/1 answered 200. A reader following a
 		// stale link got a server fault instead of "no such work".
 		if errors.Is(err, store.ErrNotFound) ||
 			errors.Is(err, corpus.ErrNotFound) ||
@@ -1853,7 +1890,7 @@ func (d Deps) renderNew(w http.ResponseWriter, r *http.Request) {
 //
 // A page of its own rather than a section on the work page: a walk is ten
 // embedding queries, and the work page already runs a full ranking. Putting it
-// behind /work/{id} would make every work page pay for a feature most readers
+// behind /works/{id} would make every work page pay for a feature most readers
 // never touch.
 func (d Deps) renderPath(w http.ResponseWriter, r *http.Request, arg string) {
 	base := d.baseOf(r, "Reading path", "Reading path")
@@ -1907,8 +1944,8 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 		// panicked, so a tag URL on a server with no corpus closed the
 		// connection instead of answering. Found by the registry's
 		// dispatch test, which asks every declared path for a response and
-		// treats the router's 404/405 as "this page never ran": /work/{id}
-		// had this guard and /tag/{slug}, its sibling, did not.
+		// treats the router's 404/405 as "this page never ran": /works/{id}
+		// had this guard and /tags/{slug}, its sibling, did not.
 		//
 		// The id is parsed first, so a non-numeric tag is still a 404 on a
 		// healthy server and a broken one alike -- "no such tag" is true in
@@ -1936,7 +1973,7 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	// The feed this page offers. Discoverable in the browser via the layout's
 	// rel=alternate link, and visible as a link below, because a subscription is
 	// a thing a reader does ONCE and should not have to know a URL scheme for.
-	page.FeedPath = fmt.Sprintf("/feed/tag/%d", id)
+	page.FeedPath = fmt.Sprintf("/feed/tags/%d", id)
 	page.N = n
 	page.NextN = n * 2
 
@@ -1995,7 +2032,7 @@ func (d Deps) renderTag(w http.ResponseWriter, r *http.Request, idStr string) {
 	// complete / rating / lang, which the API has always honoured and the page
 	// silently ignored. Verified against the live instance before this change:
 	// `/api/v1/ao3/works?complete=true` applied the filter and reported it in
-	// `filters_applied`, while `/tag/29?complete=true` returned the unfiltered
+	// `filters_applied`, while `/tags/29?complete=true` returned the unfiltered
 	// list with no comment. A reader who learned the filters from the API
 	// documentation could not use them in a browser, and nothing said so.
 	//

@@ -25,7 +25,7 @@ import (
 // live instance before this change —
 //
 //	/api/v1/ao3/works?complete=true   -> count 100, applied={'complete':'true'}
-//	/tag/29?complete=true             -> sort control present, no filter UI,
+//	/tags/29?complete=true             -> sort control present, no filter UI,
 //	                                    unfiltered list, no message
 //
 // A reader who learned the filters from the API documentation could not use
@@ -74,7 +74,7 @@ func TestTagCompletionFilterExcludesRows(t *testing.T) {
 		{"complete=2", "1,2,3,4,5,6,7,8"},
 	} {
 		t.Run("?"+c.query, func(t *testing.T) {
-			got := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?"+c.query)))
+			got := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?"+c.query)))
 			if got != c.want {
 				t.Errorf("?%s listed [%s], want [%s] (unfiltered is [1,2,3,4,5,6,7,8])",
 					c.query, got, c.want)
@@ -116,7 +116,7 @@ func TestTagRatingFilterAcceptsBothSpellings(t *testing.T) {
 	} {
 		t.Run("?rating="+c.value, func(t *testing.T) {
 			q := url.Values{"rating": {c.value}}.Encode()
-			got := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?"+q)))
+			got := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?"+q)))
 			if got != c.want {
 				t.Errorf("?rating=%s listed [%s], want [%s]", c.value, got, c.want)
 			}
@@ -139,7 +139,7 @@ func TestTagLanguageFilterExcludesRows(t *testing.T) {
 	} {
 		t.Run("?lang="+c.value, func(t *testing.T) {
 			q := url.Values{"lang": {c.value}}.Encode()
-			got := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?"+q)))
+			got := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?"+q)))
 			if got != c.want {
 				t.Errorf("?lang=%s listed [%s], want [%s]", c.value, got, c.want)
 			}
@@ -170,7 +170,7 @@ func TestTagFiltersCombineAndAreIndependent(t *testing.T) {
 		{"complete=true&rating=E", "8"},
 	} {
 		t.Run("?"+c.query, func(t *testing.T) {
-			got := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?"+c.query)))
+			got := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?"+c.query)))
 			if got != c.want {
 				t.Errorf("?%s listed [%s], want [%s]", c.query, got, c.want)
 			}
@@ -188,7 +188,7 @@ func TestAnUnrecognisedFilterValueSaysSo(t *testing.T) {
 	ts := newSortServer(t)
 	for _, q := range []string{"complete=maybe", "complete=2", "complete=on"} {
 		t.Run("?"+q, func(t *testing.T) {
-			body := getPage(t, ts, "/tag/1?"+q)
+			body := getPage(t, ts, "/tags/1?"+q)
 			if !strings.Contains(body, "is not a completion filter") {
 				t.Errorf("?%s did not explain itself:\\n%s", q, head(body))
 			}
@@ -210,7 +210,7 @@ func TestAnUnknownRatingOrLanguageIsNotAnError(t *testing.T) {
 	ts := newSortServer(t)
 	for _, q := range []string{"rating=Z", "lang=German"} {
 		t.Run("?"+q, func(t *testing.T) {
-			body := getPage(t, ts, "/tag/1?"+q)
+			body := getPage(t, ts, "/tags/1?"+q)
 			if strings.Contains(body, "data-testid=\"filter-error\"") {
 				t.Errorf("?%s is treated as a malformed filter:\\n%s", q, head(body))
 			}
@@ -228,7 +228,7 @@ func TestTheNoMatchesMessageNamesEveryFilter(t *testing.T) {
 	ts := newSortServer(t)
 
 	// completion + rating, no length: both must be named.
-	body := getPage(t, ts, "/tag/1?complete=true&rating=Z")
+	body := getPage(t, ts, "/tags/1?complete=true&rating=Z")
 	if !strings.Contains(body, `data-testid="no-matches"`) {
 		t.Fatalf("expected no-matches:\\n%s", head(body))
 	}
@@ -241,13 +241,13 @@ func TestTheNoMatchesMessageNamesEveryFilter(t *testing.T) {
 
 	// The length filter must still be named when it is the one that excluded
 	// everything, which is the case the original version handled.
-	body = getPage(t, ts, "/tag/1?words=under:900")
+	body = getPage(t, ts, "/tags/1?words=under:900")
 	if !strings.Contains(body, "under 900") && !strings.Contains(body, "900") {
 		t.Errorf("the length filter is not named:\\n%s", head(body))
 	}
 
 	// All four at once.
-	body = getPage(t, ts, "/tag/1?complete=true&rating=Z&lang=Klingon&words=under:900")
+	body = getPage(t, ts, "/tags/1?complete=true&rating=Z&lang=Klingon&words=under:900")
 	for _, want := range []string{"complete", "rating Z", "Klingon"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("with four filters set the message omits %q:\\n%s", want, head(body))
@@ -257,7 +257,7 @@ func TestTheNoMatchesMessageNamesEveryFilter(t *testing.T) {
 	// And with no filter at all it must NOT claim emptiness, because the tag
 	// is not empty. Claiming no matches on an unfiltered tag is the failure
 	// this whole page-level work exists to prevent.
-	if body = getPage(t, ts, "/tag/1"); strings.Contains(body, `data-testid="no-matches"`) {
+	if body = getPage(t, ts, "/tags/1"); strings.Contains(body, `data-testid="no-matches"`) {
 		t.Error("an unfiltered tag page claimed there were no matches")
 	}
 }
@@ -267,7 +267,7 @@ func TestTheNoMatchesMessageNamesEveryFilter(t *testing.T) {
 // cannot see is a filter they will set twice.
 func TestTheControlsRenderTheCurrentSelection(t *testing.T) {
 	ts := newSortServer(t)
-	body := getPage(t, ts, "/tag/1?complete=true&rating=E&lang=French")
+	body := getPage(t, ts, "/tags/1?complete=true&rating=E&lang=French")
 	for _, want := range []string{
 		`<option value="true" selected`,
 		`<option value="E" selected`,
@@ -284,7 +284,7 @@ func TestTheControlsRenderTheCurrentSelection(t *testing.T) {
 // and the label is the name.
 func TestTheRatingControlOffersTheMirrorsRealNames(t *testing.T) {
 	ts := newSortServer(t)
-	body := getPage(t, ts, "/tag/1")
+	body := getPage(t, ts, "/tags/1")
 	for _, want := range []string{
 		"General Audiences", "Teen And Up Audiences", "Mature", "Explicit",
 	} {
@@ -303,7 +303,7 @@ func TestTheRatingControlOffersTheMirrorsRealNames(t *testing.T) {
 	// "Not Rated" is 8,796 rows of the mirror and must be REACHABLE, even
 	// though it is not offered in the control: a reader who knows the term can
 	// ask for it by hand.
-	if got := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?rating=Not+Rated"))); got != "" {
+	if got := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?rating=Not+Rated"))); got != "" {
 		t.Errorf("?rating=Not+Rated matched [%s] on a fixture that has none, "+
 			"so it is being coerced to something", got)
 	}
@@ -325,7 +325,7 @@ func TestTheRatingControlOffersTheMirrorsRealNames(t *testing.T) {
 // `"count":0, "filters_applied":{"tag":"1"}`, which is a confusing way to say
 // "there is no tag called 1". That is the API's own contract and TestTheAPITag
 // FilterTakesANameNotAnID now pins it, because a reader who reads the page's
-// /tag/1 URL and pastes "1" into the API is exactly who will hit it.
+// /tags/1 URL and pastes "1" into the API is exactly who will hit it.
 func TestThePageAgreesWithTheAPI(t *testing.T) {
 	ts := newSortServer(t)
 	for _, query := range []string{
@@ -337,7 +337,7 @@ func TestThePageAgreesWithTheAPI(t *testing.T) {
 		"lang=French&rating=M",
 	} {
 		t.Run("?"+query, func(t *testing.T) {
-			page := joinIDs(sortAsc(workOrder(t, getPage(t, ts, "/tag/1?"+query))))
+			page := joinIDs(sortAsc(workOrder(t, getPage(t, ts, "/tags/1?"+query))))
 			api := joinIDs(sortAsc(apiWorkIDs(t, ts, "/api/v1/ao3/works?tag=dark&limit=100"+amp(query))))
 
 			if page != api {
@@ -370,7 +370,7 @@ func TestThePageAndTheAPIAgreeOnLeniency(t *testing.T) {
 	} {
 		t.Run("?complete="+v, func(t *testing.T) {
 			page := joinIDs(sortAsc(workOrder(t,
-				getPage(t, ts, "/tag/1?complete="+url.QueryEscape(v)))))
+				getPage(t, ts, "/tags/1?complete="+url.QueryEscape(v)))))
 			api := joinIDs(sortAsc(apiWorkIDs(t, ts,
 				"/api/v1/ao3/works?tag=dark&limit=100&complete="+url.QueryEscape(v))))
 			if page != api {
@@ -399,7 +399,7 @@ func TestThePageAndTheAPIAgreeOnLeniency(t *testing.T) {
 			if resp.StatusCode != 400 {
 				t.Errorf("the API accepted ?complete=%q with %d", v, resp.StatusCode)
 			}
-			body := getPage(t, ts, "/tag/1?complete="+url.QueryEscape(v))
+			body := getPage(t, ts, "/tags/1?complete="+url.QueryEscape(v))
 			if !strings.Contains(body, "is not a completion filter") {
 				t.Errorf("the page accepted ?complete=%q silently:\n%s", v, head(body))
 			}
@@ -453,10 +453,10 @@ func apiWorkIDs(t *testing.T, ts *httptest.Server, path string) []int {
 // TestTheAPITagFilterTakesANameNotAnID pins a contract that is easy to get
 // wrong in a way that looks correct.
 //
-// The pages address tags by id (/tag/1) and the API by name (?tag=dark). The
-// page also accepts a name — /tag/dark renders — so a reader who has been
-// looking at /tag/dark in the URL bar will get it right by accident, and
-// someone reading /tag/1 will not.
+// The pages address tags by id (/tags/1) and the API by name (?tag=dark). The
+// page also accepts a name — /tags/dark renders — so a reader who has been
+// looking at /tags/dark in the URL bar will get it right by accident, and
+// someone reading /tags/1 will not.
 //
 // Asserted rather than left to a code comment, because the failure is silent:
 // `?tag=1` returns 200 with `"count":0` and `filters_applied:{"tag":"1"}`,
@@ -475,17 +475,17 @@ func TestTheAPITagFilterTakesANameNotAnID(t *testing.T) {
 			"a name that does not exist and the answer is 0", byID)
 	}
 
-	// The page addresses tags by ID and takes no name: /tag/dark is a 404.
+	// The page addresses tags by ID and takes no name: /tags/dark is a 404.
 	// That makes the mismatch a real trap rather than a cosmetic difference --
 	// the URL a reader is looking at says "1" and the API wants "dark".
-	if got := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?n=100"))); got != "1,2,3,4,5,6,7,8" {
-		t.Errorf("/tag/1 listed [%s], want all eight", got)
+	if got := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?n=100"))); got != "1,2,3,4,5,6,7,8" {
+		t.Errorf("/tags/1 listed [%s], want all eight", got)
 	}
 	// The 404 is an HTML page, so the status code is the thing to assert -- the
 	// first version grepped the body for "404" and failed against a perfectly
 	// correct not-found page that happens not to print its own code.
-	if code, _, _ := getStatus(t, ts, "/tag/dark"); code != 404 {
-		t.Errorf("/tag/dark returned %d, want 404. If the page ever starts "+
+	if code, _, _ := getStatus(t, ts, "/tags/dark"); code != 404 {
+		t.Errorf("/tags/dark returned %d, want 404. If the page ever starts "+
 			"accepting tag NAMES, the API's ?tag= contract becomes the odd one "+
 			"out rather than the page's -- update this comment then.", code)
 	}
@@ -541,7 +541,7 @@ func getStatus(t *testing.T, ts *httptest.Server, path string) (int, string, str
 func TestTheTagPageListsEachWorkOnce(t *testing.T) {
 	ts := newDoubleAttachedServer(t)
 
-	body := getPage(t, ts, "/tag/1?n=100")
+	body := getPage(t, ts, "/tags/1?n=100")
 	ids := workOrder(t, body)
 	if len(ids) != 8 {
 		t.Errorf("the page listed %d rows, want 8 distinct works", len(ids))
@@ -573,7 +573,7 @@ func TestTheTagPageListsEachWorkOnce(t *testing.T) {
 	// attachment it said "the tag has 29 works" while the list held 28 distinct
 	// ones. A page that contradicts itself in two places at once is worse than
 	// one that is merely wrong in one, so the number is asserted here too.
-	empty := getPage(t, ts, "/tag/1?n=100&lang=Klingon")
+	empty := getPage(t, ts, "/tags/1?n=100&lang=Klingon")
 	if !strings.Contains(empty, `data-testid="no-matches"`) {
 		t.Fatalf("expected no-matches for a language the fixture lacks:\n%s", head(empty))
 	}
@@ -586,8 +586,8 @@ func TestTheTagPageListsEachWorkOnce(t *testing.T) {
 			"using COUNT(*) over a duplicated join row:\n%s", head(empty))
 	}
 
-	ct := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?n=100&complete=true")))
-	cf := joinIDs(workOrder(t, getPage(t, ts, "/tag/1?n=100&complete=false")))
+	ct := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?n=100&complete=true")))
+	cf := joinIDs(workOrder(t, getPage(t, ts, "/tags/1?n=100&complete=false")))
 	union := map[int]bool{}
 	for _, id := range append(append([]int{}, idsOf(ct)...), idsOf(cf)...) {
 		union[id] = true

@@ -20,8 +20,8 @@ func TestNavKeyMapsTheAliasesAndPassesEverythingElseThrough(t *testing.T) {
 		{"/search", "/", "the search results are the home page's form action"},
 		{"/profile", "/profiles", "one profile is reached from the profiles list"},
 		{"/crawl", "/crawl", "everything else is itself"},
-		{"/work/12345", "/work/12345", "a work page is reachable from every section"},
-		{"/tag/7", "/tag/7", "so is a tag page, so it marks nothing"},
+		{"/works/12345", "/works/12345", "a work page is reachable from every section"},
+		{"/tags/7", "/tags/7", "so is a tag page, so it marks nothing"},
 		{"/rank/9", "/rank/9", "so is a ranking"},
 	} {
 		if got := navKey(tc.path); got != tc.want {
@@ -140,8 +140,8 @@ func TestAPageMarksItsOwnNavEntry(t *testing.T) {
 	}
 	// And a page the nav does not name marks nothing rather than guessing.
 	rec2 := httptest.NewRecorder()
-	d.route(rec2, httptest.NewRequest(http.MethodGet, "/work/12345", nil))
+	d.route(rec2, httptest.NewRequest(http.MethodGet, "/works/12345", nil))
 	if n := strings.Count(rec2.Body.String(), `class="is-current"`); n != 0 {
-		t.Errorf("/work/1 marked %d nav items current; a work page is reachable from every section", n)
+		t.Errorf("/works/1 marked %d nav items current; a work page is reachable from every section", n)
 	}
 }

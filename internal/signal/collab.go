@@ -143,7 +143,7 @@ func (CollabNormaliser) Normalise(votes map[int64]float64) float64 {
 //
 // The cache key is the seed set plus the limit, because the same seeds at a
 // different neighbour limit produce a different vote set. Memoising it is
-// worth it because /work/N renders a recommendation block and /recommend
+// worth it because /works/N renders a recommendation block and /recommend
 // re-requests the same seeds; the vote set is the expensive part and it does
 // not depend on the candidate pool.
 var collabVoteCache = newLRU[int64](8)

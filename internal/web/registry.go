@@ -176,7 +176,7 @@ func allPages() []pageSpec {
 			},
 			{
 				Template: "work.html",
-				Paths:    []string{"/work/"},
+				Paths:    []string{"/works/"},
 				// A work page is a detail page, and it still renders a list of rows
 				// from a query: its "more like this" section. It had no marker there,
 				// so a work with no neighbours simply showed no section, which reads
@@ -187,7 +187,7 @@ func allPages() []pageSpec {
 			},
 			{
 				Template: "tag.html",
-				Paths:    []string{"/tag/"},
+				Paths:    []string{"/tags/"},
 				Prefix:   true,
 				List:     true,
 				Handler:  func(d Deps, w http.ResponseWriter, r *http.Request, arg string) { d.renderTag(w, r, arg) },
