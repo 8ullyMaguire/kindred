@@ -36,6 +36,64 @@ func (a crawlerFetch) Fetch(ctx context.Context, rawURL string) ([]byte, error) 
 	return a.c.FetchOne(ctx, rawURL)
 }
 
+// patientFetch wraps a fetcher with a circuit breaker, because AO3's failure mode is not "slow",
+// it is "every request answers 525 for twenty minutes at a time" (measured 2026-10-25: the same
+// URL that returned 200 in 5s an hour earlier returned 9KB of Cloudflare error for minutes on
+// end, and a run that kept retrying at full speed spent that time learning nothing).
+//
+// After `limit` consecutive failures it pauses; the pause is the answer to "don't wait on a
+// challenge indefinitely" that does not give up either -- it stops hammering, says so, and tries
+// again, and every URL gets two more attempts after a pause before the caller is told it failed.
+type patientFetch struct {
+	inner  harvest.Fetcher
+	limit  int
+	pause  time.Duration
+	logf   func(format string, args ...any)
+	fails  int
+	pauses int
+}
+
+func (p *patientFetch) Fetch(ctx context.Context, rawURL string) ([]byte, error) {
+	for attempt := 0; ; attempt++ {
+		body, err := p.inner.Fetch(ctx, rawURL)
+		if err == nil {
+			p.fails = 0
+			return body, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		p.fails++
+		if attempt >= 2 {
+			return nil, err
+		}
+		if p.limit > 0 && p.fails >= p.limit {
+			p.pauses++
+			p.logf("  .. %d consecutive fetch failures; pausing %s before retrying (%d pause(s) so far)",
+				p.fails, p.pause, p.pauses)
+			if err := sleepCtx(ctx, p.pause); err != nil {
+				return nil, err
+			}
+			p.fails = 0
+			continue
+		}
+		if err := sleepCtx(ctx, 3*time.Second); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
 func runHarvest(ctx context.Context, args []string) error {
 	fs := newFlagSet("harvest")
 	c := bindConfig(fs)
@@ -58,6 +116,9 @@ func runHarvest(ctx context.Context, args []string) error {
 		quiet       = fs.Bool("quiet", false, "log only per-fandom summaries")
 		enrich      = fs.Bool("enrich", false, "fetch work pages for rows that have no summary (a blurb-only pass leaves these)")
 		enrichMax   = fs.Int("enrich-max", 0, "stop after N enrichments (0 = no limit)")
+		pauseAfter  = fs.Int("pause-after", 8, "consecutive fetch failures before a pause (0 = never)")
+		pauseFor    = fs.Duration("pause", 5*time.Minute, "how long to pause once -pause-after is reached")
+		abortAfter  = fs.Int("abort-after", 10, "stop after N fandoms in a row produce nothing (0 = never)")
 	)
 	c, err := finishConfig(c, fs, args)
 	if err != nil {
@@ -75,7 +136,9 @@ func runHarvest(ctx context.Context, args []string) error {
 		client = client.WithDelay(*delay)
 	}
 	defer client.Close()
-	fetcher := crawlerFetch{crawl.New(client)}
+	fetcher := harvest.Fetcher(crawlerFetch{crawl.New(client)})
+	fetcher = &patientFetch{inner: fetcher, limit: *pauseAfter, pause: *pauseFor,
+		logf: func(f string, a ...any) { fmt.Printf(f+"\n", a...) }}
 
 	if *fetchCat {
 		fmt.Printf("reading %s/media ...\n", base)
@@ -156,7 +219,7 @@ func runHarvest(ctx context.Context, args []string) error {
 	opts := harvest.RunOptions{
 		Base: base, Plan: plan, ByName: byName, Taste: taste, Sink: sink,
 		MaxPages:  *maxPages,
-		WorkPages: *workPages, State: st, StatePath: *statePath,
+		WorkPages: *workPages, State: st, StatePath: *statePath, AbortAfter: *abortAfter,
 		Probe: func(ctx context.Context, id int64) (bool, error) {
 			var n int
 			err := corpus.QueryRowContext(ctx,

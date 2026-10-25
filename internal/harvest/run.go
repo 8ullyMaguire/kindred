@@ -41,6 +41,12 @@ type RunOptions struct {
 	// mirror's copy exists, and re-fetching it would spend a request to learn nothing.
 	Probe func(ctx context.Context, id int64) (bool, error)
 
+	// AbortAfter stops the run after this many consecutive fandoms that produced nothing, which
+	// is what an outage looks like from here. Without it a run walks the whole plan during an
+	// outage, marks every fandom "0/78" and exits having done nothing -- the state file is intact,
+	// but the operator has to notice, and a job left running overnight has done nothing at all.
+	AbortAfter int
+
 	State     *RunState
 	StatePath string
 	// Progress, when set, is called after every saved work.
@@ -156,6 +162,7 @@ func Run(ctx context.Context, f Fetcher, o RunOptions) (*RunReport, error) {
 	})
 
 	rep := &RunReport{}
+	consecEmpty := 0
 	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return rep, err
@@ -175,35 +182,106 @@ func Run(ctx context.Context, f Fetcher, o RunOptions) (*RunReport, error) {
 			continue
 		}
 
-		// Pages are read INCREMENTALLY and the pool is re-ranked after each one, because the
-		// fandom's most-kudos'd works are usually already in the mirror: a run that read its
-		// pages up front and then discovered the top of the list was held would have spent the
-		// pages and still be short. Here a page is only read when the quota is still unmet.
 		picked := o.State.Picked[name]
 		taken := map[int64]bool{}
 		for _, id := range picked {
 			taken[id] = true
 		}
-		saved := o.State.Done[name]
-		var pool []crawl.Blurb
-		for page := 1; page <= o.MaxPages && saved < quota; page++ {
-			if err := ctx.Err(); err != nil {
-				return rep, err
+		res, ferr := fillFandom(ctx, f, o, fan, quota, taken)
+		rep.ListingPages += res.Pages
+		rep.WorkPages += res.WorkPages
+		rep.Saved += res.New
+		rep.AlreadyHeld += res.Held
+		saved := res.Saved
+		if ferr != nil {
+			logf("listing failed for %q: %v", name, ferr)
+			rep.Failed++
+			consecEmpty++
+			if o.AbortAfter > 0 && consecEmpty >= o.AbortAfter {
+				return rep, fmt.Errorf("harvest: %d fandoms in a row produced nothing (last: %v); "+
+					"the archive looks unavailable -- state is saved, rerun to resume", consecEmpty, ferr)
 			}
-			body, ferr := f.Fetch(ctx, listingURL(o.Base, fan.Path, page))
-			rep.ListingPages++
-			if ferr != nil {
-				if page == 1 {
-					logf("listing failed for %q: %v", name, ferr)
-					rep.Failed++
+			continue
+		}
+		if res.Seen > 0 {
+			consecEmpty = 0
+		} else {
+			consecEmpty++
+			if o.AbortAfter > 0 && consecEmpty >= o.AbortAfter {
+				o.State.Save(o.StatePath)
+				return rep, fmt.Errorf("harvest: %d fandoms in a row listed nothing; "+
+					"the archive looks unavailable -- state is saved, rerun to resume", consecEmpty)
+			}
+		}
+		if saved >= quota {
+			o.State.Finished[name] = true
+			if err := o.State.Save(o.StatePath); err != nil {
+				logf("state: %v", err)
+			}
+		} else {
+			if res.Pages > 0 {
+				logf("%q reached %d/%d after %d page(s), %d candidate(s) already held",
+					name, saved, quota, res.Pages, res.Held)
+			}
+			if res.Seen == 0 {
+				rep.Empty = append(rep.Empty, name)
+			}
+		}
+		rep.Works += saved
+	}
+	return rep, nil
+}
+
+// fillFandom brings one fandom up to its quota and returns how many works it now holds.
+//
+// Pages are read INCREMENTALLY and the pool is re-ranked after each one, because a fandom's
+// most-kudos'd works are usually already in the mirror: a run that read its pages up front and
+// then discovered the top of the list was held would have spent the pages and still be short.
+//
+// If the kudos ordering cannot fill the quota -- which is exactly what happens in a big fandom
+// the mirror already covers -- the fandom is retried under `revised_at`. That is not padding: the
+// mirror was built from popular works, so the recently-updated end of a fandom is the end it does
+// NOT have, and a quota left unfilled is a hole in the distribution the plan promised.
+// fillResult is what one fandom's fill did, in the units the report counts.
+type fillResult struct {
+	// Saved is the fandom's total after the fill (cumulative across runs).
+	Saved int
+	// New is what THIS run added, and Held how many candidates were already in the mirror.
+	New, Held int
+	Pages     int
+	WorkPages int
+	// Seen is how many candidate blurbs the listing produced at all, which distinguishes a
+	// fandom with nothing in it from one whose pages were all already held.
+	Seen int
+}
+
+func fillFandom(ctx context.Context, f Fetcher, o RunOptions, fan Fandom, quota int, taken map[int64]bool) (fillResult, error) {
+	var res fillResult
+	saved := o.State.Done[fan.Name]
+	saved = o.State.Done[fan.Name]
+	var pool []crawl.Blurb
+	var firstErr error
+	for _, sortCol := range []string{"kudos_count", "revised_at"} {
+		if saved >= quota {
+			break
+		}
+		for page := 1; page <= o.MaxPages && saved < quota; page++ {
+			if cerr := ctx.Err(); cerr != nil {
+				res.Saved = saved
+				return res, cerr
+			}
+			body, err := f.Fetch(ctx, listingURL(o.Base, fan.Path, page, sortCol))
+			res.Pages++
+			if err != nil {
+				if page == 1 && sortCol == "kudos_count" {
+					firstErr = err
 				}
 				break
 			}
 			blurbs, perr := crawl.ParseListing(body)
 			if perr != nil {
-				if page == 1 {
-					logf("listing unreadable for %q: %v", name, perr)
-					rep.Failed++
+				if page == 1 && sortCol == "kudos_count" {
+					firstErr = perr
 				}
 				break
 			}
@@ -211,6 +289,7 @@ func Run(ctx context.Context, f Fetcher, o RunOptions) (*RunReport, error) {
 				break
 			}
 			pool = append(pool, blurbs...)
+			res.Seen = len(pool)
 			sort.SliceStable(pool, func(i, j int) bool {
 				si, sj := Score(pool[i], o.Taste), Score(pool[j], o.Taste)
 				if si != sj {
@@ -228,64 +307,57 @@ func Run(ctx context.Context, f Fetcher, o RunOptions) (*RunReport, error) {
 				if o.Probe != nil {
 					held, herr := o.Probe(ctx, b.ID)
 					if herr != nil {
-						logf("probe %d: %v", b.ID, herr)
+						if o.Logf != nil {
+							o.Logf("probe %d: %v", b.ID, herr)
+						}
 						continue
 					}
 					if held {
-						rep.AlreadyHeld++
+						res.Held++
 						taken[b.ID] = true
 						continue
 					}
 				}
 				w, werr := workFor(ctx, f, o, b)
 				if werr != nil {
-					logf("work %d: %v", b.ID, werr)
-					rep.Failed++
+					if o.Logf != nil {
+						o.Logf("work %d: %v", b.ID, werr)
+					}
 					taken[b.ID] = true
 					continue
 				}
 				if serr := o.Sink.Save(ctx, w); serr != nil {
-					logf("save %d: %v", b.ID, serr)
-					rep.Failed++
+					if o.Logf != nil {
+						o.Logf("save %d: %v", b.ID, serr)
+					}
 					taken[b.ID] = true
 					continue
 				}
 				if o.WorkPages {
-					rep.WorkPages++
+					res.WorkPages++
 				}
 				saved++
-				rep.Saved++
+				res.New++
 				taken[b.ID] = true
-				o.State.Picked[name] = append(o.State.Picked[name], b.ID)
-				o.State.Done[name] = saved
+				o.State.Picked[fan.Name] = append(o.State.Picked[fan.Name], b.ID)
+				o.State.Done[fan.Name] = saved
 				o.State.Saved++
 				if o.Progress != nil {
 					o.Progress(fan, saved, quota, b.ID)
 				}
 				// Checkpoint every work: a harvest is measured in hours and a state file that
 				// only lands at a fandom boundary is a state file that loses an hour of manners.
-				if err := o.State.Save(o.StatePath); err != nil {
-					logf("state: %v", err)
+				if err := o.State.Save(o.StatePath); err != nil && o.Logf != nil {
+					o.Logf("state: %v", err)
 				}
 			}
 		}
-		if len(pool) == 0 {
-			// No candidates at all is a hole in a distributed harvest; nothing saved because
-			// everything on the pages was already held is not, and saying so would make the
-			// report look like a broken fandom when it is a complete one.
-			rep.Empty = append(rep.Empty, name)
-		}
-		if saved >= quota {
-			o.State.Finished[name] = true
-			if err := o.State.Save(o.StatePath); err != nil {
-				logf("state: %v", err)
-			}
-		} else {
-			logf("%q reached %d/%d from %d page(s)", name, saved, quota, o.MaxPages)
-		}
-		rep.Works += saved
 	}
-	return rep, nil
+	res.Saved = saved
+	if firstErr != nil && saved == 0 {
+		return res, firstErr
+	}
+	return res, nil
 }
 
 // listingURL is AO3's works listing for a tag, sorted by kudos.
@@ -293,12 +365,12 @@ func Run(ctx context.Context, f Fetcher, o RunOptions) (*RunReport, error) {
 // The sort parameters are load-bearing and were measured: `sort_column=kudos` answers a syntax
 // error page, the site's own value is `kudos_count`, and sending sort_column WITHOUT
 // sort_direction gets a 525 from Cloudflare. With both, twenty blurbs.
-func listingURL(base, path string, page int) string {
+func listingURL(base, path string, page int, sortCol string) string {
 	v := url.Values{}
-	v.Set("work_search[sort_column]", "kudos_count")
+	v.Set("work_search[sort_column]", sortCol)
 	v.Set("work_search[sort_direction]", "desc")
 	v.Set("page", fmt.Sprint(page))
-	return base + "/tags/" + path + "/works?" + v.Encode()
+	return base + "/tags/" + url.PathEscape(path) + "/works?" + v.Encode()
 }
 
 // workFor returns the work to store: the page's own parse when WorkPages is set, otherwise the

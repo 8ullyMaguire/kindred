@@ -34,7 +34,7 @@ func TestParseFandomListCanonicalisesThePath(t *testing.T) {
 	if fs[0].Works != 1234 {
 		t.Fatalf("works = %d", fs[0].Works)
 	}
-	u := listingURL("https://example.test", fs[0].Path, 1)
+	u := listingURL("https://example.test", fs[0].Path, 1, "kudos_count")
 	if strings.Contains(u, "&#39;") || strings.Contains(u, "%2520") {
 		t.Fatalf("listing URL still carries the raw href: %s", u)
 	}
@@ -175,7 +175,7 @@ func TestScorePrefersTasteOverRawPopularity(t *testing.T) {
 // The sort parameters are measured requirements: sort_column=kudos answers a syntax-error page and
 // sort_column without sort_direction answers a Cloudflare 525.
 func TestListingURLUsesTheParametersThatWork(t *testing.T) {
-	u := listingURL("https://example.test", "Haikyuu%21%21", 2)
+	u := listingURL("https://example.test", "Haikyuu!!", 2, "kudos_count")
 	for _, want := range []string{
 		"/tags/Haikyuu%21%21/works?",
 		"work_search%5Bsort_column%5D=kudos_count",
@@ -266,3 +266,50 @@ func TestRunSavesTheQuotaAndResumes(t *testing.T) {
 }
 
 func ptr(n int64) *int64 { return &n }
+
+// The bug this reproduces was measured on Marvel: eight pages of the kudos ordering, every
+// candidate already in the mirror, quota 0/82. The kudos ordering is the end of a fandom the
+// mirror ALREADY has, so retrying it under `revised_at` is what fills the quota.
+func TestFillFandomFallsBackToRecentWhenKudosIsAllHeld(t *testing.T) {
+	ctx := context.Background()
+	fan := Fandom{Name: "Marvel", Path: "Marvel", Media: "Comics", Works: 90000}
+	old := listingWith(101, 102, 103, 104)
+	fresh := listingWith(201, 202, 203, 204)
+	f := &sortFetcher{
+		bySort: map[string]string{"kudos_count": old, "revised_at": fresh},
+	}
+	sink := &memSink{}
+	st := NewRunState()
+	rep, err := Run(ctx, f, RunOptions{
+		Base:   "https://example.test",
+		Plan:   Plan{Target: 2, Floor: 2, Quota: map[string]int{"Marvel": 2}, Total: 2},
+		ByName: map[string]Fandom{"Marvel": fan}, Sink: sink, State: st,
+		WorkPages: false, MaxPages: 1,
+		Probe: func(_ context.Context, id int64) (bool, error) {
+			return id < 200, nil // the mirror has the popular ones, not the recent ones
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rep.Saved != 2 {
+		t.Fatalf("saved %d works, want the quota of 2: the fandom was left unfilled", rep.Saved)
+	}
+	for _, id := range sink.saved {
+		if id < 200 {
+			t.Fatalf("saved held work %d instead of a recent one", id)
+		}
+	}
+}
+
+// sortFetcher serves a different fixture per sort column.
+type sortFetcher struct{ bySort map[string]string }
+
+func (f *sortFetcher) Fetch(_ context.Context, rawURL string) ([]byte, error) {
+	for col, body := range f.bySort {
+		if strings.Contains(rawURL, "sort_column%5D="+col) || strings.Contains(rawURL, "sort_column]="+col) {
+			return []byte(body), nil
+		}
+	}
+	return nil, fmt.Errorf("no fixture for %s", rawURL)
+}
