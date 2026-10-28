@@ -69,6 +69,37 @@ The only long-running command. `full` maps the co-occurrence index and peaks nea
 **168 MiB**; `lite` peaks near **26 MiB**. Both are measured by
 `make budget`, not asserted here.
 
+### Writes are opt-in
+
+kindred has no identity model, so every route that changes state requires a shared
+secret the deployment names in `KINDRED_WRITE_TOKEN` (env-only, like
+`KINDRED_OWNER_SESSION`: it authorises writes, so it must leave a trace). Present it
+either as `X-Kindred-Write-Token: <token>` or as `Authorization: Bearer <token>`:
+
+```bash
+curl -X POST -H "X-Kindred-Write-Token: $KINDRED_WRITE_TOKEN" \
+     http://127.0.0.1:8010/api/v1/arena/batch
+```
+
+| route | what it writes |
+|---|---|
+| `PUT /api/v1/taste` | the session's learned tag weights (import) |
+| `POST /api/v1/arena/compare` | one comparison, which moves the shared ratings |
+| `POST /api/v1/arena/batch` | a rating period over every queued comparison |
+| `POST /api/v1/algo/judge` | an A/B vote between two weight vectors |
+| `POST /api/v1/algo/choice` | the algorithm served for one kind |
+
+Two refusals, because they are different facts:
+
+* **401** — a token is configured and the request did not present it (or presented
+  the wrong one).
+* **503** — no `KINDRED_WRITE_TOKEN` is set, so writes are switched off entirely.
+  A deployment that forgets the variable is not silently writable; it is loudly
+  not writable, and the body names the variable.
+
+Reads are unaffected, and so is `POST /api/v1/recommend`: it is a POST only because
+it decodes a body for the seeds, and it changes no row.
+
 ## `ingest` — build the index
 
 ```bash

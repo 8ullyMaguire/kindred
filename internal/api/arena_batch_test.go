@@ -24,7 +24,14 @@ import (
 // a test failure with a readable message rather than a bare status code.
 func postJSON(t *testing.T, ts *httptest.Server, path string) (int, map[string]any) {
 	t.Helper()
-	resp, err := ts.Client().Post(ts.URL+path, "application/json", nil)
+	resp, err := func() (*http.Response, error) {
+		req, err := http.NewRequest(http.MethodPost, ts.URL+path, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return ts.Client().Do(stampWriteToken(req))
+	}()
 	if err != nil {
 		t.Fatal(err)
 	}

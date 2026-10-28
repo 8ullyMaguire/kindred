@@ -67,6 +67,13 @@ func newTestServer(t *testing.T) *httptest.Server {
 // rows in result set". That reads as a broken session table and is a fixture
 // with nothing to compare.
 func newTestServerFull(t *testing.T) (*httptest.Server, *store.Store) {
+	return newTestServerWithWriteToken(t, testWriteToken)
+}
+
+// newTestServerWithWriteToken builds the fixture server with a named write
+// token. "" is the deployed default and makes every mutating route answer 503,
+// which is what the guard's own tests exercise.
+func newTestServerWithWriteToken(t *testing.T, writeToken string) (*httptest.Server, *store.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.db")
@@ -204,6 +211,10 @@ func newTestServerFull(t *testing.T) (*httptest.Server, *store.Store) {
 		Version:   "test",
 		StartedAt: time.Now().Add(-time.Minute),
 		Lite:      true,
+		// Every fixture server carries the shared secret, so a test that
+		// exercises a write is testing the handler rather than the guard.
+		// The guard's own tests pass "" to see the deployed default.
+		WriteToken: writeToken,
 	}
 	ts := httptest.NewServer(srv.Routes())
 	t.Cleanup(ts.Close)

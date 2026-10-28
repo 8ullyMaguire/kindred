@@ -618,8 +618,12 @@ or moved:
 - All error responses are JSON objects with an `error` field.
 - HTTP status codes:
   - 400: bad request (e.g., missing required parameter).
-  - 401: authentication required (for endpoints that require it, though
-    the public API does not require authentication).
+  - 401: authentication required (for endpoints that require it). Reads are
+    open; every mutating route requires the deployment's shared write token
+    (`KINDRED_WRITE_TOKEN`, `X-Kindred-Write-Token`), because kindred has no
+    identity model to authorise a write with.
+  - 503: the deployment is not configured to serve the request — e.g. a write
+    route when no `KINDRED_WRITE_TOKEN` is set (writes are off, not open).
   - 404: not found (e.g., unknown endpoint or unknown entity ID).
   - 500: internal server error (should not happen; if it does, it is a
     bug).

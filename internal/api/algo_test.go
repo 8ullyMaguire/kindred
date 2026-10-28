@@ -150,11 +150,8 @@ func TestAlgoJudgeRecordsAndStandingsSeeIt(t *testing.T) {
 		t.Fatalf("saving a tune: %v", err)
 	}
 
-	res, err := http.Post(ts.URL+"/api/v1/algo/judge", "application/json",
-		strings.NewReader(`{"seed":"ao3_work:1","a":"default","b":"quality","choice":"b"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := writeJSONRequest(t, http.MethodPost, ts.URL+"/api/v1/algo/judge",
+		`{"seed":"ao3_work:1","a":"default","b":"quality","choice":"b"}`, testWriteToken)
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", res.StatusCode)
@@ -193,11 +190,8 @@ func TestAlgoJudgeRecordsAndStandingsSeeIt(t *testing.T) {
 
 func TestAlgoJudgeRefusesAnUnknownChoice(t *testing.T) {
 	ts := newTestServer(t)
-	res, err := http.Post(ts.URL+"/api/v1/algo/judge", "application/json",
-		strings.NewReader(`{"seed":"ao3_work:1","a":"default","b":"quality","choice":"left"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := writeJSONRequest(t, http.MethodPost, ts.URL+"/api/v1/algo/judge",
+		`{"seed":"ao3_work:1","a":"default","b":"quality","choice":"left"}`, testWriteToken)
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d recording choice \"left\", want 400", res.StatusCode)

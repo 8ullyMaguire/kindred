@@ -158,7 +158,14 @@ func TestConcurrentBatchAndRecommend(t *testing.T) {
 			// Long enough to cross a second boundary, so the next batch is
 			// not skipped and really does swap the map.
 			time.Sleep(1100 * time.Millisecond)
-			br, err := c.Post(ts.URL+"/api/v1/arena/batch", "application/json", nil)
+			br, err := func() (*http.Response, error) {
+				req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/arena/batch", nil)
+				if err != nil {
+					return nil, err
+				}
+				req.Header.Set("Content-Type", "application/json")
+				return c.Do(stampWriteToken(req))
+			}()
 			if err != nil {
 				return
 			}

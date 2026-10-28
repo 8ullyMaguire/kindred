@@ -44,6 +44,28 @@ them and exits non-zero if a change breaks one.
 || `serve` (lite) | 23 MB | 220 MB | — |
 || `recommend` (n=5) | 15 MB | 220 MB | 125 ms avg |
 
+## Writes are opt-in
+
+kindred has no identity model: there is no login, no API key and no user table, and the
+`kindred_arena` cookie is an anonymous identifier rather than an authentication. The
+routes that change state are therefore guarded by one shared secret, `KINDRED_WRITE_TOKEN`,
+which a deployment sets to accept writes at all.
+
+```bash
+KINDRED_WRITE_TOKEN=$(openssl rand -hex 32) kindred serve --corpus … --db …
+
+curl -X POST -H "X-Kindred-Write-Token: $KINDRED_WRITE_TOKEN" \
+     http://127.0.0.1:8010/api/v1/arena/batch
+```
+
+`Authorization: Bearer <token>` works too. With no token configured, writes answer
+**503** naming the variable; with a token configured, a request that does not present
+it answers **401**. Reads never need it — including `POST /api/v1/recommend`, which is
+a POST only because it decodes a body for the seeds. The guarded routes are
+`PUT /api/v1/taste`, `POST /api/v1/arena/compare`, `POST /api/v1/arena/batch`,
+`POST /api/v1/algo/judge` and `POST /api/v1/algo/choice`; `docs/CLI.md` has the table
+and what each one writes.
+
 ## Licence
 
 AGPL-3.0. See [LICENSE](LICENSE).

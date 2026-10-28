@@ -110,7 +110,7 @@ func TestAChoiceIsStoredPerKind(t *testing.T) {
 	client := jarClient(t, ts)
 
 	form := url.Values{"kind": {"ao3_work"}, "algo": {"collab"}}
-	res, err := client.PostForm(ts.URL+"/api/v1/algo/choice", form)
+	res, err := postFormWithToken(t, client, ts.URL+"/api/v1/algo/choice", form)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestAChoiceIsStoredPerKind(t *testing.T) {
 	// The other direction, which is the one that catches a handler that ignores
 	// ?kind=: a choice stored for tags must be stored AS tags. `popular` is live
 	// for both kinds, so the algorithm alone cannot say which row was written.
-	res, err = client.PostForm(ts.URL+"/api/v1/algo/choice", url.Values{"kind": {"ao3_tag"}, "algo": {"popular"}})
+	res, err = postFormWithToken(t, client, ts.URL+"/api/v1/algo/choice", url.Values{"kind": {"ao3_tag"}, "algo": {"popular"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestAChoiceIsStoredPerKind(t *testing.T) {
 	}
 
 	// Clearing returns the reader to the experiment.
-	res, err = client.PostForm(ts.URL+"/api/v1/algo/choice", url.Values{"kind": {"ao3_work"}, "clear": {"1"}})
+	res, err = postFormWithToken(t, client, ts.URL+"/api/v1/algo/choice", url.Values{"kind": {"ao3_work"}, "clear": {"1"}})
 	if err != nil {
 		t.Fatal(err)
 	}

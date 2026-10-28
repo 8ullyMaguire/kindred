@@ -843,13 +843,15 @@ fi
 taste_put=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' -X PUT \
   -H 'content-type: application/json' -d '{"tags":[{"id":1,"weight":0.5}]}' \
   "$TARGET/api/v1/taste" 2>/dev/null) || true
-if [ "$taste_put" = "401" ]; then
-  ok "PUT /api/v1/taste is 401 without a session"
-elif [ -z "$taste_put" ] || [ "$taste_put" = "000" ]; then
-  unreachable=$((unreachable+1)); echo "  UNREACHABLE  PUT /api/v1/taste"
-else
-  bad "PUT /api/v1/taste answered $taste_put without a session; an anonymous import must never write"
-fi
+# 401 when the deployment names a write token and this request did not present it;
+# 503 when it names none, so writes are off entirely. Either is a refusal, and a
+# refusal is what this check is for: the failure it must catch is a 2xx.
+case "$taste_put" in
+  401) ok "PUT /api/v1/taste is 401 without a session or write token" ;;
+  503) ok "PUT /api/v1/taste is 503: this deployment accepts no writes (no KINDRED_WRITE_TOKEN)" ;;
+  ""|000) unreachable=$((unreachable+1)); echo "  UNREACHABLE  PUT /api/v1/taste" ;;
+  *) bad "PUT /api/v1/taste answered $taste_put without a session or token; an anonymous import must never write" ;;
+esac
 # The empty-identifier bug, at the surface where it would have shown: an anonymous request must
 # not be served a vector rather than be handed the shared 'nobody' owner's one.
 check_not "an anonymous export names no tags" "$TARGET/api/v1/taste" '"weight":'

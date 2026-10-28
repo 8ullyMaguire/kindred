@@ -94,6 +94,15 @@ type Server struct {
 	// taste with nothing on the page to suggest it. Set by the caller that
 	// knows both facts, because the Server cannot see the config.
 	OwnerCohort bool
+
+	// WriteToken is the shared secret every mutating route requires, resolved
+	// from KINDRED_WRITE_TOKEN by the caller that builds the Server.
+	//
+	// EMPTY IS THE SAFE AND DEFAULT VALUE, and it means writes are switched
+	// off: the guard answers 503 and names the variable. kindred has no
+	// identity model, so a shared secret is what stands between the shared
+	// ratings and anyone who can reach the port — see writetoken.go.
+	WriteToken string
 }
 
 // ProfileStore is the profile surface the server needs.
@@ -245,7 +254,13 @@ func (s *Server) Routes() http.Handler {
 	//
 	// There is exactly one implementation, in web, at the layer that sees
 	// every response this server produces.
-	api := s.withLogging(s.withRecovery(mux))
+	// The write guard sits inside logging and recovery, so a refusal is
+	// logged like any other response and a panic in the guard cannot drop the
+	// connection. Inside rather than outside: every mutating route is on this
+	// mux, and a guard above the page layer would also have to reason about
+	// the page form POSTs, which are the pages' own writes and are not API
+	// routes at all.
+	api := s.withLogging(s.withRecovery(s.guardWrites(mux)))
 
 	// The HTML frontend wraps the API rather than sitting beside it.
 	//

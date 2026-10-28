@@ -151,6 +151,12 @@ func start(ctx context.Context, dir, listen string) (string, error) {
 		// Unset -- the normal case, including CI -- leaves it false and the pages
 		// stay silent.
 		OwnerCohort: os.Getenv("KINDRED_OWNER_SESSION") != "",
+		// The harness's own browser walk writes through the page forms, not
+		// the API, so it needs no token. It is passed through anyway so a run
+		// that DOES exercise an API write (KINDRED_WRITE_TOKEN=... make e2e)
+		// behaves like the deployment it is imitating rather than refusing
+		// every post with a 503.
+		WriteToken: os.Getenv("KINDRED_WRITE_TOKEN"),
 	}
 
 	// The profile store is a SEPARATE handle on the state db, not a use of the

@@ -62,6 +62,17 @@ type Config struct {
 	// taste (env KINDRED_OWNER_PROFILE, default "leather" — the profile
 	// built from the owner's imported calibre ratings).
 	OwnerProfile string
+
+	// WriteToken is the shared secret the API's mutating routes require (env
+	// KINDRED_WRITE_TOKEN). It is env-only for the same reason OwnerSession
+	// and StableSalt are: it authorises writes, so it must leave a trace
+	// rather than be something any invocation can pass on the command line.
+	//
+	// EMPTY IS A SUPPORTED AND IMPORTANT VALUE: it means this deployment
+	// accepts no writes at all. The mutating routes then answer 503 naming
+	// this variable instead of accepting anonymous posts, which is the safe
+	// default for a public deployment of a read-only recommender.
+	WriteToken string
 }
 
 func env(key, def string) string {
@@ -110,6 +121,11 @@ func Load() *Config {
 		// owner, not a behaviour it inherits silently.
 		OwnerSession: os.Getenv("KINDRED_OWNER_SESSION"),
 		OwnerProfile: env("KINDRED_OWNER_PROFILE", "leather"),
+		// No write token by default. Writes are opt-in for the same reason
+		// owner-weighted ranking is: a deployment that has not said it wants
+		// them must not accept them, and the guard answers 503 naming this
+		// variable rather than taking an anonymous POST.
+		WriteToken: os.Getenv("KINDRED_WRITE_TOKEN"),
 	}
 	c.PublicAPI.Store(env("KINDRED_PUBLIC_API", "1") == "1")
 	if v := env("KINDRED_DEFAULT_BLOCKED_TAGS", ""); v != "" {

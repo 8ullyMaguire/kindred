@@ -274,6 +274,10 @@ func runServe(ctx context.Context, args []string) error {
 		Lite:                 lite,
 		Standing:             standingOrDefault(c),
 		DefaultBlockedTagIDs: defaultBlocked,
+		// Empty means this deployment accepts no writes; the mutating routes
+		// then answer 503. Set KINDRED_WRITE_TOKEN to enable the arena batch,
+		// the taste import and the algorithm choices over HTTP.
+		WriteToken: c.WriteToken,
 	}
 
 	// The profile store is attached here, from the STATE db rather than from

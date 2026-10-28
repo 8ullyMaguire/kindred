@@ -36,6 +36,10 @@ func TestTasteRequiresASession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The token is presented so this test keeps its subject: the HANDLER
+	// refusing an anonymous import. The guard's own refusal is covered in
+	// writetoken_test.go.
+	stampWriteToken(req)
 	res2, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -61,6 +65,7 @@ func TestTasteImportRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 		req.Header.Set("Content-Type", "application/json")
+		stampWriteToken(req)
 		req.AddCookie(cookie)
 		res, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -165,6 +170,7 @@ func TestTasteImportRefusesBadVectors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			stampWriteToken(req)
 			req.AddCookie(cookie)
 			res, err := http.DefaultClient.Do(req)
 			if err != nil {
