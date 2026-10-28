@@ -66,6 +66,28 @@ a POST only because it decodes a body for the seeds. The guarded routes are
 `POST /api/v1/algo/judge` and `POST /api/v1/algo/choice`; `docs/CLI.md` has the table
 and what each one writes.
 
+## Stack and language policy
+
+Estate default: an axum + Postgres core, a SvelteKit front end, the shared design
+tokens (`rust/commons/ui/tokens`) for anything that draws a UI, and contracts —
+work-manifest v1, OpenAPI, RSS/ActivityPub — between services instead of a shared
+database. The rules that apply to every repo are in
+`10-Projects/estate-master-prompt.md` in the secondbrain vault.
+
+**This repo is a named exception, and the exception is the design.** kindred is a
+static Go binary with no CGO, no ML runtime and no Python, because its whole point
+is fitting in ~220 MB (60 MB lite) on a Pi beside twenty other services — the job
+Concord was taken off its host for. A Rust or SvelteKit rewrite would move it back
+up the memory ladder it was built to come down. It also has **no identity model at
+all**: no users table, no sessions, no login, by design; writes are guarded by a
+shared secret (`KINDRED_WRITE_TOKEN`), and the `kindred_arena` cookie scopes a write
+to one reader rather than authorising one. The corpus is a read-only SQLite mirror,
+so there is no Postgres and no migrations dialect to share.
+
+So: tokens and contracts where they buy something (it publishes a snapshot contract
+and reads the estate's work-manifest vocabulary), and no shared core crates, because
+this repo's stack is what makes it cheap.
+
 ## Licence
 
 AGPL-3.0. See [LICENSE](LICENSE).
