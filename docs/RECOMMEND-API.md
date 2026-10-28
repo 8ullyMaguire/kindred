@@ -8,7 +8,7 @@ own. This document is the contract, so that decision is implementable rather tha
 It already exists, it is a general entity recommender over a read-only local mirror, and it is sized to
 run on modest hardware — so adding a caller costs an HTTP route, not a system. Four other projects
 contain a recommender-shaped hole (stash-box discovery, tessera discovery, blackrep deck ordering,
-lorehaven/darkhold continue-reading) and each would otherwise invent one.
+darkhold continue-reading) and each would otherwise invent one.
 
 ## The split that makes this safe
 
@@ -52,7 +52,7 @@ POST /v1/recommend
 
 ## Migration order for callers
 
-Cheapest first, because the payoff is per-caller: stash-box discovery → tessera discovery → lorehaven
+Cheapest first, because the payoff is per-caller: stash-box discovery → tessera discovery → darkhold
 continue-reading → blackrep deck ordering (last: its policy constraints are the strictest, so it needs
 the most review).
 

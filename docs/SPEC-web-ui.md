@@ -15,7 +15,7 @@ means precisely, because "make it look like AO3" is not a specification.
 
 kindred is currently API-only. `GET /` returns
 `404 {"error":"no route for GET /"}`. Every other site on this host
-(gravity :8007, lorehaven :8008, Concord :8006) serves HTML at `/`. A
+(gravity :8007, darkhold :8008, Concord :8006) serves HTML at `/`. A
 browser pointed at kindred showed nothing, and the reason was not DNS — it
 was that there is no page.
 
