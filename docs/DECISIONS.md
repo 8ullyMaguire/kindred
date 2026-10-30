@@ -256,7 +256,7 @@ Live at https://kindred.polarisocial.xyz, nginx on 8009 -> kindred on
 "Still doesn't show anything" was reported, and I attributed it entirely
 to a missing DNS record. The record genuinely was missing — and it was
 not the cause. `/` returned 404, because kindred was API-only. Gravity,
-Lorehaven and Concord all serve HTML at `/`; comparing what the other
+Darkhold and Concord all serve HTML at `/`; comparing what the other
 sites return would have found it immediately.
 
 **The lesson worth keeping: when a symptom is "nothing shows", check what
