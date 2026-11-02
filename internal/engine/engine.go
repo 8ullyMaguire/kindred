@@ -560,6 +560,21 @@ const DefaultPoolSize = 200
 // the measurement showed 74 MiB with a 1000-strong pool.
 const FullPoolSize = 1000
 
+// npmiMinCount is the co-occurrence floor for signal.TagNPMI.
+//
+// Measured on the mirror (2026-11-02): 7,750,334 co-occurrence edges, of which
+// 5,564,829 (71.8%) have a count of 1 and only 376,786 (4.9%) reach 5; the largest
+// single co-occurrence is 7,502 works. An unfiltered pair is therefore usually one
+// work's coincidence, and nPMI rates a coincidence highly (co=1 on two df=5 tags
+// reads about 0.72) -- so the floor, not the normalisation, is what stops a
+// coincidence from becoming an association.
+//
+// 2 is chosen because the filter runs INSIDE the CSR's per-node top-N neighbourhood,
+// which already keeps the highest-count edges: the global 28% figure is not the
+// attrition this number sees. It remains a knob; a verdict that flips between 2 and
+// 5 is not a verdict.
+const npmiMinCount = 2.0
+
 // DefaultTune weights the signals. They are named and overridable, so
 // ranking is configurable without a code change — the property the
 // previous deployment had and generalised here per kind.
@@ -627,6 +642,16 @@ func DefaultTune() rank.Tune {
 			// tag at all and skip, where tag_overlap always has an
 			// opinion. A tune can raise it on a large mirror.
 			"idf_overlap": 0.12,
+			// tag_npmi is a CANDIDATE, not a shipped dimension: it holds the same
+			// kind of evidence as idf_overlap (a shared tag's rarity) plus the
+			// association nPMI can see and IDF cannot, and it is measured against
+			// idf_overlap at a matched weight share before it earns anything.
+			//
+			// The key exists at 0.0 for a mechanical reason: `kindred tune --set`
+			// validates its keys against this map, so a signal absent here cannot
+			// be given a weight by any eval arm -- the arm fails with "unknown
+			// signal" instead of measuring.
+			"tag_npmi": 0.0,
 			// seed_agreement asks a different question from idf_overlap:
 			// latent is the ALS factor space. It ships at 0 -- see the registration
 			// comment: the ablation that decides its weight runs through `--tune als`,
@@ -1924,6 +1949,31 @@ func (e *Engine) signals(ctx context.Context, seeds []rank.Candidate, collabVote
 		MaxTags: 200,
 		DocFreq: docFreq,
 		Total:   corpusTotal,
+	})
+
+	// tag_npmi is the hybrid: rarity for a tag the seeds also carry, association
+	// (nPMI) for one that co-occurs with them more often than chance.
+	//
+	// Registered unconditionally like every other signal here. With no graph or no
+	// frequency table it skips for every candidate and names itself in
+	// meta.degraded[], which is how "this mirror has never been ingested" stays
+	// distinguishable from "the ranking is fine".
+	//
+	// The nil check exists only to keep a TYPED nil (*graph.CSR) out of the
+	// interface: an interface holding a nil pointer is not == nil, so the signal's
+	// own guard would not fire and the first method call would panic.
+	var npmiGraph signal.Graph
+	if e.Graph != nil {
+		npmiGraph = e.Graph
+	}
+	sigs = append(sigs, signal.TagNPMI{
+		G:              npmiGraph,
+		DocFreq:        docFreq,
+		Total:          corpusTotal,
+		SeedTags:       seedTags,
+		NeighbourLimit: e.TopN,
+		MinCount:       npmiMinCount,
+		MaxTags:        200,
 	})
 
 	// length_fit prefers works whose LENGTH is close to the seeds' median, in log
