@@ -147,14 +147,16 @@ func runEval(ctx context.Context, args []string) error {
 		alsHonest = fs.Bool("als-honest", false,
 			"retrain the ALS factors on the TRAINING split only before scoring, so the "+
 				"latent signal cannot recognise the held-out bookmarks it was trained on")
-		n        = fs.Int("n", eval.DefaultK, "recommendation depth (K) to measure at")
-		users    = fs.Int("users", 0, "evaluate at most this many readers (0 = every reader; a full run is minutes, not seconds)")
-		asJSON   = fs.Bool("json", false, "print the report as JSON")
-		pool     = fs.Int("pool", 0, "candidate pool size (0 = the mode's default)")
-		lite     = fs.Bool("lite", c.Mode == "lite", "skip the embedding signal (set from --mode lite)")
-		tune     = fs.String("tune", "", "weight tune to evaluate (see `kindred tune --list`; empty = the built-in default)")
-		probe    = fs.Int("pool-depth", 0, "also measure candidate-generation recall at this depth (0 = off)")
-		poolMode = fs.String("pool-mode", engine.DefaultPoolMode.String(), "candidate sources: tags, tags+collab, tags+embed, tags+collab+embed")
+		n           = fs.Int("n", eval.DefaultK, "recommendation depth (K) to measure at")
+		users       = fs.Int("users", 0, "evaluate at most this many readers (0 = every reader; a full run is minutes, not seconds)")
+		asJSON      = fs.Bool("json", false, "print the report as JSON")
+		pool        = fs.Int("pool", 0, "candidate pool size (0 = the mode's default)")
+		lite        = fs.Bool("lite", c.Mode == "lite", "skip the embedding signal (set from --mode lite)")
+		tune        = fs.String("tune", "", "weight tune to evaluate (see `kindred tune --list`; empty = the built-in default)")
+		probe       = fs.Int("pool-depth", 0, "also measure candidate-generation recall at this depth (0 = off)")
+		poolMode    = fs.String("pool-mode", engine.DefaultPoolMode.String(), "candidate sources: tags, tags+collab, tags+embed, tags+collab+embed")
+		neighMetric = fs.String("neighbour-metric", engine.NeighbourMetricPMI,
+			"association weight for the neighbourhood signal: pmi (saturated, shipped) or npmi (bounded)")
 
 		lambda = fs.Float64("lambda", 0, "relevance vs diversity for the MMR pass (0 = engine default 0.75; 1 = no diversification). Changing it is how the diversity numbers in eval_runs earn their keep")
 	)
@@ -169,6 +171,10 @@ func runEval(ctx context.Context, args []string) error {
 		return fmt.Errorf("--n must be positive, got %d", *n)
 	}
 	pmode, err := engine.ParsePoolMode(*poolMode)
+	if err != nil {
+		return err
+	}
+	nmode, err := engine.ParseNeighbourMetric(*neighMetric)
 	if err != nil {
 		return err
 	}
@@ -233,7 +239,8 @@ func runEval(ctx context.Context, args []string) error {
 	eng := &engine.Engine{
 		Store: s, Corpus: ao3, Graph: g, Collab: collabIdx,
 		PoolSize: *pool, TopN: c.TopN, Lite: *lite, EmbedDim: c.EmbedDim,
-		DocFreq: docFreq,
+		DocFreq:         docFreq,
+		NeighbourMetric: nmode,
 		// The summary term table, loaded for the same reason docFreq is: an evaluation that
 		// silently skips a signal measures a different recommender from the one serving.
 		SummaryDocFreq: summaryDocFreq,
@@ -277,6 +284,9 @@ func runEval(ctx context.Context, args []string) error {
 
 	if *tune != "" {
 		fmt.Printf("evaluating tune %q\n", *tune)
+	}
+	if nmode != engine.NeighbourMetricPMI {
+		fmt.Printf("neighbourhood metric %q\n", nmode)
 	}
 	if *lambda < 0 || *lambda > 1 {
 		return fmt.Errorf("--lambda must be between 0 and 1, got %v", *lambda)

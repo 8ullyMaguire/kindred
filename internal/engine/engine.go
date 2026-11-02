@@ -39,6 +39,11 @@ type Engine struct {
 	DocFreq *corpus.DocFreq
 	Graph   *graph.CSR
 
+	// NeighbourMetric selects the association weight the neighbourhood signal
+	// scores: "pmi" (the shipped saturated behaviour) or "npmi" (bounded). Empty
+	// means pmi. It is a field so an ablation is a flag rather than a build.
+	NeighbourMetric string
+
 	// SummaryDocFreq is the term table over `works.summary` (#52), or nil when this mirror
 	// has not been ingested. The summary_style signal SKIPS without it and says so, which is
 	// the same contract DocFreq has for the idf signals.
@@ -574,6 +579,30 @@ const FullPoolSize = 1000
 // attrition this number sees. It remains a knob; a verdict that flips between 2 and
 // 5 is not a verdict.
 const npmiMinCount = 2.0
+
+// NeighbourMetric values: which association weight the neighbourhood signal scores.
+//
+// "pmi" is the shipped behaviour (raw PMI, saturated by NeighbourSaturation);
+// "npmi" normalised PMI, bounded by construction. It is a parsed parameter rather
+// than a free string so an eval arm cannot silently measure the baseline twice.
+const (
+	NeighbourMetricPMI  = "pmi"
+	NeighbourMetricNPMI = "npmi"
+)
+
+// ParseNeighbourMetric normalises a --neighbour-metric value.
+func ParseNeighbourMetric(s string) (string, error) {
+	switch strings.TrimSpace(strings.ToLower(s)) {
+	case "":
+		return NeighbourMetricPMI, nil
+	case "pmi":
+		return NeighbourMetricPMI, nil
+	case "npmi":
+		return NeighbourMetricNPMI, nil
+	}
+	return NeighbourMetricPMI, fmt.Errorf(
+		"neighbour_metric %q is not a metric; use neighbour_metric=pmi or npmi", s)
+}
 
 // DefaultTune weights the signals. They are named and overridable, so
 // ranking is configurable without a code change — the property the
@@ -1790,6 +1819,7 @@ func (e *Engine) signals(ctx context.Context, seeds []rank.Candidate, collabVote
 			SeedTags:       seedTags,
 			TotalWorks:     e.totalWorks(),
 			NeighbourLimit: topN,
+			Metric:         e.NeighbourMetric,
 		})
 	}
 	sigs = append(sigs, signal.Quality{}, signal.Recency{Now: nowDays()}, signal.Popularity{})
