@@ -266,6 +266,37 @@ type Option func(*config)
 
 type config struct {
 	poolDepth int
+	userSink  func(UserResult)
+}
+
+// UserResult is one evaluated reader's outcome.
+//
+// It exists because the stored run keeps per-POSITION aggregates and per-slice
+// counts only: with those, "0.1063 vs 0.1071" cannot be tested, and at 37 readers
+// those two numbers are the same number. A dump of per-reader values is what makes a
+// paired bootstrap — and therefore a verdict — possible.
+type UserResult struct {
+	User     int64   `json:"user"`
+	HeldOut  int     `json:"held_out"`
+	Hits     int     `json:"hits"`
+	Recall   float64 `json:"recall"`
+	NDCG     float64 `json:"ndcg"`
+	PoolHits int     `json:"pool_hits,omitempty"`
+	Coverage float64 `json:"coverage"`
+}
+
+// WithUserSink records every evaluated reader's outcome, in the order the readers are
+// scored. The sink is called synchronously inside the loop, so a caller that writes to
+// a file must not block: one JSON line per reader is the intended use.
+func WithUserSink(fn func(UserResult)) Option {
+	return func(c *config) { c.userSink = fn }
+}
+
+func boolFloat(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // WithPoolDepth asks for the candidate-generation measurement as well as the
@@ -511,6 +542,17 @@ func Run(ctx context.Context, rec Recommender, split Split, k int, opts ...Optio
 		ndcgSum += dcg / idealDCG(len(test), k)
 		if hits > 0 {
 			rep.Coverage++
+		}
+		if cfg.userSink != nil {
+			cfg.userSink(UserResult{
+				User:     user,
+				HeldOut:  len(test),
+				Hits:     hits,
+				Recall:   float64(hits) / float64(len(test)),
+				NDCG:     dcg / idealDCG(len(test), k),
+				PoolHits: poolHits,
+				Coverage: boolFloat(hits > 0),
+			})
 		}
 		// Intra-list diversity over the same first-k ids the ranking metrics
 		// use. A failure here does NOT fail the reader: the recall number is

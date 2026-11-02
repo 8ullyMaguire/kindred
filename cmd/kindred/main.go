@@ -116,6 +116,8 @@ func main() {
 		err = runAuthorEval(ctx, args)
 	case "eval":
 		err = runEval(ctx, args)
+	case "evalcmp":
+		err = runEvalCmp(ctx, args)
 	case "stats":
 		err = runStats(ctx, args)
 	case "dump":

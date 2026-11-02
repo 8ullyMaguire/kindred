@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -157,6 +158,8 @@ func runEval(ctx context.Context, args []string) error {
 		poolMode    = fs.String("pool-mode", engine.DefaultPoolMode.String(), "candidate sources: tags, tags+collab, tags+embed, tags+collab+embed")
 		neighMetric = fs.String("neighbour-metric", engine.NeighbourMetricPMI,
 			"association weight for the neighbourhood signal: pmi (saturated, shipped) or npmi (bounded)")
+		dumpUsers = fs.String("dump-users", "",
+			"write one JSON line per evaluated reader to this file, for `kindred evalcmp`")
 
 		lambda = fs.Float64("lambda", 0, "relevance vs diversity for the MMR pass (0 = engine default 0.75; 1 = no diversification). Changing it is how the diversity numbers in eval_runs earn their keep")
 	)
@@ -347,6 +350,23 @@ func runEval(ctx context.Context, args []string) error {
 	var runOpts []eval.Option
 	if *probe > 0 {
 		runOpts = append(runOpts, eval.WithPoolDepth(*probe))
+	}
+	// The per-reader dump, when asked for. It is what makes two runs comparable:
+	// the stored report keeps aggregates only, so a paired bootstrap needs these.
+	if *dumpUsers != "" {
+		f, derr := os.Create(*dumpUsers)
+		if derr != nil {
+			return fmt.Errorf("dump users: %w", derr)
+		}
+		defer f.Close()
+		w := bufio.NewWriterSize(f, 64<<10)
+		defer w.Flush()
+		enc := json.NewEncoder(w)
+		runOpts = append(runOpts, eval.WithUserSink(func(u eval.UserResult) {
+			if err := enc.Encode(u); err != nil {
+				fmt.Fprintf(os.Stderr, "eval: user dump: %v\n", err)
+			}
+		}))
 	}
 	rep, err := eval.Run(ctx, rec, split, *n, runOpts...)
 	if err != nil {
