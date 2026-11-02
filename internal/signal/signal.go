@@ -144,6 +144,17 @@ type Neighbourhood struct {
 	// a field so a test can pin the shape of the curve without restating the
 	// constant, and so an unusual mirror can be calibrated without a build.
 	Saturation float64
+	// Metric selects the association weight the votes are made of.
+	//
+	//	"" / "pmi"  raw PMI, the shipped behaviour: unbounded, so the summed
+	//	            votes are squashed by Saturation. Kept so an ablation can
+	//	            reproduce the pre-nPMI ranking exactly.
+	//	"npmi"      normalised PMI in [-1,1], with the votes taking the BEST
+	//	            association per tag and the score normalised by the
+	//	            candidate's tag COUNT. That puts it in [0,1] with no
+	//	            calibration constant, so a tune weight can trade it off
+	//	            against signals that were already on that scale.
+	Metric string
 }
 
 func (Neighbourhood) Name() string { return "neighbourhood" }
@@ -178,6 +189,16 @@ func (s Neighbourhood) Score(c rank.Candidate, _ []rank.Candidate, _ rank.Store)
 	if hits == 0 {
 		return 0, "", rank.ErrSkip
 	}
+	if s.Metric == "npmi" {
+		// The votes are in [0,1] and the mean over the candidate's tags is in
+		// [0,1], so this path needs no saturation constant at all — that constant
+		// existed only because a SUM of raw PMI has no natural ceiling.
+		score := total / float64(len(c.TagIDs))
+		return score, fmt.Sprintf(
+			"%d of %d tags reach the seed neighbourhood; strongest is %q (npmi vote %.3f)",
+			hits, len(c.TagIDs), s.G.Name(bestTag), maxV), nil
+	}
+
 	// Normalise by the candidate's own tag count so a work with 200 tags
 	// does not out-score a focused one purely by having more chances.
 	raw := total / math.Sqrt(float64(len(c.TagIDs)))
@@ -209,13 +230,30 @@ func (s Neighbourhood) Score(c rank.Candidate, _ []rank.Candidate, _ rank.Store)
 // concurrent-request spread this serves and small enough that the worst
 // case is a kilobyte.
 func (s Neighbourhood) votesFor(limit int) (map[int32]float64, bool) {
-	key := voteKey(s.SeedTags, limit)
+	npmi := s.Metric == "npmi"
+	// The metric is part of the key. Two runs in one process (an eval arm pair, or
+	// a test) would otherwise hand each other their vote maps and the second would
+	// silently report the first one's numbers.
+	key := voteKey(s.SeedTags, limit) + "|" + s.Metric
 	if v, ok := voteCache.get(key); ok {
 		return v, len(v) > 0
 	}
 	votes := make(map[int32]float64, 64)
 	for _, st := range s.SeedTags {
 		for _, nb := range s.G.NeighbourScore(st, limit, s.TotalWorks) {
+			if npmi {
+				// Best association, not a sum: a tag reached from six seed tags is
+				// not six times as relevant, and summing would rebuild the scale
+				// problem in a smaller range.
+				v := graph.NPMI(s.G.Frequency(st), s.G.Frequency(nb.TagID), nb.Count, s.TotalWorks)
+				if v <= 0 {
+					continue
+				}
+				if v > votes[nb.TagID] {
+					votes[nb.TagID] = v
+				}
+				continue
+			}
 			votes[nb.TagID] += nb.PMI
 		}
 	}
