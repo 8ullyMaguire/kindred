@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // CrawlMaxAttempts is how many times a job fails before it is parked.
@@ -153,6 +154,62 @@ func (s *Store) FinishCrawlJob(ctx context.Context, url, errMsg string) error {
 		return fmt.Errorf("fail crawl job: %w", err)
 	}
 	return nil
+}
+
+// RequeueStale puts works that were fetched before `before` back on the queue.
+//
+// K4. `done_at` was written on every successful fetch and only ever tested
+// `IS NULL`, so a work was fetched exactly ONCE, EVER: a fic that gained forty
+// chapters after its first visit stayed at its first-visit chapter count, and
+// nothing in the system could notice. This is the missing half.
+//
+// ## Why it is a command and not something the crawler does by itself
+//
+// The mirror is a CACHE, not a snapshot. A snapshot that silently refreshes
+// is claiming a fixed past it no longer holds; a cache that never refreshes is
+// stale by design. Both are defensible and they are different products, so the
+// choice is made EXPLICITLY here: the mirror is a cache, and refreshing it is
+// an operation somebody runs, with a window they choose. Nothing requeues on
+// its own, which also means the crawl budget stays a number a person decides
+// rather than a function of how long the service has been up.
+//
+// ## Why attempts resets
+//
+// `attempts` counts failures on THIS queue entry. A row that failed five times
+// in March and succeeds on retry in November must not carry the March count --
+// `NextCrawlJob` reads `attempts < CrawlMaxAttempts`, so carrying it would
+// leave the refreshed row unclaimable and the refresh a no-op that reported
+// success. It is reset only for rows that had actually DONE (had a done_at),
+// i.e. rows whose attempt counter belongs to a visit that is now being redone.
+//
+// Returns how many rows were requeued, so a caller can print a number rather
+// than a claim.
+func (s *Store) RequeueStale(ctx context.Context, before time.Time) (int, error) {
+	const stmt = `UPDATE crawl_queue
+		SET done_at = NULL, attempts = 0
+		WHERE done_at IS NOT NULL AND done_at < ?`
+	res, err := s.DB.ExecContext(ctx, stmt, before.UTC().Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return 0, fmt.Errorf("requeue stale: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("requeue stale: rows affected: %w", err)
+	}
+	return int(n), nil
+}
+
+// CountStale reports how many works a RequeueStale(before) WOULD requeue, so a
+// dry run answers the question without changing the queue.
+func (s *Store) CountStale(ctx context.Context, before time.Time) (int, error) {
+	const stmt = `SELECT COUNT(*) FROM crawl_queue
+		WHERE done_at IS NOT NULL AND done_at < ?`
+	var n int
+	if err := s.DB.QueryRowContext(ctx, stmt,
+		before.UTC().Format("2006-01-02 15:04:05")).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count stale: %w", err)
+	}
+	return n, nil
 }
 
 // CrawlRow is one queued work URL, for a status page.

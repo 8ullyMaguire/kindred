@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"git.polarisocial.xyz/kindred/kindred/internal/testcorpus"
 	_ "modernc.org/sqlite"
@@ -171,4 +172,110 @@ func TestEnqueueIncompleteWorksSelectsOnlyMissingSummaries(t *testing.T) {
 	if n2 != 0 {
 		t.Errorf("second run queued %d, want 0", n2)
 	}
+}
+
+// K4: a work that was fetched must not be fetched again FOR EVER.
+//
+// The bug this covers is the quietest kind: `done_at` was written and then only
+// ever tested `IS NULL`, so every work was visited exactly once and the mirror
+// silently stopped tracking works that were still being written. A refresh pass
+// that requeues the wrong rows is just as bad in the other direction -- it
+// spends AO3's 30-second crawl budget re-reading what is already current -- so
+// the boundary is asserted from both sides.
+func TestRequeueStaleRequeuesOnlyWorksFetchedBeforeTheWindow(t *testing.T) {
+	ctx := context.Background()
+	s, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const old = "https://archiveofourown.org/works/900"
+	const recent = "https://archiveofourown.org/works/901"
+	for _, u := range []string{old, recent} {
+		if err := s.EnqueueCrawl(ctx, u, "reader-requested"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.FinishCrawlJob(ctx, old, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishCrawlJob(ctx, recent, ""); err != nil {
+		t.Fatal(err)
+	}
+	// The two rows need different ages, and FinishCrawlJob stamps "now" for
+	// both, so the ages are written directly. This is a fact about the queue's
+	// columns, not a shortcut around the code under test -- RequeueStale is
+	// what is being measured.
+	if _, err := s.DB.ExecContext(ctx,
+		`UPDATE crawl_queue SET done_at = datetime('now','-40 days') WHERE url = ?`, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// A failed attempt count that must be RESET on requeue: NextCrawlJob reads
+	// `attempts < CrawlMaxAttempts`, so a refreshed row carrying a dead count is
+	// unclaimable and the refresh reports success while doing nothing.
+	if _, err := s.DB.ExecContext(ctx,
+		`UPDATE crawl_queue SET attempts = 4 WHERE url = ?`, old); err != nil {
+		t.Fatal(err)
+	}
+
+	before := packedTime(t, "-30 days")
+	if n, err := s.CountStale(ctx, before); err != nil || n != 1 {
+		t.Fatalf("CountStale = %d, %v; want 1 (only the 40-day-old row)", n, err)
+	}
+	n, err := s.RequeueStale(ctx, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("RequeueStale = %d, want 1", n)
+	}
+
+	job, ok, err := s.NextCrawlJob(ctx)
+	if err != nil || !ok {
+		t.Fatalf("the refreshed work is not claimable: ok=%v err=%v", ok, err)
+	}
+	if job.URL != old {
+		t.Fatalf("next job = %s, want the refreshed %s", job.URL, old)
+	}
+	if job.Attempts != 0 {
+		t.Fatalf("attempts = %d, want 0: a refreshed row must not carry a dead failure count", job.Attempts)
+	}
+
+	// The recent row is untouched: still done, still not claimable.
+	var doneAt *string
+	if err := s.DB.QueryRowContext(ctx,
+		`SELECT done_at FROM crawl_queue WHERE url = ?`, recent).Scan(&doneAt); err != nil {
+		t.Fatal(err)
+	}
+	if doneAt == nil {
+		t.Fatalf("%s was requeued; the window must protect a work fetched inside it", recent)
+	}
+
+	// And running it twice is not an avalanche: the first pass cleared done_at,
+	// so the second finds nothing.
+	if n, err := s.RequeueStale(ctx, before); err != nil || n != 0 {
+		t.Fatalf("second RequeueStale = %d, %v; want 0 (already requeued rows have no done_at)", n, err)
+	}
+}
+
+// packedTime renders the same 'YYYY-MM-DD HH:MM:SS' form done_at is stored in,
+// so a test's window and the store's comparison are the same units.
+func packedTime(t *testing.T, ago string) time.Time {
+	t.Helper()
+	var s string
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.QueryRow(`SELECT datetime('now', ?)`, ago).Scan(&s); err != nil {
+		t.Fatal(err)
+	}
+	tm, err := time.Parse("2006-01-02 15:04:05", s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tm
 }

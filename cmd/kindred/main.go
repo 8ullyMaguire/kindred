@@ -88,6 +88,8 @@ func main() {
 		err = runCrawl(ctx, args)
 	case "autocrawl":
 		err = runAutoCrawlCmd(ctx, args)
+	case "refresh":
+		err = runRefresh(ctx, args)
 	case "discover":
 		err = runDiscover(ctx, args)
 	case "profile":
